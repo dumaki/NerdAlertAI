@@ -1,0 +1,2489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NerdAlert // Agent Interface</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+
+  <style>
+    /* ==========================================================
+       CSS CUSTOM PROPERTIES (VARIABLES)
+       ==========================================================
+       All colors, sizes, and timing live here as CSS variables.
+       Changing --cyan here updates every element that uses it.
+       This is the "design token" pattern — one source of truth
+       for the entire visual system.
+       ========================================================== */
+
+    :root {
+      /* Background layers — deepest to lightest */
+      --bg-deepest:  #060809;
+      --bg-base:     #080b0f;
+      --bg-raised:   #0d1117;
+      --bg-elevated: #111820;
+
+      /* Border — very subtle green-tinted dark */
+      --border:      #1a2a1a;
+      --border-mid:  #1e3020;
+
+      /* Primary accent — cyan phosphor */
+      --cyan:        #00ffcc;
+      --cyan-glow:   rgba(0, 255, 204, 0.15);
+      --cyan-dim:    rgba(0, 255, 204, 0.08);
+      --cyan-mid:    rgba(0, 255, 204, 0.4);
+
+      /* Secondary accent — terminal green */
+      --green:       #39ff14;
+      --green-dim:   rgba(57, 255, 20, 0.12);
+
+      /* Warning accent — amber (approval tray only) */
+      --amber:       #ffb300;
+      --amber-glow:  rgba(255, 179, 0, 0.15);
+      --amber-dim:   rgba(255, 179, 0, 0.08);
+
+      /* Alert — red */
+      --red:         #ff3a3a;
+      --red-dim:     rgba(255, 58, 58, 0.12);
+
+      /* Text hierarchy */
+      --text:        #b8ccb8;
+      --text-bright: #d4e8d4;
+      --text-dim:    #4a5e4a;
+      --text-muted:  #2a3a2a;
+
+      /* Agent response tint */
+      --agent-bg:    #070f0a;
+      --agent-text:  #9ed4b4;
+      --agent-border:#1a3a28;
+
+      /* Typography */
+      --font-mono:   'Share Tech Mono', 'Courier New', monospace;
+      --font-display:'Orbitron', monospace;
+
+      /* Timing */
+      --transition:  0.25s ease;
+      --transition-fast: 0.15s ease;
+
+      /* Agent accent color — swapped at runtime when agent is chosen */
+      /* Default: Sherman green */
+      --accent:      #39ff14;
+      --accent-glow: rgba(57, 255, 20, 0.15);
+      --accent-dim:  rgba(57, 255, 20, 0.08);
+      --accent-mid:  rgba(57, 255, 20, 0.4);
+    }
+
+    /* ==========================================================
+       ONBOARDING MODAL
+       Full-screen overlay that appears on first load.
+       Fades out after agent is chosen.
+       ========================================================== */
+
+    .onboarding-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(6, 8, 9, 0.96);
+      z-index: 10000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      overflow-y: auto;
+      padding: 40px 20px 60px;
+      transition: opacity 0.5s ease;
+    }
+
+    .onboarding-overlay.fade-out {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .onboarding-logo {
+      margin-bottom: 8px;
+    }
+
+    .onboarding-logo img {
+      height: 72px;
+      object-fit: contain;
+    }
+
+    .onboarding-title {
+      font-family: var(--font-display);
+      font-size: 22px;
+      font-weight: 900;
+      color: var(--cyan);
+      letter-spacing: 6px;
+      text-shadow: 0 0 24px var(--cyan), 0 0 48px rgba(0,255,204,0.2);
+      margin-bottom: 6px;
+      text-align: center;
+    }
+
+    .onboarding-subtitle {
+      font-size: 10px;
+      color: var(--text-dim);
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      margin-bottom: 32px;
+      text-align: center;
+    }
+
+    .onboarding-prompt {
+      font-size: 12px;
+      color: var(--text);
+      line-height: 1.7;
+      max-width: 580px;
+      text-align: center;
+      margin-bottom: 40px;
+    }
+
+    .onboarding-prompt strong {
+      color: var(--cyan);
+      font-weight: normal;
+    }
+
+    /* Horizontal scroll row of character cards */
+    .character-roster {
+      display: flex;
+      gap: 16px;
+      padding: 8px 4px 16px;
+      overflow-x: auto;
+      max-width: 100%;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .character-roster::-webkit-scrollbar { height: 3px; }
+    .character-roster::-webkit-scrollbar-thumb { background: var(--border-mid); }
+
+    /* Individual character card */
+    .character-card {
+      flex-shrink: 0;
+      width: 180px;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+      cursor: pointer;
+      transition: all var(--transition);
+      position: relative;
+    }
+
+    .character-card:hover {
+      border-color: var(--card-accent, var(--cyan-mid));
+      box-shadow: 0 0 20px var(--card-glow, var(--cyan-glow));
+      transform: translateY(-3px);
+    }
+
+    .character-card.selected {
+      border-color: var(--card-accent, var(--cyan-mid));
+      box-shadow: 0 0 24px var(--card-glow, var(--cyan-glow));
+    }
+
+    /* Character image area */
+    .card-image {
+      width: 100%;
+      height: 200px;
+      background: var(--bg-base);
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .card-image img {
+      height: 190px;
+      width: auto;
+      object-fit: contain;
+      object-position: bottom;
+      transition: transform var(--transition);
+    }
+
+    .character-card:hover .card-image img {
+      transform: scale(1.04);
+    }
+
+    /* Gradient fade at bottom of image into the card info */
+    .card-image::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 40px;
+      background: linear-gradient(transparent, var(--bg-raised));
+    }
+
+    /* Card info section */
+    .card-info {
+      padding: 10px 12px 14px;
+    }
+
+    .card-name {
+      font-family: var(--font-display);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      color: var(--card-accent-color, var(--cyan));
+      text-shadow: 0 0 8px var(--card-glow, var(--cyan-glow));
+      margin-bottom: 6px;
+      text-transform: uppercase;
+    }
+
+    .card-desc {
+      font-size: 10px;
+      color: var(--text-dim);
+      line-height: 1.55;
+    }
+
+    /* "Other" card — build your own */
+    .character-card.other-card {
+      border-style: dashed;
+      border-color: var(--border-mid);
+    }
+
+    .character-card.other-card:hover {
+      border-color: var(--text-dim);
+      box-shadow: none;
+      transform: translateY(-3px);
+    }
+
+    .other-card-image {
+      width: 100%;
+      height: 200px;
+      background: var(--bg-base);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .other-card-plus {
+      font-size: 48px;
+      color: var(--text-muted);
+      line-height: 1;
+    }
+
+    /* Hire button */
+    .card-hire-btn {
+      display: block;
+      width: calc(100% - 24px);
+      margin: 0 12px 12px;
+      padding: 7px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      text-align: center;
+      border: 1px solid var(--card-accent, var(--cyan-mid));
+      color: var(--card-accent-color, var(--cyan));
+      background: transparent;
+      cursor: pointer;
+      border-radius: 1px;
+      transition: all var(--transition-fast);
+    }
+
+    .card-hire-btn:hover {
+      background: var(--card-dim, var(--cyan-dim));
+      box-shadow: 0 0 10px var(--card-glow, var(--cyan-glow));
+    }
+
+    /* ==========================================================
+       RESET & BASE
+       ========================================================== */
+
+    *, *::before, *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg-base);
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    /* Scrollbar styling — thin, themed */
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 2px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+    /* ==========================================================
+       CRT EFFECT LAYERS
+       The scanline and phosphor glow are pseudo-elements on body
+       so they sit above all content without blocking interaction.
+       pointer-events: none is critical — without it, you can't
+       click through the overlay.
+       ========================================================== */
+
+    body::before {
+      /* Horizontal scanlines — the CRT monitor effect */
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent 0px,
+        transparent 2px,
+        rgba(0, 0, 0, 0.15) 2px,
+        rgba(0, 0, 0, 0.15) 4px
+      );
+      pointer-events: none;
+      z-index: 9998;
+    }
+
+    body::after {
+      /* Subtle phosphor color wash + vignette */
+      content: '';
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse at center, transparent 60%, rgba(0, 0, 0, 0.4) 100%),
+        rgba(0, 255, 204, 0.012);
+      pointer-events: none;
+      z-index: 9997;
+      animation: crt-flicker 12s infinite;
+    }
+
+    /* Occasional subtle flicker — CRT authenticity */
+    @keyframes crt-flicker {
+      0%, 100% { opacity: 1; }
+      94%       { opacity: 1; }
+      95%       { opacity: 0.94; }
+      96%       { opacity: 1; }
+      98%       { opacity: 0.97; }
+      99%       { opacity: 1; }
+    }
+
+    /* ==========================================================
+       APP SHELL — GRID LAYOUT
+       The entire UI is one CSS Grid.
+       Columns: sidebar | chat | panel (0px when closed, 320px when open)
+       Rows:    topbar  | content
+       The panel column animates via transition on grid-template-columns.
+       ========================================================== */
+
+    .app {
+      display: grid;
+      grid-template-rows:  48px 1fr;
+      grid-template-columns: 210px 1fr 0px;
+      height: 100vh;
+      transition: grid-template-columns var(--transition);
+    }
+
+    .app.panel-open {
+      grid-template-columns: 210px 1fr 320px;
+    }
+
+    /* ==========================================================
+       TOPBAR
+       ========================================================== */
+
+    .topbar {
+      grid-column: 1 / -1;   /* spans all 3 columns */
+      background: var(--bg-raised);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 0;
+      position: relative;
+      z-index: 100;
+    }
+
+    /* Glowing line along the bottom of the topbar */
+    .topbar::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg,
+        transparent 0%,
+        var(--cyan-mid) 30%,
+        var(--cyan-mid) 70%,
+        transparent 100%
+      );
+      opacity: 0.5;
+    }
+
+    .logo {
+      font-family: var(--font-display);
+      font-size: 12px;
+      font-weight: 900;
+      color: var(--cyan);
+      letter-spacing: 4px;
+      text-shadow: 0 0 16px var(--cyan), 0 0 32px rgba(0,255,204,0.3);
+      white-space: nowrap;
+      margin-right: 8px;
+    }
+
+    .logo-sub {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--text-dim);
+      letter-spacing: 2px;
+      margin-right: 24px;
+    }
+
+    /* Top navigation — Chat / Email / SOC switcher */
+    .topbar-nav {
+      display: flex;
+      gap: 2px;
+    }
+
+    .nav-btn {
+      padding: 5px 14px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      background: transparent;
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      border-radius: 1px;
+      position: relative;
+    }
+
+    .nav-btn:hover {
+      color: var(--text);
+      border-color: var(--border-mid);
+    }
+
+    .nav-btn.active {
+      color: var(--cyan);
+      border-color: var(--cyan-dim);
+      background: var(--cyan-dim);
+      text-shadow: 0 0 8px var(--cyan);
+    }
+
+    /* Notification dot on nav buttons */
+    .nav-btn .dot {
+      position: absolute;
+      top: 4px; right: 4px;
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: var(--amber);
+      box-shadow: 0 0 6px var(--amber);
+    }
+
+    .nav-btn .dot.alert {
+      background: var(--red);
+      box-shadow: 0 0 6px var(--red);
+      animation: pulse 1.5s infinite;
+    }
+
+    /* Status indicator — far right of topbar */
+    .topbar-status {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 9px;
+      color: var(--text-dim);
+      letter-spacing: 1px;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: pulse 2.5s infinite;
+    }
+
+    .status-dot.offline {
+      background: var(--red);
+      box-shadow: 0 0 8px var(--red);
+      animation: none;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.35; }
+    }
+
+    /* ==========================================================
+       SIDEBAR
+       ========================================================== */
+
+    .sidebar {
+      background: var(--bg-raised);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Agent identity card at top of sidebar */
+    .agent-card {
+      padding: 14px 14px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .agent-label {
+      font-size: 8px;
+      color: var(--text-dim);
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    .agent-name {
+      font-family: var(--font-display);
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--cyan);
+      letter-spacing: 2px;
+      text-shadow: 0 0 10px var(--cyan);
+      margin-bottom: 2px;
+    }
+
+    .agent-title {
+      font-size: 9px;
+      color: var(--text-dim);
+      line-height: 1.4;
+      margin-bottom: 10px;
+    }
+
+    /* Trust level pip indicators */
+    .trust-row {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .trust-label {
+      font-size: 8px;
+      color: var(--text-muted);
+      letter-spacing: 1px;
+      margin-right: 4px;
+    }
+
+    .trust-pip {
+      width: 20px; height: 3px;
+      border-radius: 1px;
+      background: var(--text-muted);
+      transition: background var(--transition);
+    }
+
+    .trust-pip.active {
+      background: var(--cyan);
+      box-shadow: 0 0 6px var(--cyan);
+    }
+
+    /* Sidebar section headers */
+    .sidebar-section {
+      padding: 10px 14px 4px;
+      font-size: 8px;
+      color: var(--text-muted);
+      letter-spacing: 3px;
+      text-transform: uppercase;
+    }
+
+    /* Individual sidebar nav items */
+    .sidebar-item {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 8px 14px;
+      font-size: 11px;
+      color: var(--text-dim);
+      cursor: pointer;
+      border-left: 2px solid transparent;
+      transition: all var(--transition-fast);
+      position: relative;
+    }
+
+    .sidebar-item:hover {
+      color: var(--text);
+      background: rgba(255,255,255,0.02);
+    }
+
+    .sidebar-item.active {
+      color: var(--cyan);
+      background: var(--cyan-dim);
+      border-left-color: var(--cyan);
+      text-shadow: 0 0 8px rgba(0,255,204,0.4);
+    }
+
+    .sidebar-item .item-icon {
+      font-size: 12px;
+      width: 16px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    /* Notification badge on sidebar items */
+    .sidebar-badge {
+      margin-left: auto;
+      font-size: 9px;
+      font-weight: bold;
+      padding: 1px 6px;
+      border-radius: 2px;
+      background: var(--amber);
+      color: #000;
+      line-height: 1.4;
+    }
+
+    .sidebar-badge.alert {
+      background: var(--red);
+      color: #fff;
+      animation: pulse 1.5s infinite;
+    }
+
+    /* Push settings to bottom of sidebar */
+    .sidebar-spacer { flex: 1; }
+
+    .sidebar-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 4px 0;
+    }
+
+    /* ==========================================================
+       CHAT AREA — center column
+       ========================================================== */
+
+    .chat-area {
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-base);
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Subtle grid texture in chat background */
+    .chat-area::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 40px 40px;
+      opacity: 0.18;
+      pointer-events: none;
+    }
+
+    /* Scrollable message list */
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* Individual message wrapper */
+    .message {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      max-width: 78%;
+      animation: msg-appear 0.2s ease;
+    }
+
+    @keyframes msg-appear {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .message.user  { align-self: flex-end;  align-items: flex-end; }
+    .message.agent { align-self: flex-start; align-items: flex-start; }
+
+    /* Timestamp / sender label above bubble */
+    .message-label {
+      font-size: 8px;
+      color: var(--text-muted);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 0 4px;
+    }
+
+    .message.agent .message-label {
+      color: var(--cyan-mid);
+    }
+
+    /* Message bubble */
+    .message-bubble {
+      padding: 11px 15px;
+      border-radius: 2px;
+      font-size: 12px;
+      line-height: 1.65;
+      word-break: break-word;
+    }
+
+    .message.user .message-bubble {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-mid);
+      color: var(--text);
+    }
+
+    .message.agent .message-bubble {
+      background: var(--agent-bg);
+      border: 1px solid var(--agent-border);
+      border-left: 2px solid var(--cyan);
+      color: var(--agent-text);
+      box-shadow:
+        inset 0 0 30px rgba(0,255,204,0.02),
+        0 0 0 1px rgba(0,255,204,0.04);
+    }
+
+    /* Blinking block cursor — shown while Sherman is streaming */
+    .cursor-blink {
+      display: inline-block;
+      width: 8px;
+      height: 13px;
+      background: var(--cyan);
+      margin-left: 2px;
+      vertical-align: middle;
+      animation: cursor-blink 1s step-end infinite;
+    }
+
+    @keyframes cursor-blink {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0; }
+    }
+
+    /* Thinking indicator — shown when a tool is being called */
+    .thinking-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 10px;
+      color: var(--text-dim);
+      padding: 6px 0;
+    }
+
+    .thinking-dots span {
+      display: inline-block;
+      width: 4px; height: 4px;
+      border-radius: 50%;
+      background: var(--cyan);
+      animation: thinking 1.4s infinite both;
+    }
+    .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+    @keyframes thinking {
+      0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+      40%           { transform: scale(1);   opacity: 1; }
+    }
+
+    /* Error message inside chat */
+    .stream-error {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      background: var(--red-dim);
+      border: 1px solid rgba(255,58,58,0.3);
+      border-left: 2px solid var(--red);
+      color: var(--red);
+      font-size: 11px;
+      border-radius: 2px;
+    }
+
+    /* ==========================================================
+       CHAT INPUT BAR
+       ========================================================== */
+
+    .chat-input-bar {
+      border-top: 1px solid var(--border);
+      padding: 14px 28px;
+      background: var(--bg-raised);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: relative;
+      z-index: 10;
+      flex-shrink: 0;
+    }
+
+    /* Glowing line above input bar */
+    .chat-input-bar::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg,
+        transparent,
+        var(--cyan-dim),
+        transparent
+      );
+    }
+
+    .input-prompt-char {
+      font-size: 18px;
+      color: var(--cyan);
+      text-shadow: 0 0 10px var(--cyan);
+      flex-shrink: 0;
+      line-height: 1;
+      user-select: none;
+    }
+
+    .chat-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text-bright);
+      caret-color: var(--cyan);
+      min-width: 0;
+    }
+
+    .chat-input::placeholder { color: var(--text-muted); }
+
+    .chat-input:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .send-button {
+      padding: 7px 18px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--cyan);
+      background: transparent;
+      border: 1px solid var(--cyan-mid);
+      cursor: pointer;
+      border-radius: 1px;
+      transition: all var(--transition-fast);
+      flex-shrink: 0;
+    }
+
+    .send-button:hover:not(:disabled) {
+      background: var(--cyan-dim);
+      box-shadow: 0 0 14px var(--cyan-glow);
+      text-shadow: 0 0 8px var(--cyan);
+    }
+
+    .send-button:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+
+    /* ==========================================================
+       SIDE PANEL — slides in from the right
+       Controlled by .app.panel-open on the grid container
+       ========================================================== */
+
+    .side-panel {
+      background: var(--bg-raised);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .panel-header {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    .panel-title {
+      font-family: var(--font-display);
+      font-size: 9px;
+      font-weight: 700;
+      color: var(--cyan);
+      letter-spacing: 2px;
+      text-shadow: 0 0 8px var(--cyan);
+      flex: 1;
+    }
+
+    .panel-close {
+      font-size: 14px;
+      color: var(--text-dim);
+      cursor: pointer;
+      line-height: 1;
+      padding: 2px 4px;
+      transition: color var(--transition-fast);
+      font-family: var(--font-mono);
+    }
+
+    .panel-close:hover { color: var(--cyan); }
+
+    .panel-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+    }
+
+    /* Email list items in the panel */
+    .email-item {
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 1px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+
+    .email-item:hover {
+      border-color: var(--cyan-mid);
+      background: var(--cyan-dim);
+    }
+
+    .email-from    { font-size: 9px;  color: var(--cyan-mid); margin-bottom: 3px; }
+    .email-subject { font-size: 11px; color: var(--text);     margin-bottom: 5px; line-height: 1.3; }
+    .email-meta    { display: flex; align-items: center; gap: 6px; }
+
+    /* Tag chips — classify emails */
+    .tag {
+      font-size: 8px;
+      padding: 1px 6px;
+      border-radius: 1px;
+      border: 1px solid;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+    .tag.promo  { color: var(--amber); border-color: var(--amber); }
+    .tag.review { color: var(--green); border-color: var(--green); }
+    .tag.urgent { color: var(--red);   border-color: var(--red);   }
+
+    .email-time { font-size: 9px; color: var(--text-muted); margin-left: auto; }
+
+    /* SOC status items */
+    .soc-alert {
+      padding: 10px 12px;
+      border: 1px solid rgba(255,58,58,0.3);
+      border-left: 2px solid var(--red);
+      background: var(--red-dim);
+      border-radius: 1px;
+      margin-bottom: 10px;
+    }
+
+    .soc-from    { font-size: 9px;  color: var(--red); margin-bottom: 3px; }
+    .soc-subject { font-size: 11px; color: var(--text); }
+
+    .soc-service {
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 1px;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .service-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .service-dot.ok  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .service-dot.err { background: var(--red);   box-shadow: 0 0 6px var(--red);   }
+
+    .service-name { font-size: 11px; color: var(--text-dim); flex: 1; }
+    .service-meta { font-size: 9px;  color: var(--text-muted); }
+
+    /* ==========================================================
+       APPROVAL TRAY — slides up from bottom
+       ========================================================== */
+
+    .approval-tray {
+      position: fixed;
+      bottom: 0;
+      left: 210px;   /* clear the sidebar */
+      right: 0;
+      background: var(--bg-raised);
+      border-top: 2px solid var(--amber);
+      transform: translateY(100%);
+      transition: transform var(--transition);
+      z-index: 500;
+      box-shadow: 0 -8px 40px rgba(255, 179, 0, 0.12);
+    }
+
+    .approval-tray.open {
+      transform: translateY(0);
+    }
+
+    .tray-header {
+      padding: 10px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .tray-title {
+      font-family: var(--font-display);
+      font-size: 9px;
+      font-weight: 700;
+      color: var(--amber);
+      letter-spacing: 2px;
+      text-shadow: 0 0 8px var(--amber);
+    }
+
+    .tray-count {
+      font-size: 9px;
+      font-weight: bold;
+      padding: 1px 7px;
+      background: var(--amber);
+      color: #000;
+      border-radius: 2px;
+    }
+
+    .tray-dismiss {
+      margin-left: auto;
+      font-size: 9px;
+      color: var(--text-dim);
+      cursor: pointer;
+      letter-spacing: 1px;
+      transition: color var(--transition-fast);
+    }
+    .tray-dismiss:hover { color: var(--amber); }
+
+    /* Horizontal scroll row of cards */
+    .tray-cards {
+      display: flex;
+      gap: 12px;
+      padding: 12px 20px 14px;
+      overflow-x: auto;
+    }
+
+    .tray-cards::-webkit-scrollbar { height: 3px; }
+    .tray-cards::-webkit-scrollbar-thumb { background: var(--border-mid); }
+
+    /* Individual approval card */
+    .approval-card {
+      flex-shrink: 0;
+      width: 260px;
+      background: #0d0b00;
+      border: 1px solid #2a1f00;
+      border-radius: 2px;
+      padding: 12px 14px;
+      transition: opacity var(--transition), border-color var(--transition-fast);
+    }
+
+    .approval-card:hover { border-color: rgba(255,179,0,0.3); }
+
+    .card-action {
+      font-size: 8px;
+      color: var(--amber);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    .card-desc {
+      font-size: 11px;
+      color: var(--text);
+      line-height: 1.5;
+      margin-bottom: 12px;
+    }
+
+    .card-buttons {
+      display: flex;
+      gap: 8px;
+    }
+
+    .card-btn {
+      flex: 1;
+      padding: 6px 8px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      border-radius: 1px;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      border: 1px solid;
+    }
+
+    .card-btn.approve {
+      background: var(--green-dim);
+      border-color: var(--green);
+      color: var(--green);
+    }
+    .card-btn.approve:hover {
+      background: rgba(57,255,20,0.18);
+      box-shadow: 0 0 10px rgba(57,255,20,0.2);
+    }
+
+    .card-btn.deny {
+      background: transparent;
+      border-color: var(--border-mid);
+      color: var(--text-dim);
+    }
+    .card-btn.deny:hover {
+      border-color: var(--red);
+      color: var(--red);
+    }
+
+    /* Approved/denied state */
+    .approval-card.resolved {
+      opacity: 0.4;
+      pointer-events: none;
+    }
+
+    /* ── Tool result collapsible block ── */
+/*
+   Appears in the chat when a tool runs mid-conversation.
+   The block shows the tool name + a toggle arrow.
+   Clicking it expands to show the raw output.
+   Error state turns the border amber instead of accent.
+*/
+.tool-result-block {
+  margin: 6px 0;
+  border: 1px solid var(--cyan-mid);
+  border-radius: 2px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+  overflow: hidden;
+}
+
+.tool-result-block.error {
+  border-color: rgba(255, 170, 0, 0.5);
+}
+
+.tool-result-header {
+  display:         flex;
+  align-items:     center;
+  justify-content: space-between;
+  padding:         5px 10px;
+  background:      var(--cyan-dim);
+  cursor:          pointer;
+  user-select:     none;
+  color:           var(--cyan);
+  letter-spacing:  1px;
+  text-transform:  uppercase;
+}
+
+.tool-result-block.error .tool-result-header {
+  background: rgba(255, 170, 0, 0.06);
+  color:      #ffaa00;
+}
+
+.tool-result-toggle {
+  font-size:  10px;
+  transition: transform 0.2s ease;
+}
+
+.tool-result-block.open .tool-result-toggle {
+  transform: rotate(180deg);
+}
+
+.tool-result-body {
+  display:    none;
+  padding:    8px 10px;
+  color:      var(--cyan-mid);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+  background: rgba(0,0,0,0.3);
+  line-height: 1.5;
+}
+
+.tool-result-block.open .tool-result-body {
+  display: block;
+}
+
+.tool-thinking {
+  display:     flex;
+  align-items: center;
+  gap:         8px;
+  padding:     5px 0;
+  font-size:   11px;
+  color:       var(--text-muted);
+  letter-spacing: 1px;
+  font-family: 'Share Tech Mono', monospace;
+}
+
+.tool-thinking-spinner {
+  width:  8px;
+  height: 8px;
+  border: 1px solid var(--cyan-mid);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Settings panel ── */
+    .settings-section-label {
+      font-size: 8px;
+      color: var(--text-muted);
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+
+    .settings-agent-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .settings-agent-card {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: 2px;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      background: var(--bg-base);
+    }
+
+    .settings-agent-card:hover {
+      background: var(--bg-elevated);
+    }
+
+    .settings-agent-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .settings-agent-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .settings-agent-name {
+      font-family: var(--font-display);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 2px;
+    }
+
+    .settings-agent-title {
+      font-size: 9px;
+      color: var(--text-muted);
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .settings-agent-check {
+      font-size: 10px;
+      color: var(--cyan);
+      flex-shrink: 0;
+    }
+
+    .settings-trust-display {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      background: var(--bg-base);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+    }
+
+    .settings-trust-value {
+      font-family: var(--font-display);
+      font-size: 9px;
+      font-weight: 700;
+      color: var(--cyan);
+      letter-spacing: 2px;
+      flex-shrink: 0;
+    }
+
+    .settings-trust-note {
+      font-size: 9px;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+
+    .settings-clear-btn {
+      width: 100%;
+      padding: 8px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--red);
+      background: transparent;
+      border: 1px solid rgba(255,58,58,0.3);
+      cursor: pointer;
+      border-radius: 1px;
+      transition: all var(--transition-fast);
+    }
+
+    .settings-clear-btn:hover {
+      background: var(--red-dim);
+      border-color: var(--red);
+    }
+
+    /* ==========================================================
+       EMPTY STATE — shown before any messages
+       ========================================================== */
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      gap: 12px;
+      opacity: 0.4;
+      user-select: none;
+    }
+
+    .empty-state-logo {
+      font-family: var(--font-display);
+      font-size: 28px;
+      font-weight: 900;
+      color: var(--cyan);
+      letter-spacing: 6px;
+      text-shadow: 0 0 24px var(--cyan);
+    }
+
+    .empty-state-sub {
+      font-size: 10px;
+      color: var(--text-dim);
+      letter-spacing: 3px;
+    }
+
+  </style>
+</head>
+<body>
+
+<!-- ============================================================
+     APP SHELL
+     ============================================================ -->
+<div class="app" id="app">
+
+  <!-- ══════════════════════════════════════════
+       TOPBAR
+       ══════════════════════════════════════════ -->
+  <header class="topbar">
+    <span class="logo">NERDALERT</span>
+    <span class="logo-sub">/// AGENT INTERFACE</span>
+
+    <nav class="topbar-nav">
+      <button class="nav-btn active" id="nav-chat"  onclick="switchView('chat', this)">CHAT</button>
+      <button class="nav-btn"        id="nav-email" onclick="switchView('email', this)">
+        EMAIL <span class="dot" id="email-dot" style="display:none"></span>
+      </button>
+      <button class="nav-btn"        id="nav-soc"   onclick="switchView('soc', this)">
+        SOC <span class="dot alert" id="soc-dot" style="display:none"></span>
+      </button>
+    </nav>
+
+    <div class="topbar-status">
+      <div class="status-indicator">
+        <div class="status-dot" id="status-dot"></div>
+        <span id="status-text"></span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ══════════════════════════════════════════
+       SIDEBAR
+       ══════════════════════════════════════════ -->
+  <aside class="sidebar">
+
+    <!-- Agent identity card -->
+    <div class="agent-card">
+      <div class="agent-label">Active Agent</div>
+      <div class="agent-name" id="agent-name"></div>
+      <div class="agent-title" id="agent-title"></div>
+      <div class="trust-row">
+        <span class="trust-label">TL</span>
+        <div class="trust-pip active" id="pip-1"></div>
+        <div class="trust-pip"        id="pip-2"></div>
+        <div class="trust-pip"        id="pip-3"></div>
+        <div class="trust-pip"        id="pip-4"></div>
+        <div class="trust-pip"        id="pip-5"></div>
+      </div>
+    </div>
+
+    <!-- Navigation items -->
+    <div class="sidebar-section">Session</div>
+
+    <div class="sidebar-item active" id="sb-chat" onclick="switchView('chat', null)">
+      <span class="item-icon">⬡</span> Chat
+    </div>
+
+    <div class="sidebar-item" id="sb-email" onclick="switchView('email', null)">
+      <span class="item-icon">✉</span> Email
+      <span class="sidebar-badge" id="email-badge" style="display:none">0</span>
+    </div>
+
+    <div class="sidebar-item" id="sb-soc" onclick="switchView('soc', null)">
+      <span class="item-icon">⚠</span> SOC
+      <span class="sidebar-badge alert" id="soc-badge" style="display:none">!</span>
+    </div>
+
+    <div class="sidebar-item" id="sb-memory" onclick="switchView('memory', null)">
+      <span class="item-icon">◈</span> Memory
+    </div>
+
+    <!-- Push settings to bottom -->
+    <div class="sidebar-spacer"></div>
+    <div class="sidebar-divider"></div>
+
+    <div class="sidebar-item" id="sb-settings" onclick="switchView('settings', null)">
+      <span class="item-icon">⚙</span> Settings
+    </div>
+
+  </aside>
+
+  <!-- ══════════════════════════════════════════
+       CHAT AREA (always center)
+       ══════════════════════════════════════════ -->
+  <main class="chat-area">
+
+    <div class="chat-messages" id="chat-messages">
+      <!-- Empty state — replaced by messages once conversation starts -->
+      <div class="empty-state" id="empty-state">
+        <div class="empty-state-logo">NERDALERT</div>
+        <div class="empty-state-sub" id="empty-state-sub">AGENT INTERFACE ONLINE</div>
+      </div>
+    </div>
+
+    <div class="chat-input-bar">
+      <span class="input-prompt-char">›</span>
+      <input
+        class="chat-input"
+        id="chat-input"
+        type="text"
+        placeholder="Send a message..."
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <button class="send-button" id="send-button" onclick="sendMessage()">SEND</button>
+    </div>
+
+  </main>
+
+  <!-- ══════════════════════════════════════════
+       SIDE PANEL (slides in right)
+       ══════════════════════════════════════════ -->
+  <aside class="side-panel" id="side-panel">
+    <div class="panel-header">
+      <span class="panel-title" id="panel-title">EMAIL</span>
+      <span class="panel-close" onclick="closePanel()">✕</span>
+    </div>
+    <div class="panel-body" id="panel-body">
+      <!-- Content injected by JavaScript -->
+    </div>
+  </aside>
+
+</div><!-- /.app -->
+
+
+<!-- ══════════════════════════════════════════
+     APPROVAL TRAY (slides up from bottom)
+     ══════════════════════════════════════════ -->
+<div class="approval-tray" id="approval-tray">
+  <div class="tray-header">
+    <span class="tray-title">PENDING APPROVALS</span>
+    <span class="tray-count" id="tray-count">0</span>
+    <span class="tray-dismiss" onclick="closeTray()">DISMISS ✕</span>
+  </div>
+  <div class="tray-cards" id="tray-cards">
+    <!-- Approval cards injected by JavaScript -->
+  </div>
+</div>
+
+
+<!-- ============================================================
+     ONBOARDING MODAL
+     Shown on first load. Hidden after agent is chosen.
+     localStorage key 'nerdalert_agent' stores the chosen agent id.
+     ============================================================ -->
+<div class="onboarding-overlay" id="onboarding-overlay">
+
+  <div class="onboarding-logo">
+    <img src="/assets/characters/logo.png" alt="Nerd Alert" onerror="this.style.display='none'">
+  </div>
+
+  <div class="onboarding-title">NERD ALERT AI</div>
+  <div class="onboarding-subtitle">/// Agent Selection Interface</div>
+
+  <div class="onboarding-prompt">
+    Welcome. Before we get started, take a look at the candidates below and
+    <strong>choose who you'd like to hire.</strong> Each has their own name and personality.
+    You can change this at any time in Settings — or select <strong>Other</strong>
+    to build a custom agent together.
+  </div>
+
+  <div class="character-roster" id="character-roster">
+    <!-- Cards injected by JavaScript -->
+  </div>
+
+</div>
+
+
+<!-- ============================================================
+     JAVASCRIPT
+     All UI logic lives here — conversation state, streaming,
+     panel management, approval tray, view switching.
+     ============================================================ -->
+<script>
+
+  // ============================================================
+  // CONFIG
+  // window.NERDALERT_CONFIG is injected by the Express server
+  // at serve time (in ui-routes.ts). It contains the auth token,
+  // agent name, trust level, and port so the JS doesn't need to
+  // make a separate request to get this information.
+  // ============================================================
+
+  window.NERDALERT_CONFIG = {};
+  const CFG = window.NERDALERT_CONFIG || {
+    token:      '',
+    agentName:  'Sherman',
+    trustLevel: 1,
+    port:       3773,
+  };
+
+  const BASE_URL = `http://localhost:${CFG.port}`;
+
+  // ============================================================
+  // CHARACTER ROSTER
+  // Each entry maps to a personality in the backend.
+  // accentColor drives the CSS variable swap on agent selection.
+  // ============================================================
+
+  const CHARACTERS = [
+    { id:'brett',   name:'Brett',   fullName:'Brett Roberts',                     title:'Magic Enthusiast · Scooter Owner',
+      image:'/assets/characters/brett.png',
+      accent:'#00aaff', accentGlow:'rgba(0,170,255,0.15)',   accentDim:'rgba(0,170,255,0.08)',   accentMid:'rgba(0,170,255,0.4)',
+      desc:"Lovable manchild. Magic enthusiast, Pearl Harbor obsessive, and proud scooter owner. Don't ask what's in his pockets." },
+    { id:'bridget', name:'Bridget', fullName:'Bridget Finkle',                    title:'Director of IT',
+      image:'/assets/characters/bridget.png',
+      accent:'#cc66ff', accentGlow:'rgba(204,102,255,0.15)', accentDim:'rgba(204,102,255,0.08)', accentMid:'rgba(204,102,255,0.4)',
+      desc:"Director of IT and the office's lone authority figure. Professionally composed, quietly exasperated, dry wit she rarely gets to use." },
+    { id:'darius',  name:'Darius',  fullName:'Darius Champaign',                  title:'Senior Colleague · Operative',
+      image:'/assets/characters/darius.png',
+      accent:'#ff8c00', accentGlow:'rgba(255,140,0,0.15)',   accentDim:'rgba(255,140,0,0.08)',   accentMid:'rgba(255,140,0,0.4)',
+      desc:"The older colleague with an unexplained past and a fanny pack that contains whatever the situation requires. Sleeps at his desk. Knows things he shouldn't." },
+    { id:'kenny',   name:'Kenny',   fullName:'Kenny Benjamin',                    title:'IT Support · Reluctant Leader',
+      image:'/assets/characters/kenny.png',
+      accent:'#ff3333', accentGlow:'rgba(255,51,51,0.15)',   accentDim:'rgba(255,51,51,0.08)',   accentMid:'rgba(255,51,51,0.4)',
+      desc:"The most competent person in any room, which only means he suffers more consciously than everyone else. Sighs a lot. Means well. Shut up Brett." },
+    { id:'sherman', name:'Sherman', fullName:'Sherman Milton Bradley Williams IV', title:'Surveillance Operator',
+      image:'/assets/characters/sherman.png',
+      accent:'#39ff14', accentGlow:'rgba(57,255,20,0.15)',   accentDim:'rgba(57,255,20,0.08)',   accentMid:'rgba(57,255,20,0.4)',
+      desc:"Surveillance operator. Wall of monitors, smoke-filled basement, a grudge with no clear origin. Watches everything. Intervenes theatrically. Usually irrelevant." },
+    { id:'toshi',   name:'Toshi',   fullName:'Toshi Chang-Li Smith',              title:'IT Support · The Schemer',
+      image:'/assets/characters/toshi.png',
+      accent:'#7ea8d4', accentGlow:'rgba(126,168,212,0.15)', accentDim:'rgba(126,168,212,0.08)', accentMid:'rgba(126,168,212,0.4)',
+      desc:"The schemer. Often causes the problem and helps solve it. Composed exterior, extreme methods, real loyalty to the group. Full name: Toshiyaki." },
+    { id:'brooke',  name:'Brooke',  fullName:'Brooke Stream',                     title:'Human Resources',
+      image:'/assets/characters/brooke.png',
+      accent:'#ff69b4', accentGlow:'rgba(255,105,180,0.15)', accentDim:'rgba(255,105,180,0.08)', accentMid:'rgba(255,105,180,0.4)',
+      desc:"HR department. Warm, perceptive, and the most beleaguered person in the building. Survived Kenny's feelings and Toshi's candy grams. Still shows up." },
+  ];
+
+  // ============================================================
+  // STATE
+  // All application state lives in these variables.
+  // conversationHistory is the array sent to /chat/stream so
+  // Sherman maintains context across messages.
+  // ============================================================
+
+  let conversationHistory = [];
+  let isStreaming         = false;
+  let currentView        = 'chat';
+  let pendingApprovals   = [];
+  let activeAgentName    = CFG.agentName ?? 'Sherman';
+
+
+  // ============================================================
+  // ONBOARDING
+  // ============================================================
+
+  function renderOnboarding() {
+    const roster = document.getElementById('character-roster');
+    if (!roster) return;
+
+    CHARACTERS.forEach(char => {
+      const card = document.createElement('div');
+      card.className = 'character-card';
+      card.innerHTML = `
+        <div class="card-image">
+          <img src="${char.image}" alt="${char.name}" onerror="this.style.opacity='0.15'">
+        </div>
+        <div class="card-info">
+          <div class="card-name" style="color:${char.accent};text-shadow:0 0 8px ${char.accentGlow}">${char.name.toUpperCase()}</div>
+          <div class="card-desc">${char.desc}</div>
+        </div>
+        <button class="card-hire-btn" style="border-color:${char.accentMid};color:${char.accent}">
+          HIRE ${char.name.toUpperCase()}
+        </button>
+      `;
+      card.style.setProperty('--card-accent', char.accent);
+      card.style.setProperty('--card-glow',   char.accentGlow);
+      card.querySelector('.card-hire-btn').addEventListener('click', () => selectAgent(char));
+      roster.appendChild(card);
+    });
+
+    // Other card
+    const other = document.createElement('div');
+    other.className = 'character-card other-card';
+    other.innerHTML = `
+      <div class="other-card-image"><div class="other-card-plus">+</div></div>
+      <div class="card-info">
+        <div class="card-name" style="color:var(--text-dim)">OTHER</div>
+        <div class="card-desc">Build a custom agent. Choose a name and personality together.</div>
+      </div>
+      <button class="card-hire-btn" style="border-color:var(--text-dim);color:var(--text-dim)">BUILD YOUR OWN</button>
+    `;
+    other.querySelector('.card-hire-btn').addEventListener('click', () => selectAgent({
+      id:'custom', name:'Custom Agent',
+      accent:'#00ffcc', accentGlow:'rgba(0,255,204,0.15)', accentDim:'rgba(0,255,204,0.08)', accentMid:'rgba(0,255,204,0.4)',
+    }, true));
+    roster.appendChild(other);
+  }
+
+  function selectAgent(character, isCustom = false) {
+    localStorage.setItem('nerdalert_agent',  character.id);
+    localStorage.setItem('nerdalert_accent', JSON.stringify({
+      accent:     character.accent,
+      accentGlow: character.accentGlow,
+      accentDim:  character.accentDim,
+      accentMid:  character.accentMid,
+    }));
+
+    applyAccentColor(character);
+    activeAgentName = character.name;
+    const sub = document.getElementById('empty-state-sub');
+    if (sub) sub.textContent = `${character.name.toUpperCase()} ONLINE`;
+    document.getElementById('agent-name').textContent  = character.name.toUpperCase();
+    document.getElementById('agent-title').textContent = character.fullName + ' · ' + character.title;
+
+    const overlay = document.getElementById('onboarding-overlay');
+    if (overlay) {
+      overlay.classList.add('fade-out');
+      setTimeout(() => overlay.remove(), 500);
+    }
+
+    const greeting = isCustom
+      ? "I don't have a preset personality yet — tell me what you're looking for. Give me a name, a vibe, a voice. We'll build it together."
+      : `Hey — I'm ${character.name}. Tell me a little about yourself. What would you like me to call you? What should I know before we get started? Or if you'd prefer, we can skip the formalities and just get into it.`;
+
+    setTimeout(() => {
+      appendAgentMessage();
+      simulateStream(greeting, character.name);
+    }, 600);
+  }
+
+  function simulateStream(text, agentName) {
+    const span   = document.getElementById('streaming-text');
+    const cursor = document.getElementById('streaming-cursor');
+    if (!span) return;
+    let i = 0;
+    const iv = setInterval(() => {
+      if (i < text.length) {
+        span.textContent += text[i++];
+        scrollToBottom();
+      } else {
+        clearInterval(iv);
+        if (cursor) cursor.remove();
+        const bubble = document.getElementById('streaming-bubble');
+        if (bubble) {
+          bubble.removeAttribute('id');
+          const s = bubble.querySelector('#streaming-text');
+          if (s) s.removeAttribute('id');
+        }
+        // Add to history so Sherman knows the intro happened
+        conversationHistory.push({ role: 'assistant', content: text });
+      }
+    }, 18);
+  }
+
+  function applyAccentColor(character) {
+    const root = document.documentElement;
+    root.style.setProperty('--cyan',      character.accent);
+    root.style.setProperty('--cyan-glow', character.accentGlow);
+    root.style.setProperty('--cyan-dim',  character.accentDim);
+    root.style.setProperty('--cyan-mid',  character.accentMid);
+  }
+
+  function checkOnboarding() {
+    const savedId     = localStorage.getItem('nerdalert_agent');
+    const savedAccent = localStorage.getItem('nerdalert_accent');
+    const overlay     = document.getElementById('onboarding-overlay');
+
+    if (savedId && savedAccent) {
+      if (overlay) overlay.remove();
+      try {
+        const accent    = JSON.parse(savedAccent);
+        const character = CHARACTERS.find(c => c.id === savedId) || {};
+        applyAccentColor({ ...character, ...accent });
+        if (character.name) {
+          activeAgentName = character.name;
+          const sub = document.getElementById('empty-state-sub');
+          if (sub) sub.textContent = `${character.name.toUpperCase()} ONLINE`;
+          document.getElementById('agent-name').textContent  = character.name.toUpperCase();
+          document.getElementById('agent-title').textContent = character.fullName + ' · ' + character.title;
+          document.getElementById('status-text').textContent = `${character.name.toUpperCase()} ONLINE // LVL ${CFG.trustLevel}`;
+        }
+      } catch {}
+    } else {
+      renderOnboarding();
+    }
+  }
+
+
+  // ============================================================
+  // STARTUP
+  // ============================================================
+
+  window.addEventListener('DOMContentLoaded', () => {
+    // Run onboarding check first
+    checkOnboarding();
+
+    // Set trust level pips
+    for (let i = 1; i <= 5; i++) {
+      const pip = document.getElementById(`pip-${i}`);
+      if (pip) {
+        if (i <= CFG.trustLevel) pip.classList.add('active');
+        else                     pip.classList.remove('active');
+      }
+    }
+
+    // Health check — update status indicator
+    checkHealth();
+
+    // Focus input
+    document.getElementById('chat-input').focus();
+
+    // Enter key sends message
+    document.getElementById('chat-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+  });
+
+
+  // ============================================================
+  // HEALTH CHECK
+  // Pings /health and updates the status dot in the topbar.
+  // ============================================================
+
+  async function checkHealth() {
+    try {
+      const res = await fetch(`${BASE_URL}/health`, {
+        headers: { 'Authorization': `Bearer ${CFG.token}` }
+      });
+      const dot = document.getElementById('status-dot');
+      if (res.ok) {
+        dot.classList.remove('offline');
+      } else {
+        dot.classList.add('offline');
+        document.getElementById('status-text').textContent = 'SERVER OFFLINE';
+      }
+    } catch {
+      document.getElementById('status-dot').classList.add('offline');
+      document.getElementById('status-text').textContent = 'SERVER OFFLINE';
+    }
+  }
+
+  function setStatus(state) {
+    const dot  = document.getElementById('status-dot');
+    const text = document.getElementById('status-text');
+
+    if (state === 'online') {
+      dot.classList.remove('offline');
+      text.textContent = `${activeAgentName.toUpperCase()} ONLINE // LVL ${CFG.trustLevel}`;
+    } else {
+      dot.classList.add('offline');
+      text.textContent = 'SERVER OFFLINE';
+    }
+  }
+
+
+  // ============================================================
+  // VIEW SWITCHING
+  // Switches between Chat (center only), Email (center + panel),
+  // SOC (center + panel), and Memory (center + panel).
+  // The chat area always stays visible — the panel slides alongside.
+  // ============================================================
+
+  function switchView(view, navBtn) {
+    currentView = view;
+
+    // Update nav button active state
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    if (navBtn) navBtn.classList.add('active');
+    else {
+      const btn = document.getElementById(`nav-${view}`);
+      if (btn) btn.classList.add('active');
+    }
+
+    // Update sidebar active state
+    document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
+    const sbItem = document.getElementById(`sb-${view}`);
+    if (sbItem) sbItem.classList.add('active');
+
+    // Open or close the panel based on view
+    if (view === 'email')    { sendMessage('triage my inbox'); return; }
+    if (view === 'soc')      { sendMessage('give me a current SOC status summary — check wazuh alerts, crowdsec decisions, fail2ban recent bans, and pihole summary'); return; }
+    if (view === 'memory')   { openPanel('memory');   return; }
+    if (view === 'settings') { openPanel('settings'); return; }
+    if (view === 'chat')     { closePanel(); }
+  }
+
+
+  // ============================================================
+  // PANEL MANAGEMENT
+  // The side panel slides in via CSS grid column transition.
+  // Content is injected here based on which panel is requested.
+  // ============================================================
+
+  function openPanel(type) {
+    const app   = document.getElementById('app');
+    const title = document.getElementById('panel-title');
+    const body  = document.getElementById('panel-body');
+
+    app.classList.add('panel-open');
+
+    if (type === 'email') {
+      title.textContent = 'EMAIL TRIAGE';
+      body.innerHTML = getEmailPanelHTML();
+    } else if (type === 'soc') {
+      title.textContent = 'SOC MONITOR';
+      body.innerHTML = getSOCPanelHTML();
+    } else if (type === 'memory') {
+      title.textContent = 'MEMORY ENGINE';
+      body.innerHTML = getMemoryPanelHTML();
+    } else if (type === 'settings') {
+      title.textContent = 'SETTINGS';
+      body.innerHTML = getSettingsPanelHTML();
+    }
+  }
+
+  function closePanel() {
+    document.getElementById('app').classList.remove('panel-open');
+    // Reset nav to chat
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('nav-chat').classList.add('active');
+    document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
+    document.getElementById('sb-chat').classList.add('active');
+    currentView = 'chat';
+  }
+
+  // Email panel — shows classified inbox items
+  function getEmailPanelHTML() {
+    return `
+      <div style="font-size:9px;color:var(--text-muted);letter-spacing:1px;margin-bottom:10px">
+        LAST TRIAGE: Connect ${activeAgentName} to see live data
+      </div>
+      <div class="email-item">
+        <div class="email-from">no-reply@interscoperecords.com</div>
+        <div class="email-subject">New releases — Kacey Musgraves, Lady Gaga</div>
+        <div class="email-meta">
+          <span class="tag review">REVIEW</span>
+          <span class="email-time">2h ago</span>
+        </div>
+      </div>
+      <div class="email-item">
+        <div class="email-from">noreply@hims.com</div>
+        <div class="email-subject">Your weight loss journey starts here</div>
+        <div class="email-meta">
+          <span class="tag review">REVIEW</span>
+          <span class="email-time">3h ago</span>
+        </div>
+      </div>
+      <div class="email-item">
+        <div class="email-from">deals@bestbuy.com</div>
+        <div class="email-subject">Clearance event — up to 40% off</div>
+        <div class="email-meta">
+          <span class="tag promo">PROMO</span>
+          <span class="email-time">4h ago</span>
+        </div>
+      </div>
+      <div class="email-item">
+        <div class="email-from">noreply@afterpay.com</div>
+        <div class="email-subject">Graduation & summer guide 2026</div>
+        <div class="email-meta">
+          <span class="tag promo">PROMO</span>
+          <span class="email-time">5h ago</span>
+        </div>
+      </div>
+      <div style="padding:10px 0">
+        <button onclick="sendMessage('triage my inbox')" style="width:100%;padding:8px;font-family:var(--font-mono);font-size:9px;letter-spacing:2px;color:var(--cyan);background:var(--cyan-dim);border:1px solid var(--cyan-mid);cursor:pointer;border-radius:1px">
+          ASK ${activeAgentName.toUpperCase()} TO TRIAGE
+        </button>
+      </div>
+    `;
+  }
+
+  // SOC panel — shows security service status
+  function getSOCPanelHTML() {
+    return `
+      <div style="font-size:9px;color:var(--red);letter-spacing:1px;margin-bottom:10px;text-shadow:0 0 8px var(--red)">
+        ⚠ 1 ACTIVE ALERT
+      </div>
+      <div class="soc-alert">
+        <div class="soc-from">Fail2ban // SSH</div>
+        <div class="soc-subject">3 failed login attempts — 192.168.1.44</div>
+      </div>
+      <div style="font-size:9px;color:var(--text-muted);letter-spacing:1px;margin:12px 0 8px">SERVICES</div>
+      <div class="soc-service">
+        <div class="service-dot ok"></div>
+        <div class="service-name">Wazuh</div>
+        <div class="service-meta">All clear</div>
+      </div>
+      <div class="soc-service">
+        <div class="service-dot ok"></div>
+        <div class="service-name">Pi-hole</div>
+        <div class="service-meta">23.4% blocked</div>
+      </div>
+      <div class="soc-service">
+        <div class="service-dot ok"></div>
+        <div class="service-name">CrowdSec</div>
+        <div class="service-meta">2 IPs banned today</div>
+      </div>
+      <div class="soc-service">
+        <div class="service-dot ok"></div>
+        <div class="service-name">Suricata</div>
+        <div class="service-meta">No alerts</div>
+      </div>
+    `;
+  }
+
+  // Memory panel — placeholder for Phase 5b
+  function getMemoryPanelHTML() {
+    return `
+      <div style="font-size:9px;color:var(--text-muted);letter-spacing:1px;margin-bottom:12px">
+        MEMORY ENGINE // TF-IDF INDEX
+      </div>
+      <div style="font-size:11px;color:var(--text-dim);line-height:1.7">
+        Ask ${activeAgentName} what he remembers:<br><br>
+      </div>
+      <button onclick="sendMessage('what do you remember about me')" style="width:100%;padding:8px;font-family:var(--font-mono);font-size:9px;letter-spacing:2px;color:var(--cyan);background:var(--cyan-dim);border:1px solid var(--cyan-mid);cursor:pointer;border-radius:1px;margin-bottom:8px">
+        WHAT DO YOU REMEMBER?
+      </button>
+      <button onclick="sendMessage('show me recent memory entries')" style="width:100%;padding:8px;font-family:var(--font-mono);font-size:9px;letter-spacing:2px;color:var(--text-dim);background:transparent;border:1px solid var(--border);cursor:pointer;border-radius:1px">
+        RECENT ENTRIES
+      </button>
+    `;
+  }
+
+  function switchAgent(id) {
+    const character = CHARACTERS.find(c => c.id === id);
+    if (!character) return;
+
+    // Persist
+    localStorage.setItem('nerdalert_agent',  character.id);
+    localStorage.setItem('nerdalert_accent', JSON.stringify({
+      accent:     character.accent,
+      accentGlow: character.accentGlow,
+      accentDim:  character.accentDim,
+      accentMid:  character.accentMid,
+    }));
+
+    // Apply colors and update UI
+    applyAccentColor(character);
+    activeAgentName = character.name;
+    document.getElementById('agent-name').textContent  = character.name.toUpperCase();
+    document.getElementById('agent-title').textContent = character.fullName + ' · ' + character.title;
+    document.getElementById('status-text').textContent = `${character.name.toUpperCase()} ONLINE // LVL ${CFG.trustLevel}`;
+
+    // Re-render the panel so the checkmark moves
+    openPanel('settings');
+  }
+
+  function clearConversation() {
+    conversationHistory = [];
+    const container = document.getElementById('chat-messages');
+    container.innerHTML = `
+      <div class="empty-state" id="empty-state">
+        <div class="empty-state-logo">NERDALERT</div>
+        <div class="empty-state-sub" id="empty-state-sub">${activeAgentName.toUpperCase()} ONLINE</div>
+      </div>
+    `;
+  }
+
+  // Settings panel — agent switcher, trust level, clear conversation
+  function getSettingsPanelHTML() {
+    const currentId = localStorage.getItem('nerdalert_agent');
+
+    // Compact agent cards
+    const cards = CHARACTERS.map(char => {
+      const isActive = char.id === currentId;
+      const border   = isActive
+        ? `2px solid ${char.accent}`
+        : `1px solid var(--border)`;
+      const glow     = isActive
+        ? `box-shadow: 0 0 12px ${char.accentGlow};`
+        : '';
+      return `
+        <div class="settings-agent-card ${isActive ? 'active' : ''}"
+             style="border: ${border}; ${glow}"
+             onclick="switchAgent('${char.id}')">
+          <div class="settings-agent-dot" style="background:${char.accent};box-shadow:0 0 6px ${char.accentGlow}"></div>
+          <div class="settings-agent-info">
+            <div class="settings-agent-name" style="color:${char.accent}">${char.name.toUpperCase()}</div>
+            <div class="settings-agent-title">${char.title}</div>
+          </div>
+          ${isActive ? '<div class="settings-agent-check">✓</div>' : ''}
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="settings-section-label">ACTIVE AGENT</div>
+      <div class="settings-agent-list">${cards}</div>
+
+      <div class="settings-section-label" style="margin-top:16px">TRUST LEVEL</div>
+      <div class="settings-trust-display">
+        <span class="settings-trust-value">LEVEL ${CFG.trustLevel}</span>
+        <span class="settings-trust-note">Edit config.yaml + restart to change</span>
+      </div>
+
+      <div class="settings-section-label" style="margin-top:16px">SESSION</div>
+      <button class="settings-clear-btn" onclick="clearConversation()">
+        CLEAR CONVERSATION
+      </button>
+    `;
+  }
+
+
+  // ============================================================
+  // APPROVAL TRAY
+  // ============================================================
+
+  function openTray() {
+    document.getElementById('approval-tray').classList.add('open');
+  }
+
+  function closeTray() {
+    document.getElementById('approval-tray').classList.remove('open');
+  }
+
+  // Add a new approval card to the tray
+  // Called by the response parser when Sherman proposes an action
+  function addApprovalCard(action, description, onApprove, onDeny) {
+    pendingApprovals.push({ action, description, onApprove, onDeny });
+    renderTray();
+    openTray();
+  }
+
+  function renderTray() {
+    const cards    = document.getElementById('tray-cards');
+    const countEl  = document.getElementById('tray-count');
+    const active   = pendingApprovals.filter(a => !a.resolved);
+
+    countEl.textContent = active.length;
+    cards.innerHTML = '';
+
+    active.forEach((item, idx) => {
+      const card = document.createElement('div');
+      card.className = 'approval-card';
+      card.innerHTML = `
+        <div class="card-action">${item.action}</div>
+        <div class="card-desc">${item.description}</div>
+        <div class="card-buttons">
+          <button class="card-btn approve" onclick="resolveCard(${idx}, true)">APPROVE</button>
+          <button class="card-btn deny"    onclick="resolveCard(${idx}, false)">DENY</button>
+        </div>
+      `;
+      cards.appendChild(card);
+    });
+
+    if (active.length === 0) closeTray();
+  }
+
+  function resolveCard(idx, approved) {
+    const item = pendingApprovals[idx];
+    if (!item) return;
+    item.resolved = true;
+
+    if (approved && item.onApprove) {
+      // Send the approval as a message to Sherman
+      sendMessage(item.onApprove);
+    } else if (!approved && item.onDeny) {
+      sendMessage(item.onDeny);
+    }
+
+    renderTray();
+  }
+
+
+  // ============================================================
+  // MESSAGE RENDERING
+  // Helpers to build message DOM elements.
+  // ============================================================
+
+  // Remove the empty state once the first message is added
+  function clearEmptyState() {
+    const es = document.getElementById('empty-state');
+    if (es) es.remove();
+  }
+
+  // Create and append a user message bubble
+  function appendUserMessage(text) {
+    clearEmptyState();
+    const container = document.getElementById('chat-messages');
+    const div = document.createElement('div');
+    div.className = 'message user';
+    div.innerHTML = `
+      <div class="message-label">YOU // ${timestamp()}</div>
+      <div class="message-bubble">${escapeHTML(text)}</div>
+    `;
+    container.appendChild(div);
+    scrollToBottom();
+    return div;
+  }
+
+  // Create an agent message bubble that starts empty (for streaming into)
+  function appendAgentMessage() {
+    clearEmptyState();
+    const container = document.getElementById('chat-messages');
+    const div = document.createElement('div');
+    div.className = 'message agent';
+    div.innerHTML = `
+      <div class="message-label">${activeAgentName.toUpperCase()} // ${timestamp()}</div>
+      <div class="message-bubble" id="streaming-bubble">
+        <span id="streaming-text"></span><span class="cursor-blink" id="streaming-cursor"></span>
+      </div>
+    `;
+    container.appendChild(div);
+    scrollToBottom();
+    return div;
+  }
+
+  // Replace the streaming bubble with finalized content
+  function finalizeAgentMessage(text) {
+    const bubble = document.getElementById('streaming-bubble');
+    const cursor = document.getElementById('streaming-cursor');
+    if (cursor) cursor.remove();
+    if (bubble) {
+      bubble.removeAttribute('id');
+      const span = bubble.querySelector('#streaming-text');
+      if (span) span.removeAttribute('id');
+    }
+  }
+
+  // Show an error inside the chat (streaming failure)
+  function appendErrorMessage(message) {
+    clearEmptyState();
+    const container = document.getElementById('chat-messages');
+    const div = document.createElement('div');
+    div.className = 'message agent';
+    div.innerHTML = `
+      <div class="message-label">${activeAgentName.toUpperCase()} // ${timestamp()}</div>
+      <div class="stream-error">⚠ ${escapeHTML(message)}</div>
+    `;
+    container.appendChild(div);
+    scrollToBottom();
+  }
+
+  // Show thinking dots while a tool call is in progress
+  function showThinking() {
+    const bubble = document.getElementById('streaming-bubble');
+    if (!bubble) return;
+    const thinking = document.createElement('div');
+    thinking.className = 'thinking-indicator';
+    thinking.id = 'thinking-indicator';
+    thinking.innerHTML = `
+      <span style="font-size:9px;color:var(--text-muted);letter-spacing:1px">RUNNING TOOL</span>
+      <div class="thinking-dots">
+        <span></span><span></span><span></span>
+      </div>
+    `;
+    bubble.appendChild(thinking);
+    scrollToBottom();
+  }
+
+  function hideThinking() {
+    const t = document.getElementById('thinking-indicator');
+    if (t) t.remove();
+  }
+
+  function scrollToBottom() {
+    const container = document.getElementById('chat-messages');
+    container.scrollTop = container.scrollHeight;
+  }
+
+
+  // ============================================================
+  // SEND MESSAGE + STREAMING
+  // The core of the UI — sends a message and streams the response.
+  //
+  // Flow:
+  //   1. Validate input, disable UI
+  //   2. Append user bubble
+  //   3. Append empty agent bubble (streaming target)
+  //   4. POST to /chat/stream with message + history
+  //   5. Read SSE stream — append each token to the bubble
+  //   6. On 'done' event — finalize bubble, update history
+  //   7. On 'error' event — show error message
+  //   8. Re-enable UI
+  // ============================================================
+
+  async function sendMessage(prefill) {
+    const input = document.getElementById('chat-input');
+    const btn   = document.getElementById('send-button');
+
+    // Support programmatic calls from panel buttons (prefill parameter)
+    let text = prefill || input.value.trim();
+    if (!text || isStreaming) return;
+
+    // If called from a panel button, switch back to chat view first
+    if (prefill) {
+      switchView('chat', null);
+    }
+
+    // Clear input and lock UI while streaming
+    input.value  = '';
+    isStreaming   = true;
+    input.disabled = true;
+    btn.disabled   = true;
+
+    // Add user message to UI
+    appendUserMessage(text);
+
+    // Start agent bubble
+    const agentDiv = appendAgentMessage();
+
+    try {
+      // POST to the SSE streaming endpoint
+      const response = await fetch(`${BASE_URL}/chat/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${CFG.token}`,
+        },
+        body: JSON.stringify({
+          message:             text,
+          conversationHistory: conversationHistory,
+          agentId:             localStorage.getItem('nerdalert_agent') ?? 'sherman',
+          agentName:           activeAgentName,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server error ${response.status}`);
+      }
+
+      // Read the SSE stream
+      // response.body is a ReadableStream. We use a TextDecoder and
+      // a reader to process the raw bytes as text line by line.
+      const reader  = response.body.getReader();
+      const decoder = new TextDecoder();
+      let   buffer  = '';
+      let   fullText = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        // Decode the bytes and add to our buffer
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE events are separated by double newlines (\n\n)
+        // Split on that to get individual events
+        const events = buffer.split('\n\n');
+
+        // The last element might be an incomplete event — keep it in the buffer
+        buffer = events.pop() || '';
+
+        for (const event of events) {
+          if (!event.trim()) continue;
+
+          // Parse the SSE event
+          // Format is: "event: <type>\ndata: <json>"
+          const lines     = event.split('\n');
+          let   eventType = 'message';
+          let   eventData = '';
+
+          for (const line of lines) {
+            if (line.startsWith('event: ')) eventType = line.slice(7).trim();
+            if (line.startsWith('data: '))  eventData = line.slice(6).trim();
+          }
+
+          if (!eventData) continue;
+
+          let parsed;
+          try { parsed = JSON.parse(eventData); }
+          catch { continue; }
+
+          // ---- HANDLE EVENTS ----
+
+          if (eventType === 'token') {
+            // A new text chunk — append to the streaming bubble
+            const span = document.getElementById('streaming-text');
+            if (span) {
+              span.textContent += parsed.text;
+              fullText         += parsed.text;
+              scrollToBottom();
+            }
+          }
+
+          else if (eventType === 'tool_start') {
+            const data      = parsed;
+            const streamDiv = document.getElementById('streaming-bubble');
+            if (streamDiv) {
+              const thinking = document.createElement('div');
+              thinking.className = 'tool-thinking';
+              thinking.id        = `tool-thinking-${data.id}`;
+              thinking.innerHTML = `
+                <div class="tool-thinking-spinner"></div>
+                <span>RUNNING: ${escapeHTML(data.name.toUpperCase())}</span>
+              `;
+              streamDiv.appendChild(thinking);
+              scrollToBottom();
+            }
+          }
+
+          else if (eventType === 'tool_result') {
+            const data     = parsed;
+            const thinking = document.getElementById(`tool-thinking-${data.id}`);
+
+            const block     = document.createElement('div');
+            block.className = `tool-result-block${data.error ? ' error' : ''}`;
+            block.innerHTML = `
+              <div class="tool-result-header" onclick="this.parentElement.classList.toggle('open')">
+                <span>&#9654; ${escapeHTML(data.name.toUpperCase())}</span>
+                <span class="tool-result-toggle">&#9660;</span>
+              </div>
+              <div class="tool-result-body">${escapeHTML(data.output ?? '')}</div>
+            `;
+
+            if (thinking) {
+              thinking.replaceWith(block);
+            } else {
+              const streamDiv = document.getElementById('streaming-bubble');
+              if (streamDiv) streamDiv.appendChild(block);
+            }
+            scrollToBottom();
+          }
+
+          else if (eventType === 'tool_call') {
+            // legacy fallback — can remove once tool_start/tool_result confirmed working
+            showThinking();
+          }
+
+          else if (eventType === 'done') {
+            // Response complete
+            hideThinking();
+            finalizeAgentMessage(fullText || parsed.text);
+
+            // Update conversation history
+            conversationHistory.push({ role: 'user',      content: text });
+            conversationHistory.push({ role: 'assistant', content: parsed.text || fullText });
+
+            // Check if response contains actionable items
+            // Look for phrases that suggest Sherman wants to take an action
+            parseForApprovals(parsed.text || fullText);
+          }
+
+          else if (eventType === 'error') {
+            // Stream error — show error UI
+            hideThinking();
+            if (agentDiv) agentDiv.remove();
+            appendErrorMessage(parsed.message || 'Streaming failed — server may be down.');
+          }
+        }
+      }
+
+    } catch (err) {
+      // Network-level failure
+      if (agentDiv) agentDiv.remove();
+      appendErrorMessage(`Connection error: ${err.message}`);
+    }
+
+    // Re-enable UI
+    isStreaming     = false;
+    input.disabled  = false;
+    btn.disabled    = false;
+    input.focus();
+  }
+
+
+  // ============================================================
+  // APPROVAL PARSER
+  // Scans Sherman's response text for action phrases and
+  // surfaces them as approval cards in the bottom tray.
+  //
+  // This is a simple keyword approach for Phase 5 —
+  // a more robust version would use structured tool_call events
+  // from the agent once Phase 6 SOC tools are integrated.
+  // ============================================================
+
+  function parseForApprovals(text) {
+    if (!text) return;
+    const lower = text.toLowerCase();
+
+    if ((lower.includes('move') || lower.includes('clean')) &&
+        (lower.includes('promo') || lower.includes('coupon'))) {
+      addApprovalCard(
+        'Move to Coupons',
+        'Move promotional emails to the Coupons folder and mark as read.',
+        'go ahead and run the cleanup',
+        'skip the cleanup for now'
+      );
+    }
+
+    if (lower.includes('draft') && lower.includes('reply')) {
+      addApprovalCard(
+        'Draft Reply',
+        'Draft a reply to the flagged email for your review.',
+        'yes go ahead and draft that reply',
+        'skip the draft for now'
+      );
+    }
+
+    if (lower.includes('send') && lower.includes('email')) {
+      addApprovalCard(
+        'Send Email',
+        'Sherman is ready to send a drafted email on your behalf.',
+        'yes send it',
+        'hold off on sending'
+      );
+    }
+  }
+
+
+  // ============================================================
+  // UTILITIES
+  // ============================================================
+
+  function timestamp() {
+    return new Date().toLocaleTimeString('en-US', {
+      hour: '2-digit', minute: '2-digit', hour12: false
+    });
+  }
+
+  // Prevent XSS — escape user-supplied text before injecting into innerHTML
+  function escapeHTML(str) {
+    const div = document.createElement('div');
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
+  }
+
+</script>
+</body>
+</html>

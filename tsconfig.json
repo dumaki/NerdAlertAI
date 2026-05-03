@@ -1,0 +1,49 @@
+{
+  "compilerOptions": {
+    // What version of JavaScript to output after compiling
+    // "es2020" gives us modern JS features like async/await natively
+    "target": "es2020",
+
+    // Which module system to use — "commonjs" is standard Node.js
+    // This is why we write  import x from 'y'  and it works in Node
+    "module": "commonjs",
+
+    // Where to look for your source files
+    // rootDir is removed here because we now have two source roots:
+    // src/ (application code) and scripts/ (CLI tools).
+    // When rootDir is set to a single folder, TypeScript refuses to compile
+    // files outside it. Removing it lets TypeScript infer the root automatically.
+    // "outDir" still works — compiled output still goes to dist/
+
+    // Where to put the compiled JavaScript output
+    "outDir": "./dist",
+
+    // Tell TypeScript which Node.js built-in globals are available.
+    // Without this, TypeScript doesn't know what 'process', 'fs', '__dirname'
+    // etc. are — because those are Node-specific, not part of standard JS.
+    // This is what caused the "Cannot find name 'process'" error.
+    "types": ["node"],
+
+    // strict: true is the whole point of TypeScript
+    // It turns on ALL the checks — if something could be undefined,
+    // TypeScript will tell you BEFORE the code runs
+    "strict": true,
+
+    // Allows importing .json files directly (we'll use this for config)
+    "resolveJsonModule": true,
+
+    // Makes imports work more predictably across different environments
+    "esModuleInterop": true,
+
+    // If you forget to annotate a type, TypeScript errors instead of guessing
+    "noImplicitAny": true,
+
+    // Catches cases where a variable could be null/undefined unexpectedly
+    "strictNullChecks": true
+  },
+  // src/**/* covers all application code
+  // scripts/**/* covers the CLI tools (memory-cli.ts etc.)
+  // Both need to be here or TypeScript won't compile files in scripts/
+  "include": ["src/**/*", "scripts/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

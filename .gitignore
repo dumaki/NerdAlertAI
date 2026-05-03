@@ -1,0 +1,21 @@
+# === SECRETS — NEVER COMMIT ===
+# This is the most important entry in this file.
+# The .env file contains your API keys and passwords.
+# It must never appear in version control. Ever.
+.env
+
+# === BUILD OUTPUT ===
+# The compiled JavaScript output — regenerated from source, not tracked
+dist/
+
+# === DEPENDENCIES ===
+# npm install recreates this from package.json — no need to track it
+node_modules/
+
+# === LOGS ===
+# Agent action logs — may contain sensitive info
+logs/*.log
+
+# === OS FILES ===
+.DS_Store
+Thumbs.db

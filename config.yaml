@@ -1,0 +1,89 @@
+# ============================================================
+# NERDALERT — SYSTEM CONFIGURATION
+# ============================================================
+# This file is safe to commit to Git.
+# It contains NO secrets — only settings and permissions.
+#
+# How trust levels work:
+#   0 = Read & Reason only (no external connections)
+#   1 = Read External (view-only access to connected services)
+#   2 = Draft & Suggest (propose actions, nothing sent without approval)
+#   3 = Act with Approval (execute approved actions, all logged)
+#   4 = Autonomous (pre-approved routine tasks, still logged)
+#   5 = Elevated Access (SSH, filesystem exec — session-unlock only)
+# ============================================================
+
+# --- AGENT PERSONALITY ---
+agent:
+  name: "Sherman"           # What the agent calls itself
+  personality: "sherman"   # Which personality file to load
+  trust_level: 2           # Global trust level — start low, raise deliberatey
+
+# --- SERVER ---
+server:
+  port: 3773               # Overridden by SERVER_PORT in .env if set
+  local_only: true         # Never accept connections from outside localhost
+
+# --- TOOLS ---
+# enabled: true/false controls whether the agent can see/use the tool at all
+# trust_level: minimum trust level required to call this tool
+tools:
+  gmail:
+    enabled: true         # Will be enabled when Gmail module is built
+    trust_level: 1
+
+  google_calendar:
+    enabled: true
+    trust_level: 1
+
+  github:
+    enabled: false
+    trust_level: 1
+
+  plex:
+    enabled: false
+    trust_level: 4
+
+  sonarr:
+    enabled: false
+    trust_level: 4
+
+  radarr:
+    enabled: false
+    trust_level: 4
+
+  soc_wazuh:
+    enabled: false
+    trust_level: 1
+
+  soc_pihole:
+    enabled: false
+    trust_level: 1
+
+  soc_grafana:
+    enabled: false
+    trust_level: 1
+
+  ssh:
+    enabled: false         # Level 5 — never on by default, session-unlock only
+    trust_level: 5
+
+  browser:
+    enabled: false
+    trust_level: 4
+
+# --- LOGGING ---
+logging:
+  enabled: true
+  log_dir: "./logs"
+  log_tool_calls: true     # Every tool call the agent makes is logged
+  log_approvals: true      # Every approve/reject decision is logged
+
+# --- AUTH STRATEGY ---
+# Controls how clients prove they are allowed to talk to this server.
+# Options:
+#   "token"     — static bearer token from .env (default, works right now)
+#   "authentik" — OAuth 2.0 SSO via your Authentik instance (built in UI phase)
+#   "none"      — no auth (local dev only, never use with sensitive tools enabled)
+auth:
+  strategy: "token"
