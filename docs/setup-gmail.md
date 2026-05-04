@@ -1,5 +1,4 @@
 # Gmail Setup Playbook
-
 <!-- AGENT INSTRUCTIONS — not shown to user
 This file is read by the gmail-setup tool when a user triggers email setup.
 Present one step at a time. Wait for confirmation before moving to the next.
@@ -14,7 +13,6 @@ Do not rush. Do not present multiple steps at once. One step, one pause.
 ## Step 1 — Your Gmail address
 
 First things first — what Gmail address do you want to connect?
-
 Type it out and I'll get us moving.
 
 ---
@@ -24,6 +22,8 @@ Type it out and I'll get us moving.
 Gmail requires 2-Step Verification to be active before it will let you generate an App Password.
 
 Open this link in your browser and make sure it shows as **On**:
+
+🔗 **2-Step Verification:**
 https://myaccount.google.com/signinoptions/two-step-verification
 
 If it's already on, say **ready** and we'll move to the next step.
@@ -33,10 +33,12 @@ If it's off, turn it on first — Google will walk you through it — then come 
 
 ## Step 3 — Generate your App Password
 
-Now for the actual password. Open this link:
+Now for the actual password. Open this link — copy and paste the whole thing into your browser:
+
+🔗 **App Passwords page:**
 https://myaccount.google.com/apppasswords
 
-You may need to sign in. Once you're in:
+You may need to sign in again. Once you're in:
 
 1. In the **App name** field, type: `NerdAlert`
 2. Click **Create**
