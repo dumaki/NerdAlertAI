@@ -19,6 +19,7 @@
 
 import { NerdAlertTool, NerdAlertResponse } from '../../types/response.types'
 import {
+  isGmailConfigured,
   testConfig,
   listMailboxes,
   listMessages,
@@ -142,6 +143,23 @@ const gmailTool: NerdAlertTool = {
 
   async execute(params: Record<string, unknown>): Promise<NerdAlertResponse> {
     const action = params.action as string
+
+    // ── Not configured check ──────────────────────────────────────────────────
+    // Catches missing or incomplete secrets file before any IMAP/SMTP attempt.
+    // The agent sees this and offers to start the setup flow.
+    if (!isGmailConfigured()) {
+      return {
+        type:    'text',
+        content: [
+          'not_configured',
+          '',
+          "Looks like email isn't set up yet.",
+          "Say **run email setup** and I'll walk you through it — takes about 2 minutes.",
+          "You'll just need to grab a password from your Google account settings.",
+        ].join('\n'),
+        metadata: { title: 'Gmail not configured', sources: [] },
+      }
+    }
 
     try {
       switch (action) {

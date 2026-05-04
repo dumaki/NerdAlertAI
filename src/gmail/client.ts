@@ -134,6 +134,20 @@ function makeJsonSafe(value: any): any {
   return value
 }
 
+// ── isGmailConfigured ─────────────────────────────────────────────────────────
+// Returns true if the secrets file exists and has the minimum required fields.
+// Used by gmail-tool.ts to catch the unconfigured state before attempting
+// any IMAP/SMTP operation — returns a friendly setup prompt instead of
+// a raw thrown error.
+export function isGmailConfigured(): boolean {
+  try {
+    const cfg = loadGmailConfig()
+    return !!(cfg?.auth?.appPassword && cfg?.email)
+  } catch {
+    return false
+  }
+}
+
 // ── testConfig ────────────────────────────────────────────────────────────────
 // Verifies IMAP and SMTP credentials without touching any messages.
 export async function testConfig(configPath?: string) {
