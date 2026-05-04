@@ -1337,6 +1337,38 @@
       border-color: var(--red);
     }
 
+    /* ── Model selector ── */
+    .settings-model-select {
+      width: 100%;
+      padding: 8px 10px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 1px;
+      color: var(--cyan);
+      background: var(--bg-base);
+      border: 1px solid var(--cyan-mid);
+      border-radius: 1px;
+      cursor: pointer;
+      appearance: none;
+      -webkit-appearance: none;
+      margin-bottom: 6px;
+    }
+    .settings-model-select:focus { outline: none; border-color: var(--cyan); }
+    .settings-model-select option { background: var(--bg-raised); color: var(--text); }
+    .settings-model-note {
+      font-size: 9px;
+      color: var(--text-muted);
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    .settings-model-flash {
+      font-size: 9px;
+      color: var(--cyan);
+      letter-spacing: 1px;
+      min-height: 14px;
+      transition: opacity 0.4s;
+    }
+
     /* ==========================================================
        EMPTY STATE — shown before any messages
        ========================================================== */
@@ -1613,6 +1645,7 @@
   let currentView        = 'chat';
   let pendingApprovals   = [];
   let activeAgentName    = CFG.agentName ?? 'Sherman';
+  let currentModel       = CFG.model     ?? 'nvidia/llama-3.1-nemotron-70b-instruct:free';
 
 
   // ============================================================
@@ -1879,6 +1912,8 @@
     } else if (type === 'settings') {
       title.textContent = 'SETTINGS';
       body.innerHTML = getSettingsPanelHTML();
+      const sel = document.getElementById('model-select');
+      if (sel) sel.value = currentModel;
     }
   }
 
@@ -1990,6 +2025,33 @@
     `;
   }
 
+  // ── Model switcher ────────────────────────────────────────
+  // Calls POST /api/config/model to update the active model
+  // at runtime. No restart required. Dropdown seeds itself
+  // from CFG.model which is injected by the server on page load.
+  async function switchModel(model) {
+    const flash = document.getElementById('model-flash');
+    try {
+      const res = await fetch(`${BASE_URL}/api/config/model`, {
+        method:  'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${CFG.token}`,
+        },
+        body: JSON.stringify({ model }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        currentModel = model;
+        if (flash) { flash.textContent = '✓ MODEL UPDATED'; flash.style.opacity = '1'; setTimeout(() => { flash.style.opacity = '0'; }, 2000); }
+      } else {
+        if (flash) { flash.textContent = '✗ ' + (data.error || 'FAILED'); flash.style.opacity = '1'; setTimeout(() => { flash.style.opacity = '0'; }, 2000); }
+      }
+    } catch {
+      if (flash) { flash.textContent = '✗ CONNECTION ERROR'; flash.style.opacity = '1'; setTimeout(() => { flash.style.opacity = '0'; }, 2000); }
+    }
+  }
+
   function switchAgent(id) {
     const character = CHARACTERS.find(c => c.id === id);
     if (!character) return;
@@ -2061,6 +2123,14 @@
         <span class="settings-trust-value">LEVEL ${CFG.trustLevel}</span>
         <span class="settings-trust-note">Edit config.yaml + restart to change</span>
       </div>
+
+      <div class="settings-section-label" style="margin-top:16px">MODEL</div>
+      <select class="settings-model-select" id="model-select" onchange="switchModel(this.value)">
+        <option value="anthropic/claude-sonnet-4-6">Claude Sonnet 4.6 (Full ReAct)</option>
+        <option value="nvidia/llama-3.1-nemotron-70b-instruct:free">Nemotron 70B (Free tier)</option>
+      </select>
+      <div class="settings-model-note">Anthropic = tool loop + SOC. Free = single-turn.</div>
+      <div class="settings-model-flash" id="model-flash"></div>
 
       <div class="settings-section-label" style="margin-top:16px">SESSION</div>
       <button class="settings-clear-btn" onclick="clearConversation()">

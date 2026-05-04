@@ -18,6 +18,7 @@ import { NerdAlertResponse } from '../types/response.types';
 import { chat } from '../core/agent';
 import { getAuthMiddleware } from './auth';
 import { mountUIRoutes } from './ui-routes';
+import { startTelegram } from '../telegram';
 
 // Catch unhandled promise rejections globally
 // The Anthropic SDK throws APIUserAbortError when the browser disconnects
@@ -123,6 +124,10 @@ app.listen(SERVER_PORT, () => {
   console.log('');
   console.log(`  Ready at http://localhost:${SERVER_PORT}`);
   console.log('');
+
+startTelegram().catch((err: unknown) => {
+    console.error('[Telegram] Failed to start:', err);
+  });
 });
 
 export default app;

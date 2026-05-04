@@ -22,11 +22,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { config }                            from '../config/loader';
 import { getPersonality }                    from '../personalities';
 import { getAvailableTools, toAnthropicFormat } from '../tools/registry';
-import { getLLMConfig, streamOpenRouter, ORMessage } from '../core/llm-client';
+import { getLLMConfig, setActiveModel, streamOpenRouter, ORMessage } from '../core/llm-client';
 import { detectIntent, prefetchTools, buildInjectedPrompt, type PrefetchResult } from '../core/intent-prefetch';
-
-// ── Resolve LLM config once at startup ───────────────────────
-const llm = getLLMConfig();
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -105,7 +102,8 @@ async function handleAnthropicStream(
   trustLevel:      number
 ): Promise<void> {
 
-  const client   = llm.anthropicClient!;
+  const llm    = getLLMConfig();
+  const client = llm.anthropicClient!;
   let   messages = [...initialMessages];
 
   const MAX_ITERATIONS = 8;
@@ -214,6 +212,7 @@ async function handleOpenRouterStream(
           .join(''),
   }));
 
+  const llm = getLLMConfig();
   for await (const chunk of streamOpenRouter(orMessages, systemPrompt, llm.model)) {
     sseEvent(res, 'token', { text: chunk });
   }
@@ -237,6 +236,7 @@ export function mountUIRoutes(app: Express): void {
       agentName:  cfg.agent?.name              ?? 'Sherman',
       trustLevel: cfg.agent?.trust_level       ?? 1,
       port:       cfg.server?.port             ?? 3773,
+      model:      process.env.MODEL            ?? 'nvidia/llama-3.1-nemotron-70b-instruct:free',
     };
 
     html = html.replace(
@@ -282,6 +282,7 @@ export function mountUIRoutes(app: Express): void {
       ];
 
       // Route to the right streaming handler based on provider
+      const llm = getLLMConfig();
       if (llm.provider === 'openrouter') {
 
         // Detect intent and pre-fetch real tool data before dispatching.
@@ -320,5 +321,22 @@ export function mountUIRoutes(app: Express): void {
       sseEvent(res, 'error', { message: msg });
       res.end();
     }
+  });
+
+  // ── POST /api/config/model — runtime model switcher ───────
+  // Called by the Settings panel dropdown. Updates the active
+  // model at runtime — no restart required.
+  app.post('/api/config/model', (req: Request, res: Response) => {
+    const { model } = req.body as { model: string };
+    const allowed = [
+      'anthropic/claude-sonnet-4-6',
+      'nvidia/llama-3.1-nemotron-70b-instruct:free',
+    ];
+    if (!allowed.includes(model)) {
+      res.status(400).json({ ok: false, error: 'Unknown model' });
+      return;
+    }
+    setActiveModel(model);
+    res.json({ ok: true, model });
   });
 }

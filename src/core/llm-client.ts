@@ -55,7 +55,12 @@ import Anthropic from '@anthropic-ai/sdk';
 // This means a fresh install with just an OpenRouter key works
 // out of the box without touching .env beyond what setup.sh creates.
 
-const MODEL    = process.env.MODEL    ?? 'nvidia/llama-3.1-nemotron-70b-instruct:free';
+let activeModel: string = process.env.MODEL ?? 'nvidia/llama-3.1-nemotron-70b-instruct:free';
+
+export function setActiveModel(model: string): void {
+  activeModel = model;
+  console.log(`[NerdAlert] Model switched to: ${model}`);
+}
 const OR_KEY   = process.env.OPENROUTER_API_KEY ?? '';
 const ANT_KEY  = process.env.ANTHROPIC_API_KEY  ?? '';
 const OR_URL   = 'https://openrouter.ai/api/v1/chat/completions';
@@ -93,13 +98,9 @@ export interface LLMConfig {
 // Call this once at the top of agent.ts and ui-routes.ts.
 // Cache the result — no need to re-resolve on every request.
 
-let _cached: LLMConfig | null = null;
-
 export function getLLMConfig(): LLMConfig {
-  if (_cached) return _cached;
-
-  const provider    = resolveProvider(MODEL);
-  const modelString = resolveModelString(MODEL, provider);
+  const provider    = resolveProvider(activeModel);
+  const modelString = resolveModelString(activeModel, provider);
 
   if (provider === 'anthropic') {
     if (!ANT_KEY) {
@@ -108,7 +109,7 @@ export function getLLMConfig(): LLMConfig {
         '            Set ANTHROPIC_API_KEY or switch MODEL to an OpenRouter model.'
       );
     }
-    _cached = {
+    return {
       provider,
       model:           modelString,
       anthropicClient: new Anthropic({ apiKey: ANT_KEY }),
@@ -120,15 +121,12 @@ export function getLLMConfig(): LLMConfig {
         '            Get a free key at https://openrouter.ai and add it to .env.'
       );
     }
-    _cached = {
+    return {
       provider,
       model:           modelString,
       anthropicClient: null,
     };
   }
-
-  console.log(`[NerdAlert] LLM provider: ${provider} | model: ${modelString}`);
-  return _cached;
 }
 
 // ── OpenRouter message types ──────────────────────────────────

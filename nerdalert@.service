@@ -1,0 +1,22 @@
+[Unit]
+Description=NerdAlert AI Agent
+After=network.target
+# Restart if it crashes — waits for network first
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/nerdalertai
+ExecStart=/usr/bin/node dist/server/index.js
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nerdalert
+
+# Environment — node needs PATH for npm/npx if used
+Environment=NODE_ENV=production
+EnvironmentFile=/home/%i/nerdalertai/.env
+
+[Install]
+WantedBy=multi-user.target
