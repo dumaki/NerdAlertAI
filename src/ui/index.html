@@ -2167,6 +2167,7 @@
       <div class="message-label">${activeAgentName.toUpperCase()} // ${timestamp()}</div>
       <div class="message-bubble" id="streaming-bubble">
         <span id="streaming-text"></span><span class="cursor-blink" id="streaming-cursor"></span>
+        <div id="prefetch-blocks"></div>
       </div>
     `;
     container.appendChild(div);
@@ -2183,6 +2184,8 @@
       bubble.removeAttribute('id');
       const span = bubble.querySelector('#streaming-text');
       if (span) span.removeAttribute('id');
+      const prefetch = bubble.querySelector('#prefetch-blocks');
+      if (prefetch) prefetch.removeAttribute('id');
     }
   }
 
@@ -2358,6 +2361,26 @@
             }
           }
 
+          else if (eventType === 'tool_prefetch') {
+            // Pre-fetched tools — render as already-resolved collapsed blocks
+            // No spinner needed, data arrived before the stream started
+            const prefetchDiv = document.getElementById('prefetch-blocks');
+            if (prefetchDiv && parsed.tools) {
+              parsed.tools.forEach(tool => {
+                const block = document.createElement('div');
+                block.className = `tool-result-block${tool.available ? '' : ' error'}`;
+                block.innerHTML = `
+                  <div class="tool-result-header" onclick="this.parentElement.classList.toggle('open')">
+                    <span>&#9654; ${escapeHTML(tool.name.toUpperCase())}</span>
+                    <span class="tool-result-toggle">&#9660;</span>
+                  </div>
+                  <div class="tool-result-body">${tool.available ? 'Data injected into response.' : 'Unavailable'}</div>
+                `;
+                prefetchDiv.appendChild(block);
+              });
+              scrollToBottom();
+            }
+          }
           else if (eventType === 'tool_result') {
             const data     = parsed;
             const thinking = document.getElementById(`tool-thinking-${data.id}`);

@@ -23,6 +23,7 @@ import { config }                            from '../config/loader';
 import { getPersonality }                    from '../personalities';
 import { getAvailableTools, toAnthropicFormat } from '../tools/registry';
 import { getLLMConfig, streamOpenRouter, ORMessage } from '../core/llm-client';
+import { detectIntent, prefetchTools, buildInjectedPrompt, type PrefetchResult } from '../core/intent-prefetch';
 
 // ── Resolve LLM config once at startup ───────────────────────
 const llm = getLLMConfig();
@@ -282,7 +283,33 @@ export function mountUIRoutes(app: Express): void {
 
       // Route to the right streaming handler based on provider
       if (llm.provider === 'openrouter') {
-        await handleOpenRouterStream(res, systemPrompt, messages);
+
+        // Detect intent and pre-fetch real tool data before dispatching.
+        // This gives free/flat-rate models real data to narrate instead
+        // of hallucinating values. Anthropic path is untouched.
+        const detectedGroups = detectIntent(message);
+        let enrichedPrompt = systemPrompt;
+        let prefetchResults: PrefetchResult[] = [];
+
+        if (detectedGroups.length > 0) {
+          prefetchResults = await prefetchTools(detectedGroups);
+          enrichedPrompt  = systemPrompt + buildInjectedPrompt(prefetchResults);
+
+          // Tell the frontend which tools were pre-fetched so it can
+          // render collapsed blocks in the resolved state immediately.
+          if (prefetchResults.length > 0) {
+            sseEvent(res, 'tool_prefetch', {
+              tools: prefetchResults.map(r => ({
+                name:      r.toolName,
+                group:     r.groupName,
+                available: r.available,
+              })),
+            });
+          }
+        }
+
+        await handleOpenRouterStream(res, enrichedPrompt, messages);
+
       } else {
         const tools = toAnthropicFormat(getAvailableTools()) as Anthropic.Tool[];
         await handleAnthropicStream(req, res, systemPrompt, messages, tools, cfg.agent?.trust_level ?? 1);
