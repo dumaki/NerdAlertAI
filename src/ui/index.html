@@ -2555,6 +2555,18 @@
     let text = prefill || input.value.trim();
     if (!text || isStreaming) return;
 
+    // ── /help intercept ───────────────────────────────────────
+    // Catch /help and /help <tool> before they reach the model.
+    // Calls /api/help directly and renders inline. Zero tokens.
+    if (text.startsWith('/help')) {
+      input.value = '';
+      const parts    = text.trim().split(/\s+/);
+      const toolName = parts[1] ?? null;
+      appendUserMessage(text);
+      await renderHelpResponse(toolName);
+      return;
+    }
+
     // If called from a panel button, switch back to chat view first
     if (prefill) {
       switchView('chat', null);
@@ -2942,6 +2954,47 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+  // ── renderHelpResponse ───────────────────────────────────────
+  // Called by the /help intercept in sendMessage().
+  // Fetches from /api/help directly — no model involved.
+  // Renders the result as a normal agent bubble in the chat.
+  async function renderHelpResponse(toolName) {
+    const agentDiv = appendAgentMessage();
+    const span     = document.getElementById('streaming-text');
+    const cursor   = document.getElementById('streaming-cursor');
+
+    try {
+      const url = toolName
+        ? `${BASE_URL}/api/help?tool=${encodeURIComponent(toolName)}`
+        : `${BASE_URL}/api/help`;
+
+      const res  = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${CFG.token}` },
+      });
+      const data = await res.json();
+
+      if (cursor) cursor.remove();
+
+      if (data.ok) {
+        if (span) span.textContent = data.content;
+        conversationHistory.push({
+          role:    'assistant',
+          content: data.content,
+        });
+      } else {
+        if (span) span.textContent = `⚠ ${data.error ?? 'Help unavailable'}`;
+      }
+
+      finalizeAgentMessage(data.content ?? '');
+      scrollToBottom();
+
+    } catch (err) {
+      if (cursor) cursor.remove();
+      if (span)   span.textContent = '⚠ Could not reach server.';
+      finalizeAgentMessage('');
+    }
+  }
 
   // ── openEmailMessage ───────────────────────────────────────
   // Called when a message row is clicked in the email panel.

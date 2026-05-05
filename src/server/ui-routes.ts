@@ -354,7 +354,27 @@ export function mountUIRoutes(app: Express): void {
     res.json({ ok: true, model });
   });
 
-    // ── GET /api/email/triage — live inbox data for the side panel ──
+    // ── GET /api/help — token-free tool discovery ─────────────
+  // Called directly by the UI when /help or /help <tool> is typed.
+  // Bypasses the model entirely — zero tokens burned for discovery.
+  app.get('/api/help', async (req: Request, res: Response) => {
+    try {
+      const tool     = req.query.tool as string | undefined;
+      const helpTool = (await import('../tools/builtin/help-tool')).default;
+
+      const result = await helpTool.execute(
+        tool
+          ? { action: 'detail', tool }
+          : { action: 'list' }
+      );
+
+      res.json({ ok: true, content: result.content, title: result.metadata.title });
+    } catch (err: any) {
+      res.json({ ok: false, error: err.message ?? 'Help unavailable' });
+    }
+  });
+
+  // ── GET /api/email/triage — live inbox data for the side panel ──
   // Called by getEmailPanelHTML() in the browser when the Email
   // panel opens. Returns structured triage groups so the panel
   // can render real classified messages without going through chat.
