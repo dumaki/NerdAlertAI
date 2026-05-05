@@ -128,13 +128,21 @@ Use 'count' to check memory database statistics.`,
               limit:   params.limit as number | undefined,
             }
           )
+          if (!results.length) {
+            return {
+              type: 'text',
+              content: `No memory records found for "${params.query}".`,
+              metadata: { title: 'Memory search', sources: [] },
+            }
+          }
+          const lines = results.map((r: any) =>
+            `[${r.subject}] ${r.content}` +
+            (r.confidence < 0.5 ? ' (low confidence)' : '')
+          )
           return {
-            type:    'data',
-            content: JSON.stringify(results, null, 2),
-            metadata: {
-              title:   `Memory search: "${params.query}"`,
-              sources: [],
-            },
+            type:    'text',
+            content: lines.join('\n'),
+            metadata: { title: `Memory search: "${params.query}" (${results.length} results)`, sources: [] },
           }
         }
 
@@ -143,10 +151,21 @@ Use 'count' to check memory database statistics.`,
             subject: params.subject as string | undefined,
             limit:   params.limit as number | undefined,
           })
+          if (!results.length) {
+            return {
+              type:    'text',
+              content: 'No recent memory records found.',
+              metadata: { title: 'Recent memory', sources: [] },
+            }
+          }
+          const lines = results.map((r: any) =>
+            `[${r.subject}] ${r.content}` +
+            (r.confidence < 0.5 ? ' (low confidence)' : '')
+          )
           return {
-            type:    'data',
-            content: JSON.stringify(results, null, 2),
-            metadata: { title: 'Recent memory records', sources: [] },
+            type:    'text',
+            content: lines.join('\n'),
+            metadata: { title: `Recent memory (${results.length} records)`, sources: [] },
           }
         }
 
