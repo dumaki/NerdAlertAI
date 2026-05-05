@@ -2025,6 +2025,7 @@
   // and renders real classified messages grouped by category.
   // Called when the user opens the Email view or panel.
   async function loadEmailPanel() {
+    console.log('[Email Panel] Loading — fetching /api/email/triage');
     const body = document.getElementById('panel-body');
     if (!body) return;
 
@@ -2118,9 +2119,11 @@
         </div>
       `;
 
+      console.log(`[Email Panel] Loaded — ${summary.total} messages (urgent:${summary.urgent} inbox:${summary.inbox} coupons:${summary.coupons} review:${summary.review} vinyl:${summary.vinylPreorders})`);
       body.innerHTML = html;
 
     } catch (err) {
+      console.error('[Email Panel] Fetch failed:', err);
       body.innerHTML = `
         <div style="font-size:11px;color:var(--red);padding:8px 0">
           ⚠ Could not reach server.
@@ -2881,6 +2884,7 @@ function escapeHtml(str) {
   // POSTs directly to /api/email/cleanup — no agent involved.
   // Updates the button state inline, then reloads the panel.
   async function runEmailCleanup(btn) {
+    console.log('[Email Cleanup] Starting — POST /api/email/cleanup');
     const original    = btn.textContent;
     btn.disabled      = true;
     btn.textContent   = '⟳ RUNNING CLEANUP…';
@@ -2898,18 +2902,21 @@ function escapeHtml(str) {
 
       if (data.ok) {
         const s = data.summary;
+        console.log(`[Email Cleanup] Done — coupons:${s.couponsMoved} vinyl:${s.vinylMoved} review:${s.reviewMoved} failures:${s.failures}`);
         btn.textContent   = `✓ DONE — ${s.couponsMoved} coupons, ${s.vinylMoved} vinyl, ${s.reviewMoved} review moved`;
         btn.style.color   = 'var(--green)';
         btn.style.opacity = '1';
         // Reload the panel after a brief moment so counts update
         setTimeout(() => loadEmailPanel(), 1800);
       } else {
+        console.error('[Email Cleanup] Failed:', data.error);
         btn.textContent   = `✗ ${data.error ?? 'Cleanup failed'}`;
         btn.style.color   = 'var(--red)';
         btn.style.opacity = '1';
         btn.disabled      = false;
       }
     } catch (err) {
+      console.error('[Email Cleanup] Network error:', err);
       btn.textContent   = '✗ Could not reach server';
       btn.style.color   = 'var(--red)';
       btn.style.opacity = '1';
