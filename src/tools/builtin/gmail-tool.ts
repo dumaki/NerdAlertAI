@@ -52,7 +52,8 @@ const gmailTool: NerdAlertTool = {
 'snooze-list'    — list all active snoozed messages.
 'snooze-clear'   — clear a snooze by uid.
 'mailboxes'      — list all mailboxes/folders.
-'test'           — test IMAP and SMTP connectivity.`,
+'test'           — test IMAP and SMTP connectivity.
+Respond with a concise summary of results. Do not repeat raw message content verbatim.`,
 
   trustLevel: 1,
 
@@ -167,8 +168,12 @@ const gmailTool: NerdAlertTool = {
         // ── READ OPERATIONS (L1) ──────────────────────────────────────────
 
         case 'test': {
+          // ── Audit fix: prune raw JSON — return a single readable status line
           const result = await testConfig()
-          return ok('Gmail connectivity test', JSON.stringify(result, null, 2))
+          const status = result.imap.authenticated && result.smtp.verified
+            ? 'IMAP and SMTP both connected successfully.'
+            : `Connection issue — IMAP authenticated: ${result.imap.authenticated}, SMTP verified: ${result.smtp.verified}`
+          return ok('Gmail connectivity test', status)
         }
 
         case 'mailboxes': {
@@ -198,13 +203,19 @@ const gmailTool: NerdAlertTool = {
           const result = await fetchMessage(undefined, params.uid as number, params)
           if (!result.ok || !result.message) return err(`Message UID ${params.uid} not found`)
           const msg = result.message as any
+          // ── Audit fix: cap body at 800 chars with a clear truncation marker
+          // 800 chars is enough for the model to summarise. The marker tells it
+          // not to pretend the rest of the message doesn't exist.
+          const bodyPreview = msg.text
+            ? msg.text.slice(0, 800).trimEnd() + (msg.text.length > 800 ? '\n\n[truncated — ask to see more]' : '')
+            : '[no plain-text body]'
           return ok(
             `Message: ${msg.summary.subject}`,
             [
               `From: ${formatAddresses(msg.summary.from)}`,
               `Date: ${msg.summary.date}`,
               ``,
-              msg.text?.slice(0, 3000) || '[no plain-text body]',
+              bodyPreview,
               msg.attachments?.length
                 ? `\nAttachments: ${msg.attachments.map((a: any) => a.filename ?? a.contentType).join(', ')}`
                 : '',
@@ -341,14 +352,21 @@ function formatAddresses(addresses: any[]): string {
   return addresses.map((a: any) => a.name ? `${a.name} <${a.address}>` : a.address).join(', ')
 }
 
+// ── Audit fix: soft-cap display at 10, surface remainder count
+// Prevents list/search from flooding the model with 20+ flat lines.
 function formatMessageList(messages: any[]): string {
   if (!messages.length) return 'No messages found.'
-  return messages.map((m: any) => {
+  const display = messages.slice(0, 10)
+  const lines = display.map((m: any) => {
     const from = m.from?.[0]?.name ?? m.from?.[0]?.address ?? 'Unknown'
     const date = m.date ? new Date(m.date).toLocaleDateString() : ''
     const read = m.flags?.includes('\\Seen') ? '' : ' [UNREAD]'
     return `[${m.uid}]${read} ${from} — ${m.subject}  (${date})`
-  }).join('\n')
+  })
+  if (messages.length > 10) {
+    lines.push(`… and ${messages.length - 10} more. Ask for a higher limit to see them.`)
+  }
+  return lines.join('\n')
 }
 
 export default gmailTool

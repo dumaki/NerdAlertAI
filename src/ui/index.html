@@ -2337,7 +2337,7 @@
     div.innerHTML = `
       <div class="message-label">${activeAgentName.toUpperCase()} // ${timestamp()}</div>
       <div class="message-bubble" id="streaming-bubble">
-        <span id="streaming-text"></span><span class="cursor-blink" id="streaming-cursor"></span>
+        <span id="streaming-text" style="white-space: pre-wrap"></span><span class="cursor-blink" id="streaming-cursor"></span>
         <div id="prefetch-blocks"></div>
       </div>
     `;
@@ -2550,16 +2550,9 @@
     scrollToBottom();
   }
 
-  // Show approval card if gmail data was successfully pre-fetched
-  if (parsed.showEmailApproval && !approvalShownThisSession.has('coupons')) {
-    approvalShownThisSession.add('coupons');
-    addApprovalCard(
-      'Clean Up Inbox',
-      'Move promotional and marketing emails to the Coupons folder and mark as read.',
-      'go ahead and run the cleanup',
-      'skip the cleanup for now'
-    );
-  }
+  // NOTE: approval card for email cleanup is handled solely by parseForApprovals()
+  // on the 'done' event. Removed from here to prevent duplicate cards firing
+  // when both tool_prefetch and the triage response text contain coupon keywords.
 }
           else if (eventType === 'tool_result') {
             const data     = parsed;
@@ -2656,9 +2649,12 @@
     : '';
   if (approvalTriggers.some(t => lastUserMessage.includes(t))) return;
 
+  // Tightened: only fires when the agent is actively offering to run cleanup
+  // (i.e. response is done and contains an offer phrase), not just mentioning
+  // the words 'move' or 'coupon' mid-sentence during a triage summary.
   if (!approvalShownThisSession.has('coupons') &&
-      (lower.includes('move') || lower.includes('clean')) &&
-      (lower.includes('promo') || lower.includes('coupon'))) {
+      (lower.includes('want me to') || lower.includes('shall i') || lower.includes('just say the word')) &&
+      (lower.includes('promo') || lower.includes('coupon') || lower.includes('cleanup'))) {
     approvalShownThisSession.add('coupons');
     addApprovalCard(
       'Move to Coupons',
