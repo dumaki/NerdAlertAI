@@ -4,7 +4,7 @@
   "description": "",
   "main": "dist/server/index.js",
   "scripts": {
-    "start": "node dist/server/index.js",
+    "start": "node dist/src/server/index.js",
     "dev": "ts-node src/server/index.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
