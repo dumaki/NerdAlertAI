@@ -19,6 +19,7 @@ import datetimeTool   from './builtin/datetime';
 import memoryTool     from './builtin/memory-tool';
 import gmailTool      from './builtin/gmail-tool';
 import gmailSetupTool from './builtin/gmail-setup';
+import { cronManagerTool } from './builtin/cron-manager';
 
 // SOC tools — imported as arrays since each file exports multiple tools
 import { wazuhTools }    from './builtin/soc-wazuh';
@@ -44,6 +45,7 @@ const ALL_TOOLS: NerdAlertTool[] = [
   memoryTool,
   gmailTool,
   gmailSetupTool,
+  cronManagerTool,
 
   // SOC — Wazuh SIEM
   ...wazuhTools,

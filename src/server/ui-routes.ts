@@ -24,6 +24,7 @@ import { getPersonality }                    from '../personalities';
 import { getAvailableTools, toAnthropicFormat } from '../tools/registry';
 import { getLLMConfig, setActiveModel, streamOpenRouter, ORMessage } from '../core/llm-client';
 import { detectIntent, prefetchTools, buildInjectedPrompt, type PrefetchResult } from '../core/intent-prefetch';
+import { getAllJobs, getRecentRuns } from '../cron';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -221,9 +222,23 @@ async function handleOpenRouterStream(
   res.end();
 }
 
+// ── Cron SSE broadcast ────────────────────────────────────────
+// Called by the engine via setCronStatusEmitter() in server/index.ts
+// to push live status updates to connected sidebar clients.
+const cronClients = new Set<Response>();
+
+export function broadcastCronStatus(jobId: string, status: string): void {
+  const payload = JSON.stringify({ type: 'cron_status', jobId, status });
+  for (const client of cronClients) {
+    client.write(`data: ${payload}\n\n`);
+  }
+}
+
 // ── Mount routes ──────────────────────────────────────────────
 export function mountUIRoutes(app: Express): void {
   const cfg = config;
+
+  
 
   // ── GET / — serve the UI ───────────────────────────────────
   app.get('/', (_req, res) => {
@@ -339,4 +354,56 @@ export function mountUIRoutes(app: Express): void {
     setActiveModel(model);
     res.json({ ok: true, model });
   });
+
+    // ── GET /api/cron/stream — SSE for sidebar job status ─────
+  app.get('/api/cron/stream', (req: Request, res: Response) => {
+  // EventSource can't send headers — accept token from query param too
+  const token = (req.headers.authorization?.replace('Bearer ', '') || req.query.token) as string;
+  if (token !== process.env.SERVER_AUTH_TOKEN) {
+    res.status(401).end();
+    return;
+  }
+
+  res.setHeader('Content-Type',  'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection',    'keep-alive');
+  res.flushHeaders();
+
+    cronClients.add(res);
+
+    const jobs = getAllJobs();
+    const statusMap: Record<string, string> = {};
+    for (const job of jobs) {
+      const runs = getRecentRuns(job.id, 1);
+      statusMap[job.id] = runs.length === 0
+        ? 'idle'
+        : runs[0].status === 'success' ? 'success' : 'failure';
+    }
+    res.write(`data: ${JSON.stringify({ type: 'init', jobs, statusMap })}\n\n`);
+
+    req.on('close', () => cronClients.delete(res));
+  });
+
+  // ── GET /api/cron/jobs — full job list ─────────────────────
+  app.get('/api/cron/jobs', (_req: Request, res: Response) => {
+    res.json({ jobs: getAllJobs() });
+  });
+
+  // ── POST /api/cron/action — sidebar card click ─────────────
+  app.post('/api/cron/action', async (req: Request, res: Response) => {
+    const { jobId, action } = req.body as { jobId: string; action: string };
+    const { chat } = await import('../core/agent');
+
+    const prompt = action === 'logs'
+      ? `Use the cron_manager tool with action "logs" and job_id "${jobId}". Read the results and explain in plain English what happened in the recent runs — particularly any failures.`
+      : `Use the cron_manager tool with action "${action}" and job_id "${jobId}". Report the result.`;
+
+    try {
+      const response = await chat(prompt, []);
+      res.json({ output: response.content });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
 }

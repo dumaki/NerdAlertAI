@@ -19,6 +19,10 @@ agent:
   personality: "sherman"   # Which personality file to load
   trust_level: 1           # Global trust level — start low, raise deliberatey
 
+# --- CRON ---
+cron:
+  enabled: true            # Master switch for the cron engine + cron_manager tool
+
 # --- SERVER ---
 server:
   port: 3773               # Overridden by SERVER_PORT in .env if set
@@ -35,6 +39,10 @@ tools:
   google_calendar:
     enabled: true
     trust_level: 1
+
+  cron_manager:
+    enabled: true
+    trust_level: 1         # Agent can manage jobs at L1
 
   github:
     enabled: false

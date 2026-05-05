@@ -19,3 +19,9 @@ logs/*.log
 # === OS FILES ===
 .DS_Store
 Thumbs.db
+
+#== CRON FILES ==
+data/cron.db
+data/cron.db-wal
+data/cron.db-shm
+data/last_shutdown.txt

@@ -17,8 +17,9 @@ import { config, SERVER_PORT, SERVER_AUTH_TOKEN } from '../config/loader';
 import { NerdAlertResponse } from '../types/response.types';
 import { chat } from '../core/agent';
 import { getAuthMiddleware } from './auth';
-import { mountUIRoutes } from './ui-routes';
+import { mountUIRoutes, broadcastCronStatus } from './ui-routes';
 import { startTelegram } from '../telegram';
+import { startCron, stopCron, setCronStatusEmitter } from '../cron';
 
 // Catch unhandled promise rejections globally
 // The Anthropic SDK throws APIUserAbortError when the browser disconnects
@@ -55,6 +56,7 @@ const requireAuth = getAuthMiddleware();
 app.use((req, res, next) => {
   if (req.method === 'GET' && req.path === '/') return next();
   if (req.method === 'GET' && req.path === '/favicon.ico') return next();
+  if (req.method === 'GET' && req.path === '/api/cron/stream') return next();
   requireAuth(req, res, next);
 });
 
@@ -76,6 +78,10 @@ app.get('/health', (_req: Request, res: Response) => {
 // ---- UI ROUTES ----
 // Serves the web UI at GET / and handles POST /chat/stream
 mountUIRoutes(app);
+
+setCronStatusEmitter((jobId: string, status: string) => {
+  broadcastCronStatus(jobId, status);
+});
 
 // ---- CHAT ROUTE ----
 // POST /chat — the main endpoint
@@ -127,6 +133,22 @@ app.listen(SERVER_PORT, () => {
 
 startTelegram().catch((err: unknown) => {
     console.error('[Telegram] Failed to start:', err);
+  });
+
+  startCron().catch((err: unknown) => {
+    console.error('[Cron] Failed to start:', err);
+  });
+
+  process.on('SIGTERM', () => {
+    console.log('[Server] SIGTERM received — shutting down...');
+    stopCron();
+    process.exit(0);
+  });
+
+  process.on('SIGINT', () => {
+    console.log('[Server] SIGINT received — shutting down...');
+    stopCron();
+    process.exit(0);
   });
 });
 

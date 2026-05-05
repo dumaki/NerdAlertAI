@@ -1399,6 +1399,86 @@
       letter-spacing: 3px;
     }
 
+    /* Cron sidebar panel */
+.cron-panel {
+  border-top: 1px solid var(--border);
+  padding: 12px 0 0 0;
+  margin-top: 8px;
+}
+.cron-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 16px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  transition: color 0.15s;
+}
+.cron-panel-header:hover { color: var(--text); }
+.cron-panel-header .cron-collapse-icon {
+  font-size: 10px;
+  transition: transform 0.2s;
+}
+.cron-panel-header.open .cron-collapse-icon {
+  transform: rotate(180deg);
+}
+.cron-job-list {
+  display: none;
+  padding: 4px 0;
+}
+.cron-job-list.open { display: block; }
+.cron-job-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 16px;
+  cursor: pointer;
+  border-radius: 6px;
+  margin: 1px 8px;
+  transition: background 0.15s;
+}
+.cron-job-card:hover { background: var(--hover); }
+.cron-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 0.3s;
+}
+.cron-status-dot.success { background: #2d7a2d; }
+.cron-status-dot.failure { background: #c0392b; }
+.cron-status-dot.idle    { background: #555; }
+.cron-status-dot.running {
+  background: #e07b39;
+  animation: cronPulse 1s ease-in-out infinite;
+}
+@keyframes cronPulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+.cron-job-name {
+  font-size: 13px;
+  color: var(--text);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cron-job-schedule {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: 'Courier New', monospace;
+  flex-shrink: 0;
+}
+.cron-job-card.paused .cron-job-name,
+.cron-job-card.paused .cron-job-schedule {
+  opacity: 0.45;
+}
   </style>
 </head>
 <body>
@@ -1473,6 +1553,18 @@
     <div class="sidebar-item" id="sb-memory" onclick="switchView('memory', null)">
       <span class="item-icon">◈</span> Memory
     </div>
+
+    <div class="cron-panel">
+  <div class="cron-panel-header" id="cronPanelHeader">
+    <span>Scheduled Jobs</span>
+    <span class="cron-collapse-icon">▾</span>
+  </div>
+  <div class="cron-job-list" id="cronJobList">
+    <div style="padding: 8px 16px; font-size: 12px; color: var(--text-muted);">
+      Loading...
+    </div>
+  </div>
+</div>
 
     <!-- Push settings to bottom -->
     <div class="sidebar-spacer"></div>
@@ -1792,6 +1884,7 @@
   window.addEventListener('DOMContentLoaded', () => {
     // Run onboarding check first
     checkOnboarding();
+    cronInit();
 
     // Set trust level pips
     for (let i = 1; i <= 5; i++) {
@@ -2576,7 +2669,113 @@
     div.appendChild(document.createTextNode(str));
     return div.innerHTML;
   }
+  // ── Cron sidebar ───────────────────────────────────────────
+const cronState = {
+  jobs:      [],
+  statusMap: {},
+  open:      false,
+};
 
+function cronInit() {
+  const header = document.getElementById('cronPanelHeader');
+  const list   = document.getElementById('cronJobList');
+
+  header.addEventListener('click', () => {
+    cronState.open = !cronState.open;
+    header.classList.toggle('open', cronState.open);
+    list.classList.toggle('open', cronState.open);
+  });
+
+  const token = window.NERDALERT_CONFIG?.token ?? '';
+  const stream = new EventSource(`/api/cron/stream?token=${token}`);
+
+  stream.onmessage = (evt) => {
+    const data = JSON.parse(evt.data);
+    if (data.type === 'init') {
+      cronState.jobs      = data.jobs;
+      cronState.statusMap = data.statusMap;
+      cronRenderJobs();
+    } else if (data.type === 'cron_status') {
+      cronState.statusMap[data.jobId] = data.status;
+      cronUpdateDot(data.jobId, data.status);
+    }
+  };
+
+  stream.onerror = () => {
+    console.warn('[Cron] SSE stream disconnected. Will retry...');
+  };
+}
+
+function cronRenderJobs() {
+  const list = document.getElementById('cronJobList');
+  if (!list) return;
+
+  if (cronState.jobs.length === 0) {
+    list.innerHTML = '<div style="padding:8px 16px;font-size:12px;color:var(--text-muted)">No scheduled jobs</div>';
+    return;
+  }
+
+  list.innerHTML = cronState.jobs.map(job => {
+    const status = cronState.statusMap[job.id] ?? 'idle';
+    const paused = !job.enabled ? ' paused' : '';
+    return `
+      <div class="cron-job-card${paused}" data-job-id="${job.id}" onclick="cronCardClick('${job.id}')">
+        <div class="cron-status-dot ${status}" id="cron-dot-${job.id}"></div>
+        <span class="cron-job-name">${escapeHtml(job.name)}</span>
+        <span class="cron-job-schedule">${escapeHtml(job.expression)}</span>
+      </div>
+    `;
+  }).join('');
+}
+
+function cronUpdateDot(jobId, status) {
+  const dot = document.getElementById(`cron-dot-${jobId}`);
+  if (!dot) return;
+  dot.className = `cron-status-dot ${status}`;
+}
+
+async function cronCardClick(jobId) {
+  const job = cronState.jobs.find(j => j.id === jobId);
+  if (!job) return;
+
+  cronUpdateDot(jobId, 'running');
+
+  try {
+    const token = window.NERDALERT_CONFIG?.token ?? '';
+    const res   = await fetch('/api/cron/action', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body:    JSON.stringify({ jobId, action: 'logs' }),
+    });
+
+    const data = await res.json();
+    cronUpdateDot(jobId, cronState.statusMap[jobId] ?? 'idle');
+
+    if (data.output) {
+      clearEmptyState();
+      const container = document.getElementById('chat-messages');
+      const div = document.createElement('div');
+      div.className = 'message agent';
+      div.innerHTML = `
+        <div class="message-label">${activeAgentName.toUpperCase()} // ${timestamp()}</div>
+        <div class="message-bubble">${escapeHTML(data.output)}</div>
+      `;
+      container.appendChild(div);
+      scrollToBottom();
+    }
+  } catch (err) {
+    console.error('[Cron] Card click failed:', err);
+    cronUpdateDot(jobId, cronState.statusMap[jobId] ?? 'idle');
+  }
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 </script>
 </body>
 </html>
