@@ -1736,9 +1736,9 @@
   let isStreaming         = false;
   let currentView        = 'chat';
   let pendingApprovals   = [];
+  let approvalShownThisSession = new Set();
   let activeAgentName    = CFG.agentName ?? 'Sherman';
-  let currentModel       = CFG.model     ?? 'nvidia/llama-3.1-nemotron-70b-instruct:free';
-
+  let currentModel       = CFG.model     ?? 'nvidia/nemotron-3-super-120b-a12b:free';
 
   // ============================================================
   // ONBOARDING
@@ -2170,15 +2170,16 @@
   }
 
   function clearConversation() {
-    conversationHistory = [];
-    const container = document.getElementById('chat-messages');
-    container.innerHTML = `
-      <div class="empty-state" id="empty-state">
-        <div class="empty-state-logo">NERDALERT</div>
-        <div class="empty-state-sub" id="empty-state-sub">${activeAgentName.toUpperCase()} ONLINE</div>
-      </div>
-    `;
-  }
+  conversationHistory = [];
+  approvalShownThisSession.clear();
+  const container = document.getElementById('chat-messages');
+  container.innerHTML = `
+    <div class="empty-state" id="empty-state">
+      <div class="empty-state-logo">NERDALERT</div>
+      <div class="empty-state-sub" id="empty-state-sub">${activeAgentName.toUpperCase()} ONLINE</div>
+    </div>
+  `;
+}
 
   // Settings panel — agent switcher, trust level, clear conversation
   function getSettingsPanelHTML() {
@@ -2220,7 +2221,7 @@
       <div class="settings-section-label" style="margin-top:16px">MODEL</div>
       <select class="settings-model-select" id="model-select" onchange="switchModel(this.value)">
         <option value="anthropic/claude-sonnet-4-6">Claude Sonnet 4.6 (Full ReAct)</option>
-        <option value="nvidia/llama-3.1-nemotron-70b-instruct:free">Nemotron 70B (Free tier)</option>
+        <option value="nvidia/nemotron-3-super-120b-a12b:free">Nemotron 120B (Free tier)</option>
       </select>
       <div class="settings-model-note">Anthropic = tool loop + SOC. Free = single-turn.</div>
       <div class="settings-model-flash" id="model-flash"></div>
@@ -2254,29 +2255,36 @@
   }
 
   function renderTray() {
-    const cards    = document.getElementById('tray-cards');
-    const countEl  = document.getElementById('tray-count');
-    const active   = pendingApprovals.filter(a => !a.resolved);
+  const cards   = document.getElementById('tray-cards');
+  const countEl = document.getElementById('tray-count');
+  const active  = pendingApprovals.filter(a => !a.resolved);
+  const isFree  = !currentModel.startsWith('anthropic/');
 
-    countEl.textContent = active.length;
-    cards.innerHTML = '';
+  countEl.textContent = active.length;
+  cards.innerHTML = '';
 
-    active.forEach((item, idx) => {
-      const card = document.createElement('div');
-      card.className = 'approval-card';
-      card.innerHTML = `
-        <div class="card-action">${item.action}</div>
-        <div class="card-desc">${item.description}</div>
-        <div class="card-buttons">
-          <button class="card-btn approve" onclick="resolveCard(${idx}, true)">APPROVE</button>
-          <button class="card-btn deny"    onclick="resolveCard(${idx}, false)">DENY</button>
-        </div>
-      `;
-      cards.appendChild(card);
-    });
+  active.forEach((item, idx) => {
+    const card = document.createElement('div');
+    card.className = 'approval-card';
+    card.innerHTML = `
+      <div class="card-action">${item.action}</div>
+      <div class="card-desc">${item.description}</div>
+      ${isFree ? `<div style="font-size:9px;color:var(--amber);letter-spacing:1px;margin-bottom:8px;line-height:1.5">
+        ⚠ Free tier — ${activeAgentName} will describe this action but not execute it.<br>
+        Switch to Claude in Settings for full execution.
+      </div>` : ''}
+      <div class="card-buttons">
+        <button class="card-btn approve" onclick="resolveCard(${idx}, true)">
+          ${isFree ? 'PROCEED ANYWAY' : 'APPROVE'}
+        </button>
+        <button class="card-btn deny" onclick="resolveCard(${idx}, false)">DENY</button>
+      </div>
+    `;
+    cards.appendChild(card);
+  });
 
-    if (active.length === 0) closeTray();
-  }
+  if (active.length === 0) closeTray();
+}
 
   function resolveCard(idx, approved) {
     const item = pendingApprovals[idx];
@@ -2525,25 +2533,34 @@
           }
 
           else if (eventType === 'tool_prefetch') {
-            // Pre-fetched tools — render as already-resolved collapsed blocks
-            // No spinner needed, data arrived before the stream started
-            const prefetchDiv = document.getElementById('prefetch-blocks');
-            if (prefetchDiv && parsed.tools) {
-              parsed.tools.forEach(tool => {
-                const block = document.createElement('div');
-                block.className = `tool-result-block${tool.available ? '' : ' error'}`;
-                block.innerHTML = `
-                  <div class="tool-result-header" onclick="this.parentElement.classList.toggle('open')">
-                    <span>&#9654; ${escapeHTML(tool.name.toUpperCase())}</span>
-                    <span class="tool-result-toggle">&#9660;</span>
-                  </div>
-                  <div class="tool-result-body">${tool.available ? 'Data injected into response.' : 'Unavailable'}</div>
-                `;
-                prefetchDiv.appendChild(block);
-              });
-              scrollToBottom();
-            }
-          }
+  const prefetchDiv = document.getElementById('prefetch-blocks');
+  if (prefetchDiv && parsed.tools) {
+    parsed.tools.forEach(tool => {
+      const block = document.createElement('div');
+      block.className = `tool-result-block${tool.available ? '' : ' error'}`;
+      block.innerHTML = `
+        <div class="tool-result-header" onclick="this.parentElement.classList.toggle('open')">
+          <span>&#9654; ${escapeHTML(tool.name.toUpperCase())}</span>
+          <span class="tool-result-toggle">&#9660;</span>
+        </div>
+        <div class="tool-result-body">${tool.available ? 'Data injected into response.' : 'Unavailable'}</div>
+      `;
+      prefetchDiv.appendChild(block);
+    });
+    scrollToBottom();
+  }
+
+  // Show approval card if gmail data was successfully pre-fetched
+  if (parsed.showEmailApproval && !approvalShownThisSession.has('coupons')) {
+    approvalShownThisSession.add('coupons');
+    addApprovalCard(
+      'Clean Up Inbox',
+      'Move promotional and marketing emails to the Coupons folder and mark as read.',
+      'go ahead and run the cleanup',
+      'skip the cleanup for now'
+    );
+  }
+}
           else if (eventType === 'tool_result') {
             const data     = parsed;
             const thinking = document.getElementById(`tool-thinking-${data.id}`);
@@ -2620,37 +2637,60 @@
   // ============================================================
 
   function parseForApprovals(text) {
-    if (!text) return;
-    const lower = text.toLowerCase();
+  if (!text) return;
+  const lower = text.toLowerCase();
 
-    if ((lower.includes('move') || lower.includes('clean')) &&
-        (lower.includes('promo') || lower.includes('coupon'))) {
-      addApprovalCard(
-        'Move to Coupons',
-        'Move promotional emails to the Coupons folder and mark as read.',
-        'go ahead and run the cleanup',
-        'skip the cleanup for now'
-      );
-    }
+  // Don't parse responses to approval actions — they'll always contain
+  // the same keywords and re-trigger the card.
+  const approvalTriggers = [
+    'triage my mailbox',
+    'go ahead and run the cleanup',
+    'skip the cleanup for now',
+    'yes go ahead and draft that reply',
+    'skip the draft for now',
+    'yes send it',
+    'hold off on sending',
+  ];
+  const lastUserMessage = conversationHistory.length >= 2
+    ? conversationHistory[conversationHistory.length - 2]?.content?.toLowerCase() ?? ''
+    : '';
+  if (approvalTriggers.some(t => lastUserMessage.includes(t))) return;
 
-    if (lower.includes('draft') && lower.includes('reply')) {
-      addApprovalCard(
-        'Draft Reply',
-        'Draft a reply to the flagged email for your review.',
-        'yes go ahead and draft that reply',
-        'skip the draft for now'
-      );
-    }
-
-    if (lower.includes('send') && lower.includes('email')) {
-      addApprovalCard(
-        'Send Email',
-        'Sherman is ready to send a drafted email on your behalf.',
-        'yes send it',
-        'hold off on sending'
-      );
-    }
+  if (!approvalShownThisSession.has('coupons') &&
+      (lower.includes('move') || lower.includes('clean')) &&
+      (lower.includes('promo') || lower.includes('coupon'))) {
+    approvalShownThisSession.add('coupons');
+    addApprovalCard(
+      'Move to Coupons',
+      'Move promotional emails to the Coupons folder and mark as read.',
+      'go ahead and run the cleanup',
+      'skip the cleanup for now'
+    );
   }
+
+  if (!approvalShownThisSession.has('draft') &&
+      lower.includes('draft') && lower.includes('reply')) {
+    approvalShownThisSession.add('draft');
+    addApprovalCard(
+      'Draft Reply',
+      'Draft a reply to the flagged email for your review.',
+      'yes go ahead and draft that reply',
+      'skip the draft for now'
+    );
+  }
+
+  if (!approvalShownThisSession.has('send') &&
+    (lower.includes('send the email') || lower.includes('send this email') || 
+     lower.includes('ready to send') || lower.includes('shall i send'))) {
+    approvalShownThisSession.add('send');
+    addApprovalCard(
+      'Send Email',
+      '${activeAgentName} is ready to send a drafted email on your behalf.',
+      'yes send it',
+      'hold off on sending'
+    );
+  }
+}
 
 
   // ============================================================

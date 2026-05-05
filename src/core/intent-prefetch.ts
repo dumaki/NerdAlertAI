@@ -47,8 +47,9 @@ export interface PrefetchResult {
 // ── Intent map ────────────────────────────────────────────────
 
 interface IntentGroup {
-  keywords: string[];
-  tools:    string[];
+  keywords:      string[];
+  tools:         string[];
+  defaultParams?: Record<string, unknown>;
 }
 
 const INTENT_MAP: Record<string, IntentGroup> = {
@@ -93,9 +94,10 @@ const INTENT_MAP: Record<string, IntentGroup> = {
     tools:    ['influxdb_host_overview'],
   },
   gmail: {
-    keywords: ['email', 'inbox', 'unread', 'messages', 'mail', 'gmail'],
-    tools:    ['gmail'],
-  },
+    keywords:     ['email', 'inbox', 'unread', 'messages', 'mail', 'gmail'],
+    tools:        ['gmail'],
+    defaultParams: { action: 'list', max_results: 5 },
+},
 };
 
 // ── detectIntent ──────────────────────────────────────────────
@@ -149,7 +151,11 @@ export async function prefetchTools(groupNames: string[]): Promise<PrefetchResul
     }
 
     try {
-      const response = await tool.execute({});
+      // Get default params for this tool from its group config
+    const groupConfig = Object.values(INTENT_MAP)
+      .find(g => g.tools.includes(toolName));
+    const params = (groupConfig as any)?.defaultParams ?? {};
+    const response = await tool.execute(params);
       const data = typeof response.content === 'string'
         ? response.content
         : JSON.stringify(response.content, null, 2);

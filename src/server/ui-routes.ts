@@ -59,8 +59,6 @@ async function runTool(
   res:        Response
 ): Promise<AnthropicToolResultBlock> {
 
-  sseEvent(res, 'tool_start', { name: toolCall.name, id: toolCall.id });
-
   let outputText: string;
 
   try {
@@ -320,6 +318,7 @@ export function mountUIRoutes(app: Express): void {
                 group:     r.groupName,
                 available: r.available,
               })),
+              showEmailApproval: prefetchResults.some(r => r.groupName === 'gmail' && r.available),
             });
           }
         }
@@ -345,7 +344,7 @@ export function mountUIRoutes(app: Express): void {
     const { model } = req.body as { model: string };
     const allowed = [
       'anthropic/claude-sonnet-4-6',
-      'nvidia/llama-3.1-nemotron-70b-instruct:free',
+      'nvidia/nemotron-3-super-120b-a12b:free',
     ];
     if (!allowed.includes(model)) {
       res.status(400).json({ ok: false, error: 'Unknown model' });
