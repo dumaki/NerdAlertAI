@@ -33,6 +33,49 @@
 import { CronJob, logRun, markJobRan, getRecentRuns } from './store';
 import { sendMessage } from '../telegram/bot';
 
+// ── requiresNarration ─────────────────────────────────────────
+// Determines whether a completed job output warrants a Telegram
+// message. Returns false (skip send) when:
+//   - The output is an ALL_CLEAR signal from a watchdog job
+//   - The job is tagged as a watchdog (runs frequently, noisy
+//     when nothing is wrong)
+//
+// This is the credit-saving gate described in the spec.
+// The model call already happened — this only suppresses the
+// downstream Telegram send for routine all-clear results.
+//
+// To add new silent patterns: extend ALL_CLEAR_PATTERNS.
+// To exempt a job from silencing: don't include its id in
+// WATCHDOG_JOB_IDS, or ensure its output won't match.
+// ──────────────────────────────────────────────────────────────
+const WATCHDOG_JOB_IDS = new Set(['soc-watchdog', 'soc-hourly']);
+
+const ALL_CLEAR_PATTERNS = [
+  /^all[_\s-]?clear/i,
+  /^nothing\s+(unusual|to\s+report)/i,
+  /^no\s+(alerts|issues|anomalies|events)/i,
+  /^everything\s+(looks\s+)?(normal|clean|fine|good)/i,
+  /^status:\s*ok/i,
+  /^\[?all\s+systems\s+(normal|ok|operational)\]?/i,
+];
+
+export function requiresNarration(job: CronJob, output: string): boolean {
+  // Non-watchdog jobs always narrate — morning brief, mail triage, etc.
+  if (!WATCHDOG_JOB_IDS.has(job.id)) return true;
+
+  const trimmed = output.trim();
+
+  // If any all-clear pattern matches the start of the output, skip.
+  const isAllClear = ALL_CLEAR_PATTERNS.some(pattern => pattern.test(trimmed));
+  if (isAllClear) {
+    console.log(`[Runner] Job "${job.id}" returned all-clear — suppressing Telegram send.`);
+    return false;
+  }
+
+  // Output has real content — narrate it.
+  return true;
+}
+
 // ── Anti-recursion flag ───────────────────────────────────────
 // This is the global flag. Set true during any agent execution
 // triggered by the cron engine. cron-manager.ts reads this.
@@ -86,11 +129,15 @@ export async function runJob(job: CronJob, scheduledAt: Date): Promise<void> {
 
     console.log(`[Runner] Job "${job.id}" completed in ${duration}ms`);
 
-    // Push to Telegram.
-    const header = `🕐 *${job.name}*\n`;
-    await sendMessage(header + output).catch(err =>
-      console.error(`[Runner] Telegram send failed for job "${job.id}":`, err)
-    );
+    // Push to Telegram — only if output warrants narration.
+    // Watchdog jobs that return ALL_CLEAR are silenced here to
+    // avoid burning credits and filling the chat with non-events.
+    if (requiresNarration(job, output)) {
+      const header = `🕐 *${job.name}*\n`;
+      await sendMessage(header + output).catch(err =>
+        console.error(`[Runner] Telegram send failed for job "${job.id}":`, err)
+      );
+    }
 
     // Notify the web UI sidebar.
     emitCronStatus?.(job.id, 'success');
@@ -190,8 +237,10 @@ export async function runCatchUp(
 
     markJobRan(job.id, firedAt.toISOString());
 
-    const header = `🔄 *${job.name}* _(delayed from ${missedStr})_\n`;
-    await sendMessage(header + response.content).catch(() => {});
+    if (requiresNarration(job, response.content)) {
+      const header = `🔄 *${job.name}* _(delayed from ${missedStr})_\n`;
+      await sendMessage(header + response.content).catch(() => {});
+    }
 
     emitCronStatus?.(job.id, 'success');
 
