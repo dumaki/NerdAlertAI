@@ -2083,7 +2083,7 @@
 
         for (const msg of items) {
           html += `
-            <div class="email-item" onclick="sendMessage('fetch email uid ${msg.uid}')" title="UID ${msg.uid}">
+            <div class="email-item" onclick="openEmailMessage(${msg.uid}, this)" title="UID ${msg.uid}">
               <div class="email-from">${escapeHTML(msg.from)}</div>
               <div class="email-subject">${msg.unread ? '<strong>' : ''}${escapeHTML(msg.subject)}${msg.unread ? '</strong>' : ''}</div>
               <div class="email-meta">
@@ -2878,6 +2878,70 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+  // ── openEmailMessage ───────────────────────────────────────
+  // Called when a message row is clicked in the email panel.
+  // Fetches from /api/email/message/:uid directly — no agent.
+  // Renders the message inline in the panel, with a back button
+  // to return to the triage list.
+  async function openEmailMessage(uid, el) {
+    console.log(`[Email Message] Fetching UID ${uid}`);
+    const body = document.getElementById('panel-body');
+    if (!body) return;
+
+    // Highlight the clicked row while loading
+    document.querySelectorAll('.email-item').forEach(e => e.style.opacity = '0.4');
+    if (el) el.style.opacity = '1';
+
+    body.insertAdjacentHTML('afterbegin', `
+      <div id="msg-loading" style="font-size:9px;color:var(--text-muted);letter-spacing:1px;padding:4px 0 10px">
+        FETCHING MESSAGE…
+      </div>
+    `);
+
+    try {
+      const res  = await fetch(`${BASE_URL}/api/email/message/${uid}`, {
+        headers: { 'Authorization': `Bearer ${CFG.token}` },
+      });
+      const data = await res.json();
+
+      if (!data.ok) {
+        console.error(`[Email Message] Failed:`, data.error);
+        body.innerHTML = `
+          <div style="font-size:11px;color:var(--red);padding:8px 0">⚠ ${escapeHTML(data.error)}</div>
+          <button onclick="loadEmailPanel()" style="margin-top:8px;width:100%;padding:8px;font-family:var(--font-mono);font-size:9px;letter-spacing:2px;color:var(--text-dim);background:transparent;border:1px solid var(--border);cursor:pointer;border-radius:1px">
+            ← BACK
+          </button>
+        `;
+        return;
+      }
+
+      console.log(`[Email Message] Loaded UID ${uid} — "${data.subject}"`);
+
+      body.innerHTML = `
+        <button onclick="loadEmailPanel()" style="width:100%;padding:6px 8px;font-family:var(--font-mono);font-size:9px;letter-spacing:2px;color:var(--text-dim);background:transparent;border:1px solid var(--border);cursor:pointer;border-radius:1px;margin-bottom:12px;text-align:left">
+          ← BACK TO TRIAGE
+        </button>
+        <div style="font-size:9px;color:var(--cyan-mid);letter-spacing:1px;margin-bottom:4px">${escapeHTML(data.from)}</div>
+        <div style="font-size:13px;color:var(--text-bright);font-weight:bold;margin-bottom:4px;line-height:1.4">${escapeHTML(data.subject)}</div>
+        <div style="font-size:9px;color:var(--text-muted);letter-spacing:1px;margin-bottom:14px">${escapeHTML(data.date)}</div>
+        <div style="font-size:11px;color:var(--agent-text);line-height:1.7;white-space:pre-wrap;border-top:1px solid var(--border);padding-top:12px">${escapeHTML(data.body)}</div>
+        ${data.attachments.length ? `
+          <div style="font-size:9px;color:var(--text-muted);letter-spacing:1px;margin-top:12px;border-top:1px solid var(--border);padding-top:8px">
+            ATTACHMENTS: ${data.attachments.map(a => escapeHTML(a)).join(', ')}
+          </div>` : ''}
+      `;
+
+    } catch (err) {
+      console.error('[Email Message] Network error:', err);
+      body.innerHTML = `
+        <div style="font-size:11px;color:var(--red);padding:8px 0">⚠ Could not reach server.</div>
+        <button onclick="loadEmailPanel()" style="margin-top:8px;width:100%;padding:8px;font-family:var(--font-mono);font-size:9px;letter-spacing:2px;color:var(--text-dim);background:transparent;border:1px solid var(--border);cursor:pointer;border-radius:1px">
+          ← BACK
+        </button>
+      `;
+    }
+  }
 
   // ── runEmailCleanup ──────────────────────────────────────
   // Called by cleanup buttons in the email side panel.

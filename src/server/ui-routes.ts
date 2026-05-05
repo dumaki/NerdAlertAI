@@ -394,6 +394,41 @@ export function mountUIRoutes(app: Express): void {
     }
   });
 
+  // ── GET /api/email/message/:uid — fetch single message directly ──
+  // Called by openEmailMessage() in the panel. Bypasses the agent
+  // entirely — returns a clean formatted object the panel renders.
+  app.get('/api/email/message/:uid', async (req: Request, res: Response) => {
+    const uid = parseInt(Array.isArray(req.params.uid) ? req.params.uid[0] : req.params.uid, 10);
+    if (isNaN(uid)) {
+      res.json({ ok: false, error: 'Invalid UID' });
+      return;
+    }
+    try {
+      const { fetchMessage } = await import('../gmail/client');
+      const result = await fetchMessage(undefined, uid, {});
+      if (!result.ok || !result.message) {
+        res.json({ ok: false, error: `Message UID ${uid} not found` });
+        return;
+      }
+      const msg = result.message as any;
+      const bodyPreview = msg.text
+        ? msg.text.slice(0, 1200).trimEnd() +
+          (msg.text.length > 1200 ? '\n\n[truncated]' : '')
+        : '[no plain-text body]';
+      res.json({
+        ok:          true,
+        uid,
+        subject:     msg.summary.subject   ?? '(no subject)',
+        from:        msg.raw.fromHeader     ?? 'Unknown',
+        date:        msg.summary.date       ? new Date(msg.summary.date).toLocaleString() : '',
+        body:        bodyPreview,
+        attachments: (msg.attachments ?? []).map((a: any) => a.filename ?? a.contentType),
+      });
+    } catch (err: any) {
+      res.json({ ok: false, error: err.message ?? 'Fetch failed' });
+    }
+  });
+
   // ── POST /api/email/cleanup — run promo cleanup directly ──
   // Bypasses the agent entirely — mechanical action that doesn't
   // need reasoning. Called by the cleanup buttons in the email
