@@ -2094,13 +2094,14 @@
         }
       }
 
-      // Cleanup suggestions as action buttons
+      // Cleanup suggestion buttons — call /api/email/cleanup directly.
+      // No agent involved — this is a mechanical move operation.
       if (suggestions && suggestions.length > 0) {
         html += `<div style="font-size:8px;color:var(--text-muted);letter-spacing:2px;margin:14px 0 8px">SUGGESTED ACTIONS</div>`;
         for (const s of suggestions) {
           if (s.type === 'cleanup') {
             html += `
-              <button onclick="sendMessage('go ahead and run the cleanup')" style="width:100%;padding:8px;font-family:var(--font-mono);font-size:9px;letter-spacing:2px;color:var(--cyan);background:var(--cyan-dim);border:1px solid var(--cyan-mid);cursor:pointer;border-radius:1px;margin-bottom:6px;text-align:left">
+              <button onclick="runEmailCleanup(this)" style="width:100%;padding:8px;font-family:var(--font-mono);font-size:9px;letter-spacing:2px;color:var(--cyan);background:var(--cyan-dim);border:1px solid var(--cyan-mid);cursor:pointer;border-radius:1px;margin-bottom:6px;text-align:left">
                 ▶ ${escapeHTML(s.text)}
               </button>
             `;
@@ -2874,6 +2875,47 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+  // ── runEmailCleanup ──────────────────────────────────────
+  // Called by cleanup buttons in the email side panel.
+  // POSTs directly to /api/email/cleanup — no agent involved.
+  // Updates the button state inline, then reloads the panel.
+  async function runEmailCleanup(btn) {
+    const original    = btn.textContent;
+    btn.disabled      = true;
+    btn.textContent   = '⟳ RUNNING CLEANUP…';
+    btn.style.opacity = '0.6';
+
+    try {
+      const res  = await fetch(`${BASE_URL}/api/email/cleanup`, {
+        method:  'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${CFG.token}`,
+        },
+      });
+      const data = await res.json();
+
+      if (data.ok) {
+        const s = data.summary;
+        btn.textContent   = `✓ DONE — ${s.couponsMoved} coupons, ${s.vinylMoved} vinyl, ${s.reviewMoved} review moved`;
+        btn.style.color   = 'var(--green)';
+        btn.style.opacity = '1';
+        // Reload the panel after a brief moment so counts update
+        setTimeout(() => loadEmailPanel(), 1800);
+      } else {
+        btn.textContent   = `✗ ${data.error ?? 'Cleanup failed'}`;
+        btn.style.color   = 'var(--red)';
+        btn.style.opacity = '1';
+        btn.disabled      = false;
+      }
+    } catch (err) {
+      btn.textContent   = '✗ Could not reach server';
+      btn.style.color   = 'var(--red)';
+      btn.style.opacity = '1';
+      btn.disabled      = false;
+    }
+  }
 </script>
 </body>
 </html>

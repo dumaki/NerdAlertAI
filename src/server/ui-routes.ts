@@ -394,6 +394,29 @@ export function mountUIRoutes(app: Express): void {
     }
   });
 
+  // ── POST /api/email/cleanup — run promo cleanup directly ──
+  // Bypasses the agent entirely — mechanical action that doesn't
+  // need reasoning. Called by the cleanup buttons in the email
+  // side panel. Requires approved: true enforced server-side.
+  app.post('/api/email/cleanup', async (_req: Request, res: Response) => {
+    try {
+      const { executePromoCleanup } = await import('../gmail/client');
+      const result = await executePromoCleanup(undefined, { approved: true });
+      const s = (result as any).summary ?? {};
+      res.json({
+        ok:      result.ok,
+        summary: {
+          couponsMoved: s.couponsMoved ?? 0,
+          vinylMoved:   s.vinylMoved   ?? 0,
+          reviewMoved:  s.reviewMoved  ?? 0,
+          failures:     s.failures     ?? 0,
+        },
+      });
+    } catch (err: any) {
+      res.json({ ok: false, error: err.message ?? 'Cleanup failed' });
+    }
+  });
+
   // ── GET /api/cron/stream — SSE for sidebar job status ─────
   app.get('/api/cron/stream', (req: Request, res: Response) => {
   // EventSource can't send headers — accept token from query param too
