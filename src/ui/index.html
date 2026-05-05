@@ -1972,7 +1972,7 @@
     if (sbItem) sbItem.classList.add('active');
 
     // Open or close the panel based on view
-    if (view === 'email')    { sendMessage('triage my inbox'); return; }
+    if (view === 'email')    { openPanel('email'); loadEmailPanel(); return; }
     if (view === 'soc')      { sendMessage('give me a current SOC status summary — check wazuh alerts, crowdsec decisions, fail2ban recent bans, and pihole summary'); return; }
     if (view === 'memory')   { openPanel('memory');   return; }
     if (view === 'settings') { openPanel('settings'); return; }
@@ -1995,7 +1995,8 @@
 
     if (type === 'email') {
       title.textContent = 'EMAIL TRIAGE';
-      body.innerHTML = getEmailPanelHTML();
+      body.innerHTML = '';
+      loadEmailPanel();
     } else if (type === 'soc') {
       title.textContent = 'SOC MONITOR';
       body.innerHTML = getSOCPanelHTML();
@@ -2020,50 +2021,111 @@
     currentView = 'chat';
   }
 
-  // Email panel — shows classified inbox items
-  function getEmailPanelHTML() {
-    return `
-      <div style="font-size:9px;color:var(--text-muted);letter-spacing:1px;margin-bottom:10px">
-        LAST TRIAGE: Connect ${activeAgentName} to see live data
+  // Email panel — fetches live triage data from /api/email/triage
+  // and renders real classified messages grouped by category.
+  // Called when the user opens the Email view or panel.
+  async function loadEmailPanel() {
+    const body = document.getElementById('panel-body');
+    if (!body) return;
+
+    // Show a loading state immediately while the IMAP call runs
+    body.innerHTML = `
+      <div style="font-size:9px;color:var(--text-muted);letter-spacing:1px;padding:8px 0">
+        CONNECTING TO IMAP…
       </div>
-      <div class="email-item">
-        <div class="email-from">no-reply@interscoperecords.com</div>
-        <div class="email-subject">New releases — Kacey Musgraves, Lady Gaga</div>
-        <div class="email-meta">
-          <span class="tag review">REVIEW</span>
-          <span class="email-time">2h ago</span>
-        </div>
-      </div>
-      <div class="email-item">
-        <div class="email-from">noreply@hims.com</div>
-        <div class="email-subject">Your weight loss journey starts here</div>
-        <div class="email-meta">
-          <span class="tag review">REVIEW</span>
-          <span class="email-time">3h ago</span>
-        </div>
-      </div>
-      <div class="email-item">
-        <div class="email-from">deals@bestbuy.com</div>
-        <div class="email-subject">Clearance event — up to 40% off</div>
-        <div class="email-meta">
-          <span class="tag promo">PROMO</span>
-          <span class="email-time">4h ago</span>
-        </div>
-      </div>
-      <div class="email-item">
-        <div class="email-from">noreply@afterpay.com</div>
-        <div class="email-subject">Graduation & summer guide 2026</div>
-        <div class="email-meta">
-          <span class="tag promo">PROMO</span>
-          <span class="email-time">5h ago</span>
-        </div>
-      </div>
-      <div style="padding:10px 0">
-        <button onclick="sendMessage('triage my inbox')" style="width:100%;padding:8px;font-family:var(--font-mono);font-size:9px;letter-spacing:2px;color:var(--cyan);background:var(--cyan-dim);border:1px solid var(--cyan-mid);cursor:pointer;border-radius:1px">
-          ASK ${activeAgentName.toUpperCase()} TO TRIAGE
-        </button>
+      <div class="thinking-indicator" style="padding:4px 0">
+        <div class="thinking-dots"><span></span><span></span><span></span></div>
       </div>
     `;
+
+    try {
+      const res  = await fetch(`${BASE_URL}/api/email/triage`, {
+        headers: { 'Authorization': `Bearer ${CFG.token}` },
+      });
+      const data = await res.json();
+
+      if (!data.ok) {
+        body.innerHTML = `
+          <div style="font-size:11px;color:var(--red);line-height:1.6;padding:8px 0">
+            ⚠ ${escapeHTML(data.error ?? 'Gmail unavailable')}
+          </div>
+          <button onclick="sendMessage('run email setup')" style="margin-top:10px;width:100%;padding:8px;font-family:var(--font-mono);font-size:9px;letter-spacing:2px;color:var(--cyan);background:var(--cyan-dim);border:1px solid var(--cyan-mid);cursor:pointer;border-radius:1px">
+            RUN EMAIL SETUP
+          </button>
+        `;
+        return;
+      }
+
+      const { summary, groups, suggestions } = data;
+
+      // Category config — label, tag class, display order
+      const CATS = [
+        { key: 'urgent',         label: 'URGENT',         tag: 'urgent' },
+        { key: 'inbox',          label: 'INBOX',          tag: 'review' },
+        { key: 'vinylPreorders', label: 'VINYL',          tag: 'review' },
+        { key: 'coupons',        label: 'COUPONS',        tag: 'promo'  },
+        { key: 'review',         label: 'REVIEW',         tag: 'review' },
+      ];
+
+      let html = `
+        <div style="font-size:9px;color:var(--text-muted);letter-spacing:1px;margin-bottom:10px">
+          ${summary.total} MESSAGES — LAST TRIAGE: ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false})}
+        </div>
+      `;
+
+      // Render each non-empty group
+      for (const cat of CATS) {
+        const items = groups[cat.key];
+        if (!items || items.length === 0) continue;
+
+        html += `<div style="font-size:8px;color:var(--text-muted);letter-spacing:2px;text-transform:uppercase;margin:12px 0 6px">${cat.label} (${items.length})</div>`;
+
+        for (const msg of items) {
+          html += `
+            <div class="email-item" onclick="sendMessage('fetch email uid ${msg.uid}')" title="UID ${msg.uid}">
+              <div class="email-from">${escapeHTML(msg.from)}</div>
+              <div class="email-subject">${msg.unread ? '<strong>' : ''}${escapeHTML(msg.subject)}${msg.unread ? '</strong>' : ''}</div>
+              <div class="email-meta">
+                <span class="tag ${cat.tag}">${cat.label}</span>
+                <span class="email-time">${escapeHTML(msg.date)}</span>
+              </div>
+            </div>
+          `;
+        }
+      }
+
+      // Cleanup suggestions as action buttons
+      if (suggestions && suggestions.length > 0) {
+        html += `<div style="font-size:8px;color:var(--text-muted);letter-spacing:2px;margin:14px 0 8px">SUGGESTED ACTIONS</div>`;
+        for (const s of suggestions) {
+          if (s.type === 'cleanup') {
+            html += `
+              <button onclick="sendMessage('go ahead and run the cleanup')" style="width:100%;padding:8px;font-family:var(--font-mono);font-size:9px;letter-spacing:2px;color:var(--cyan);background:var(--cyan-dim);border:1px solid var(--cyan-mid);cursor:pointer;border-radius:1px;margin-bottom:6px;text-align:left">
+                ▶ ${escapeHTML(s.text)}
+              </button>
+            `;
+          }
+        }
+      }
+
+      // Refresh button at the bottom
+      html += `
+        <div style="margin-top:14px">
+          <button onclick="loadEmailPanel()" style="width:100%;padding:8px;font-family:var(--font-mono);font-size:9px;letter-spacing:2px;color:var(--text-dim);background:transparent;border:1px solid var(--border);cursor:pointer;border-radius:1px">
+            ↺ REFRESH
+          </button>
+        </div>
+      `;
+
+      body.innerHTML = html;
+
+    } catch (err) {
+      body.innerHTML = `
+        <div style="font-size:11px;color:var(--red);padding:8px 0">
+          ⚠ Could not reach server.
+        </div>
+      `;
+    }
   }
 
   // SOC panel — shows security service status

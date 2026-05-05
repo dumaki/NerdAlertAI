@@ -354,7 +354,47 @@ export function mountUIRoutes(app: Express): void {
     res.json({ ok: true, model });
   });
 
-    // ── GET /api/cron/stream — SSE for sidebar job status ─────
+    // ── GET /api/email/triage — live inbox data for the side panel ──
+  // Called by getEmailPanelHTML() in the browser when the Email
+  // panel opens. Returns structured triage groups so the panel
+  // can render real classified messages without going through chat.
+  app.get('/api/email/triage', async (_req: Request, res: Response) => {
+    try {
+      const { triageInbox } = await import('../gmail/client');
+      const result = await triageInbox(undefined, { limit: 20 });
+
+      // Shape the response so the panel only gets what it needs.
+      // Each message gets uid, subject, from, date, category.
+      const format = (messages: any[], category: string) =>
+        messages.map((m: any) => ({
+          uid:      m.uid,
+          subject:  m.subject  ?? '(no subject)',
+          from:     m.from?.[0]?.name ?? m.from?.[0]?.address ?? 'Unknown',
+          date:     m.date ? new Date(m.date).toLocaleDateString() : '',
+          unread:   !m.flags?.includes('\\Seen'),
+          category,
+        }));
+
+      res.json({
+        ok:      true,
+        summary: result.summary,
+        groups: {
+          urgent:         format(result.triage.grouped.urgent,         'urgent'),
+          inbox:          format(result.triage.grouped.inbox,          'inbox'),
+          vinylPreorders: format(result.triage.grouped.vinylPreorders, 'vinyl'),
+          coupons:        format(result.triage.grouped.coupons,        'coupon'),
+          review:         format(result.triage.grouped.review,         'review'),
+        },
+        suggestions: result.cleanupSuggestions,
+      });
+    } catch (err: any) {
+      // Gmail not configured or IMAP error — return a clean error
+      // the panel can render rather than a 500.
+      res.json({ ok: false, error: err.message ?? 'Gmail unavailable' });
+    }
+  });
+
+  // ── GET /api/cron/stream — SSE for sidebar job status ─────
   app.get('/api/cron/stream', (req: Request, res: Response) => {
   // EventSource can't send headers — accept token from query param too
   const token = (req.headers.authorization?.replace('Bearer ', '') || req.query.token) as string;
