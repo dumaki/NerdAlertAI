@@ -377,7 +377,7 @@ export function mountUIRoutes(app: Express): void {
 
       res.json({
         ok:      true,
-        summary: result.summary,
+        summary: result.triage.summary,
         groups: {
           urgent:         format(result.triage.grouped.urgent,         'urgent'),
           inbox:          format(result.triage.grouped.inbox,          'inbox'),
