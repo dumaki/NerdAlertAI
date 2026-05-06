@@ -2680,13 +2680,24 @@
       return;
     }
 
-    // ── /clear intercept ──────────────────────────────────────
-    // Wipes the chat window and resets conversation history.
+        // Wipes the chat window and resets conversation history.
     // Zero tokens — never reaches the model.
     if (text.trim() === '/clear') {
       input.value = '';
       clearConversation();
       clearSessionOnServer();
+      return;
+    }
+    
+    // ── /setup intercept ──────────────────────────────────────
+    // Opens the secure credential setup panel in a new tab with the
+    // auth token in the URL hash. Zero tokens — never reaches the model.
+    // Credentials entered there go straight to the OS keychain (or file
+    // fallback) — they never touch the model, the session, or the logs.
+    if (text.trim() === '/setup') {
+      input.value = '';
+      const url = `${BASE_URL}/api/setup/panel#token=${encodeURIComponent(window.NERDALERT_CONFIG?.token || "")}`;
+      window.open(url, '_blank', 'noopener');
       return;
     }
 
