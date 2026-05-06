@@ -26,6 +26,7 @@ import { getLLMConfig, setActiveModel, streamOpenRouter, ORMessage } from '../co
 import { detectIntent, prefetchTools, buildInjectedPrompt, type PrefetchResult } from '../core/intent-prefetch';
 import { getAllJobs, getRecentRuns } from '../cron';
 import { saveSession, restoreSession, clearSession } from './session-store';
+import { scan, buildHaltMessage } from '../security/secret-scanner';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -280,6 +281,35 @@ export function mountUIRoutes(app: Express): void {
       return;
     }
 
+    // ── Secret scan — runs BEFORE prefetch, BEFORE the model, BEFORE persistence.
+    // Catches passwords, API keys, SSNs, credit cards, etc. and redacts them.
+    // Critical/High tier hits halt the message entirely — the user gets an inline
+    // explanation pointing at /setup. The original value never reaches the model,
+    // the session store, the memory engine, or the structured logs.
+    const scanResult = scan(message);
+
+    if (scanResult.hits.length > 0) {
+      // Audit log: fact and fingerprint only. Never the value.
+      console.log(
+        `[security] scan tier=${scanResult.tier} hits=${scanResult.hits.length} ` +
+        `rules=${scanResult.hits.map(h => h.rule).join(',')} ` +
+        `fingerprints=${scanResult.hits.map(h => h.fingerprint).join(',')}`
+      );
+    }
+
+    if (scanResult.halt) {
+      // Emit the halt explanation as a streaming token, then close.
+      sseEvent(res, 'token', { text: buildHaltMessage(scanResult) });
+      sseEvent(res, 'done', {});
+      res.end();
+      return;
+    }
+
+    // The redacted string is identical to the original unless a critical/high
+    // hit was found. Use it from here on so any future medium-tier extension
+    // (where we might want to redact emails before they hit memory) Just Works.
+    const safeMessage = scanResult.redacted;
+
     try {
       const agentId     = (req.body as any).agentId   ?? cfg.agent?.personality ?? 'sherman';
       const agentName   = (req.body as any).agentName  ?? cfg.agent?.name        ?? 'Sherman';
@@ -292,7 +322,7 @@ export function mountUIRoutes(app: Express): void {
 
       const messages: Anthropic.MessageParam[] = [
         ...conversationHistory,
-        { role: 'user', content: message },
+        { role: 'user', content: safeMessage },
       ];
 
       // Route to the right streaming handler based on provider
@@ -302,7 +332,7 @@ export function mountUIRoutes(app: Express): void {
         // Detect intent and pre-fetch real tool data before dispatching.
         // This gives free/flat-rate models real data to narrate instead
         // of hallucinating values. Anthropic path is untouched.
-        const detectedGroups = detectIntent(message);
+        const detectedGroups = detectIntent(safeMessage);
         let enrichedPrompt = systemPrompt;
         let prefetchResults: PrefetchResult[] = [];
 
