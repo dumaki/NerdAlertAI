@@ -2567,6 +2567,15 @@
       return;
     }
 
+    // ── /clear intercept ──────────────────────────────────────
+    // Wipes the chat window and resets conversation history.
+    // Zero tokens — never reaches the model.
+    if (text.trim() === '/clear') {
+      input.value = '';
+      clearConversation();
+      return;
+    }
+
     // If called from a panel button, switch back to chat view first
     if (prefill) {
       switchView('chat', null);
