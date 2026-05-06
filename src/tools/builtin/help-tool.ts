@@ -68,19 +68,6 @@ const TOOL_SUMMARIES: Record<string, string> = {
   influxdb:       'Metrics queries and time-series data.',
 }
 
-// ── Action extraction ─────────────────────────────────────────
-// Pulls the enum values from a tool's parameters.action field.
-// Returns empty array if the tool doesn't use an action pattern.
-function extractActions(tool: NerdAlertTool): string[] {
-  try {
-    const params = tool.parameters as any
-    const actionEnum = params?.properties?.action?.enum
-    return Array.isArray(actionEnum) ? actionEnum : []
-  } catch {
-    return []
-  }
-}
-
 // ── Format: list view ─────────────────────────────────────────
 function formatList(tools: NerdAlertTool[]): string {
   // Group by category
@@ -117,7 +104,6 @@ function formatList(tools: NerdAlertTool[]): string {
 
 // ── Format: detail view ───────────────────────────────────────
 function formatDetail(tool: NerdAlertTool): string {
-  const actions = extractActions(tool)
   const params  = tool.parameters as any
   const props   = params?.properties ?? {}
 
@@ -137,14 +123,6 @@ function formatDetail(tool: NerdAlertTool): string {
     tool.description,
     '',
   ]
-
-  if (actions.length > 0) {
-    lines.push('ACTIONS')
-    for (const action of actions) {
-      lines.push(`  ${action}`)
-    }
-    lines.push('')
-  }
 
   if (paramLines.length > 0) {
     lines.push('PARAMETERS')
