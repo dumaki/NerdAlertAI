@@ -878,9 +878,15 @@
       text-shadow: 0 0 8px var(--cyan);
     }
 
-    .send-button:disabled {
-      opacity: 0.3;
-      cursor: not-allowed;
+    /* Kill switch — shown during streaming in place of SEND */
+    .send-button.stop {
+      color: var(--red);
+      border-color: rgba(255,58,58,0.5);
+    }
+    .send-button.stop:hover {
+      background: var(--red-dim);
+      box-shadow: 0 0 14px rgba(255,58,58,0.2);
+      text-shadow: 0 0 8px var(--red);
     }
 
     /* ==========================================================
@@ -2641,6 +2647,18 @@
   //   8. Re-enable UI
   // ============================================================
 
+  // Active stream abort controller — set during streaming, null otherwise.
+  // Clicking STOP calls .abort() on this, which throws an AbortError
+  // caught in sendMessage() to clean up the UI gracefully.
+  let activeAbortController = null;
+
+  function stopStreaming() {
+    if (activeAbortController) {
+      activeAbortController.abort();
+      activeAbortController = null;
+    }
+  }
+
   async function sendMessage(prefill) {
     const input = document.getElementById('chat-input');
     const btn   = document.getElementById('send-button');
@@ -2680,7 +2698,10 @@
     input.value  = '';
     isStreaming   = true;
     input.disabled = true;
-    btn.disabled   = true;
+    btn.textContent = 'STOP';
+    btn.classList.add('stop');
+    btn.disabled  = false;
+    btn.onclick   = stopStreaming;
 
     // Add user message to UI
     appendUserMessage(text);
@@ -2690,12 +2711,14 @@
 
     try {
       // POST to the SSE streaming endpoint
+      activeAbortController = new AbortController();
       const response = await fetch(`${BASE_URL}/chat/stream`, {
         method: 'POST',
         headers: {
           'Content-Type':  'application/json',
           'Authorization': `Bearer ${CFG.token}`,
         },
+        signal: activeAbortController.signal,
         body: JSON.stringify({
           message:             text,
           conversationHistory: conversationHistory,
@@ -2854,14 +2877,31 @@
       }
 
     } catch (err) {
-      // Network-level failure
-      if (agentDiv) agentDiv.remove();
-      appendErrorMessage(`Connection error: ${err.message}`);
+      // AbortError = user clicked STOP — clean exit, no error message
+      if (err.name === 'AbortError') {
+        hideThinking();
+        finalizeAgentMessage(fullText);
+        if (fullText) {
+          conversationHistory.push({ role: 'user',      content: text });
+          conversationHistory.push({ role: 'assistant', content: fullText });
+          saveSessionToServer();
+        } else if (agentDiv) {
+          agentDiv.remove();
+        }
+      } else {
+        // Network-level failure
+        if (agentDiv) agentDiv.remove();
+        appendErrorMessage(`Connection error: ${err.message}`);
+      }
     }
 
-    // Re-enable UI
+    // Restore button to SEND state
+    activeAbortController = null;
     isStreaming     = false;
     input.disabled  = false;
+    btn.textContent = 'SEND';
+    btn.classList.remove('stop');
+    btn.onclick     = () => sendMessage();
     btn.disabled    = false;
     input.focus();
   }
