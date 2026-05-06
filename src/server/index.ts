@@ -18,6 +18,7 @@ import { NerdAlertResponse } from '../types/response.types';
 import { chat } from '../core/agent';
 import { getAuthMiddleware } from './auth';
 import { mountUIRoutes, broadcastCronStatus } from './ui-routes';
+import { mountSecurityRoutes } from './security-routes';
 import { startTelegram } from '../telegram';
 import { startCron, stopCron, setCronStatusEmitter } from '../cron';
 
@@ -57,6 +58,7 @@ app.use((req, res, next) => {
   if (req.method === 'GET' && req.path === '/') return next();
   if (req.method === 'GET' && req.path === '/favicon.ico') return next();
   if (req.method === 'GET' && req.path === '/api/cron/stream') return next();
+  if (req.method === 'GET' && req.path === '/api/setup/panel') return next();
   requireAuth(req, res, next);
 });
 
@@ -82,6 +84,13 @@ mountUIRoutes(app);
 setCronStatusEmitter((jobId: string, status: string) => {
   broadcastCronStatus(jobId, status);
 });
+
+// ---- SECURITY ROUTES ----
+// Serves the credential intake panel at /api/setup/panel
+// and accepts credential submissions. Loopback-only, CSRF-protected.
+// Credentials submitted here go straight to the OS keychain (or file
+// fallback) — they never touch the model, the session store, or the logs.
+mountSecurityRoutes(app);
 
 // ---- CHAT ROUTE ----
 // POST /chat — the main endpoint

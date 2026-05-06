@@ -152,7 +152,7 @@
 
     const headers = {
       'Content-Type': 'application/json',
-      ...(hashToken ? { 'X-NerdAlert-Token': hashToken } : {}),
+      ...(hashToken ? { 'Authorization': 'Bearer ' + hashToken } : {}),
     };
 
     // ---------- CSRF ----------
