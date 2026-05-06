@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NerdAlert — Secure Setup</title>
+  <style>
+    :root {
+      --bg: #0e0f12;
+      --panel: #16181d;
+      --panel-2: #1d2027;
+      --border: #2a2e38;
+      --text: #e6e7eb;
+      --muted: #8a8f9c;
+      --accent: #6ea8fe;
+      --warn: #e8b14a;
+      --ok: #4ec76e;
+      --err: #e85a5a;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      line-height: 1.5;
+    }
+    h1 { margin: 0 0 4px; font-size: 20px; font-weight: 600; }
+    .lede { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
+    .lede strong { color: var(--text); }
+    .banner {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      padding: 12px 14px;
+      border-radius: 4px;
+      margin-bottom: 20px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .banner strong { color: var(--text); }
+    .grid { display: grid; gap: 12px; }
+    .cred {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px 16px;
+    }
+    .cred-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .cred-name { font-weight: 600; font-size: 14px; }
+    .cred-desc { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .pill {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-weight: 500;
+      letter-spacing: 0.3px;
+    }
+    .pill.set { background: rgba(78,199,110,0.15); color: var(--ok); border: 1px solid rgba(78,199,110,0.3); }
+    .pill.unset { background: rgba(138,143,156,0.12); color: var(--muted); border: 1px solid var(--border); }
+    .row {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    input[type="password"], input[type="text"] {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      padding: 8px 10px;
+      font-family: var(--mono);
+      font-size: 13px;
+      outline: none;
+    }
+    input:focus { border-color: var(--accent); }
+    button {
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 8px 14px;
+      font-size: 13px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    button:hover { border-color: var(--accent); }
+    button.primary { background: var(--accent); color: #0a0e16; border-color: var(--accent); font-weight: 600; }
+    button.primary:hover { filter: brightness(1.1); }
+    button.danger { color: var(--err); border-color: rgba(232,90,90,0.4); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status {
+      margin-top: 8px;
+      font-size: 12px;
+      min-height: 16px;
+    }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--err); }
+    .status.info { color: var(--muted); }
+    .footer {
+      margin-top: 28px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .footer code { font-family: var(--mono); color: var(--text); background: var(--panel); padding: 1px 5px; border-radius: 3px; }
+    .backend-tag {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <h1>Secure Setup</h1>
+  <p class="lede">
+    Enter credentials here, never in chat. Values are written directly to the
+    <strong>credential store</strong> and never reach any model, log, or session file.
+    <span id="backend-tag" class="backend-tag"></span>
+  </p>
+
+  <div class="banner">
+    <strong>Heads up.</strong> If your browser asks to save these passwords, decline.
+    The credential store on this machine handles persistence — your browser doesn't
+    need a copy. Pasted values are auto-cleared from the clipboard after 30 seconds.
+  </div>
+
+  <div id="creds" class="grid"></div>
+
+  <div class="footer">
+    Backend in use: <span id="backend-name" class="backend-tag">probing…</span><br />
+    To remove a credential, run <code>npm run secrets:rm &lt;name&gt;</code> from the project root.<br />
+    To switch backends, edit <code>~/.nerdalert/credential-backend.txt</code>.
+  </div>
+
+  <script>
+    // ---------- Auth ----------
+    // The panel is loopback-only on the server side. The token lives in the URL
+    // hash so it doesn't end up in server logs. Strip it from the address bar
+    // immediately after read.
+    const hashToken = (location.hash || '').replace(/^#token=/, '');
+    if (hashToken) history.replaceState(null, '', location.pathname + location.search);
+
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(hashToken ? { 'X-NerdAlert-Token': hashToken } : {}),
+    };
+
+    // ---------- CSRF ----------
+    async function getCsrf() {
+      const r = await fetch('/api/setup/csrf', { method: 'POST', headers });
+      const j = await r.json();
+      return j.csrf;
+    }
+
+    // ---------- Status fetch ----------
+    async function loadStatus() {
+      const r = await fetch('/api/setup/status', { headers });
+      if (!r.ok) {
+        document.body.innerHTML = '<h1>Setup unavailable</h1><p>Could not reach the server. Is NerdAlert running?</p>';
+        return;
+      }
+      const j = await r.json();
+      document.getElementById('backend-name').textContent = j.backend;
+      document.getElementById('backend-tag').textContent = '(backend: ' + j.backend + ')';
+      renderCreds(j);
+    }
+
+    // ---------- Render ----------
+    function renderCreds(state) {
+      const root = document.getElementById('creds');
+      root.innerHTML = '';
+      for (const [name, meta] of Object.entries(state.allowed)) {
+        const isSet = state.status[name];
+        const card = document.createElement('div');
+        card.className = 'cred';
+        card.innerHTML = `
+          <div class="cred-head">
+            <div>
+              <div class="cred-name">${escapeHtml(name)}</div>
+              <div class="cred-desc">${escapeHtml(meta.description)}</div>
+            </div>
+            <span class="pill ${isSet ? 'set' : 'unset'}">${isSet ? 'configured' : 'not set'}</span>
+          </div>
+          <div class="row">
+            <input type="password" autocomplete="off" spellcheck="false"
+                   placeholder="paste value here"
+                   data-name="${escapeHtml(name)}"
+                   id="input-${escapeHtml(name)}" />
+            <button data-action="save" data-name="${escapeHtml(name)}" class="primary">Save</button>
+            ${name === 'gmail-app-password'
+              ? `<button data-action="test" data-name="${escapeHtml(name)}">Test</button>`
+              : ''}
+          </div>
+          <div class="status info" id="status-${escapeHtml(name)}"></div>
+        `;
+        root.appendChild(card);
+      }
+
+      // Wire up save buttons
+      root.querySelectorAll('button[data-action="save"]').forEach((btn) => {
+        btn.addEventListener('click', (e) => save(e.target.dataset.name));
+      });
+      root.querySelectorAll('button[data-action="test"]').forEach((btn) => {
+        btn.addEventListener('click', (e) => testGmail(e.target.dataset.name));
+      });
+
+      // Paste-and-clear: when the user pastes into a credential field, clear
+      // the system clipboard 30 seconds later. Defensive UX — they may forget
+      // they have a credential sitting in their clipboard.
+      root.querySelectorAll('input[type="password"]').forEach((input) => {
+        input.addEventListener('paste', () => {
+          setTimeout(() => {
+            navigator.clipboard.writeText('').catch(() => { /* permission denied — fine */ });
+          }, 30000);
+        });
+      });
+    }
+
+    // ---------- Save ----------
+    async function save(name) {
+      const input = document.getElementById('input-' + name);
+      const status = document.getElementById('status-' + name);
+      const value = input.value;
+      if (!value) {
+        status.className = 'status err';
+        status.textContent = 'value is empty';
+        return;
+      }
+
+      status.className = 'status info';
+      status.textContent = 'saving…';
+
+      try {
+        const csrf = await getCsrf();
+        const r = await fetch('/api/setup/credential', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ csrf, name, value }),
+        });
+        const j = await r.json();
+        if (!r.ok) {
+          status.className = 'status err';
+          status.textContent = 'error: ' + (j.error || r.statusText);
+          return;
+        }
+        status.className = 'status ok';
+        status.textContent = 'saved to ' + j.backend + ' ✓';
+        // Clear the input and the in-page memory of the value.
+        input.value = '';
+        // Refresh the status pill on the card.
+        loadStatus();
+      } catch (e) {
+        status.className = 'status err';
+        status.textContent = 'request failed: ' + e.message;
+      }
+    }
+
+    // ---------- Test Gmail ----------
+    async function testGmail(name) {
+      const status = document.getElementById('status-' + name);
+      status.className = 'status info';
+      status.textContent = 'testing IMAP login…';
+
+      try {
+        const r = await fetch('/api/setup/test/gmail', { method: 'POST', headers });
+        const j = await r.json();
+        if (j.ok) {
+          status.className = 'status ok';
+          status.textContent = 'IMAP login succeeded ✓';
+        } else {
+          status.className = 'status err';
+          status.textContent = 'IMAP login failed' + (j.error ? ': ' + j.error : '');
+        }
+      } catch (e) {
+        status.className = 'status err';
+        status.textContent = 'test failed: ' + e.message;
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    // Boot
+    loadStatus();
+  </script>
+</body>
+</html>
