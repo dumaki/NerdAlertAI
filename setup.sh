@@ -145,10 +145,81 @@ npm install --silent
 ok "Packages installed"
 
 # ============================================================
-# STEP 4 — Generate auth token
+# STEP 4 — Test credential store
 # ============================================================
 echo ""
-echo -e "${BOLD}Step 3 — Generating your auth token${RESET}"
+echo -e "${BOLD}Step 3 — Testing credential store${RESET}"
+echo ""
+
+mkdir -p "$HOME/.nerdalert"
+chmod 700 "$HOME/.nerdalert"
+
+info "Probing OS keychain (Apple Keychain on Mac, GNOME Keyring on Linux)..."
+
+PROBE_SCRIPT="$PROJECT_ROOT/.keychain-probe.js"
+cat > "$PROBE_SCRIPT" <<'PROBE_EOF'
+(async () => {
+  let keytar;
+  try { keytar = require('keytar'); }
+  catch (e) {
+    console.log('RESULT=file');
+    console.log('REASON=keytar load failed: ' + (e && e.message ? e.message : 'unknown'));
+    process.exit(0);
+  }
+  const SERVICE = 'nerdalert';
+  const KEY = '__probe__';
+  const VAL = 'probe-' + Date.now();
+  try {
+    await keytar.setPassword(SERVICE, KEY, VAL);
+    const got = await keytar.getPassword(SERVICE, KEY);
+    await keytar.deletePassword(SERVICE, KEY);
+    if (got === VAL) {
+      console.log('RESULT=keychain');
+      console.log('REASON=probe ok');
+    } else {
+      console.log('RESULT=file');
+      console.log('REASON=probe round-trip mismatch');
+    }
+  } catch (e) {
+    console.log('RESULT=file');
+    console.log('REASON=' + (e && e.message ? e.message : 'unknown'));
+  }
+})();
+PROBE_EOF
+
+PROBE_OUTPUT=$(cd "$PROJECT_ROOT" && node "$PROBE_SCRIPT" 2>&1)
+rm -f "$PROBE_SCRIPT"
+
+BACKEND=$(echo "$PROBE_OUTPUT" | grep '^RESULT=' | head -1 | cut -d= -f2)
+REASON=$(echo "$PROBE_OUTPUT" | grep '^REASON=' | head -1 | cut -d= -f2-)
+
+if [ "$BACKEND" = "keychain" ]; then
+  ok "Keychain available — credentials will be stored there"
+  echo "keychain" > "$HOME/.nerdalert/credential-backend.txt"
+  chmod 600 "$HOME/.nerdalert/credential-backend.txt"
+elif [ "$BACKEND" = "file" ]; then
+  warn "Keychain unavailable — falling back to file storage"
+  info "Reason: ${REASON}"
+  info "Credentials will live at ~/.nerdalert/secrets/ with chmod 600"
+  echo "file" > "$HOME/.nerdalert/credential-backend.txt"
+  chmod 600 "$HOME/.nerdalert/credential-backend.txt"
+  mkdir -p "$HOME/.nerdalert/secrets"
+  chmod 700 "$HOME/.nerdalert/secrets"
+else
+  warn "Probe returned unexpected output"
+  info "Output: ${PROBE_OUTPUT}"
+  info "Defaulting to file storage. You can re-run setup later."
+  echo "file" > "$HOME/.nerdalert/credential-backend.txt"
+  chmod 600 "$HOME/.nerdalert/credential-backend.txt"
+  mkdir -p "$HOME/.nerdalert/secrets"
+  chmod 700 "$HOME/.nerdalert/secrets"
+fi
+
+# ============================================================
+# STEP 5 — Generate auth token
+# ============================================================
+echo ""
+echo -e "${BOLD}Step 4 — Generating your auth token${RESET}"
 echo ""
 
 if command -v openssl &>/dev/null; then
@@ -161,14 +232,14 @@ ok "Token generated: ${CYAN}${AUTH_TOKEN}${RESET}"
 info "This is saved to .env and to ~/.nerdalert/token.txt"
 
 # ============================================================
-# STEP 5 — OpenRouter API key
+# STEP 6 — OpenRouter API key
 # ============================================================
 echo ""
-echo -e "${BOLD}Step 4 — OpenRouter API key${RESET}"
+echo -e "${BOLD}Step 5 — OpenRouter API key${RESET}"
 echo ""
 echo "  NerdAlert uses OpenRouter to access AI models for free."
 echo ""
-echo "  Get your free key at: ${CYAN}https://openrouter.ai${RESET}"
+echo -e "  Get your free key at: ${CYAN}https://openrouter.ai${RESET}"
 echo "  Sign up → Dashboard → Keys → Create key"
 echo ""
 echo -n "  Paste your OpenRouter API key (or press Enter to skip for now): "
@@ -183,10 +254,10 @@ else
 fi
 
 # ============================================================
-# STEP 6 — Write .env
+# STEP 7 — Write .env
 # ============================================================
 echo ""
-echo -e "${BOLD}Step 5 — Creating .env${RESET}"
+echo -e "${BOLD}Step 6 — Creating .env${RESET}"
 echo ""
 
 ENV_FILE="$PROJECT_ROOT/.env"
@@ -239,10 +310,10 @@ chmod 600 "$HOME/.nerdalert/token.txt"
 ok "Token backed up to ~/.nerdalert/token.txt"
 
 # ============================================================
-# STEP 7 — Shell aliases
+# STEP 8 — Shell aliases
 # ============================================================
 echo ""
-echo -e "${BOLD}Step 6 — Setting up shell aliases${RESET}"
+echo -e "${BOLD}Step 7 — Setting up shell aliases${RESET}"
 echo ""
 
 SHELL_RC=""
