@@ -1895,10 +1895,104 @@
 
 
   // ============================================================
+  // SESSION PERSISTENCE
+  // Restore on load, save after each exchange, clear on /clear.
+  // ============================================================
+
+  async function restoreSessionFromServer() {
+    const agentId = localStorage.getItem('nerdalert_agent') ?? 'sherman';
+    try {
+      const res  = await fetch(`${BASE_URL}/api/session/restore?agentId=${agentId}`, {
+        headers: { 'Authorization': `Bearer ${CFG.token}` },
+      });
+      const data = await res.json();
+      if (data.ok && data.messages.length > 0) {
+        conversationHistory = data.messages;
+        console.log(`[Session] Restored ${data.messages.length} messages for agent "${agentId}"`);
+        renderRestoredHistory(data.messages);
+      }
+    } catch (err) {
+      console.warn('[Session] Restore failed:', err);
+    }
+  }
+
+  async function saveSessionToServer() {
+    const agentId = localStorage.getItem('nerdalert_agent') ?? 'sherman';
+    try {
+      await fetch(`${BASE_URL}/api/session/save`, {
+        method:  'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${CFG.token}`,
+        },
+        body: JSON.stringify({ agentId, messages: conversationHistory }),
+      });
+    } catch (err) {
+      console.warn('[Session] Save failed:', err);
+    }
+  }
+
+  async function clearSessionOnServer() {
+    const agentId = localStorage.getItem('nerdalert_agent') ?? 'sherman';
+    try {
+      await fetch(`${BASE_URL}/api/session/clear`, {
+        method:  'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${CFG.token}`,
+        },
+        body: JSON.stringify({ agentId }),
+      });
+    } catch (err) {
+      console.warn('[Session] Clear failed:', err);
+    }
+  }
+
+  // Render restored messages as chat bubbles without re-sending them.
+  // Skips tool result turns (content arrays) since those render
+  // as tool blocks that aren't meaningful out of context.
+  function renderRestoredHistory(messages) {
+    clearEmptyState();
+    const container = document.getElementById('chat-messages');
+
+    // Add a faint session-restored banner
+    const banner = document.createElement('div');
+    banner.style.cssText = 'text-align:center;font-size:9px;color:var(--text-muted);letter-spacing:2px;padding:8px 0 4px;';
+    banner.textContent   = '── SESSION RESTORED ──';
+    container.appendChild(banner);
+
+    for (const msg of messages) {
+      if (typeof msg.content !== 'string') continue; // skip tool result arrays
+      if (msg.role === 'user') {
+        const div = document.createElement('div');
+        div.className = 'message user';
+        div.innerHTML = `
+          <div class="message-label">YOU</div>
+          <div class="message-bubble">${escapeHTML(msg.content)}</div>
+        `;
+        container.appendChild(div);
+      } else if (msg.role === 'assistant') {
+        const div = document.createElement('div');
+        div.className = 'message agent';
+        div.innerHTML = `
+          <div class="message-label">${activeAgentName.toUpperCase()}</div>
+          <div class="message-bubble"><span style="white-space:pre-wrap">${escapeHTML(msg.content)}</span></div>
+        `;
+        container.appendChild(div);
+      }
+    }
+
+    scrollToBottom();
+  }
+
+  // ============================================================
   // STARTUP
   // ============================================================
 
   window.addEventListener('DOMContentLoaded', () => {
+    // Restore session from server on page load
+    restoreSessionFromServer();
+
     // Run onboarding check first
     checkOnboarding();
     cronInit();
@@ -2573,6 +2667,7 @@
     if (text.trim() === '/clear') {
       input.value = '';
       clearConversation();
+      clearSessionOnServer();
       return;
     }
 
@@ -2742,8 +2837,10 @@
             conversationHistory.push({ role: 'user',      content: text });
             conversationHistory.push({ role: 'assistant', content: parsed.text || fullText });
 
+            // Persist full history (including assistant turn) to server
+            saveSessionToServer();
+
             // Check if response contains actionable items
-            // Look for phrases that suggest Sherman wants to take an action
             parseForApprovals(parsed.text || fullText);
           }
 

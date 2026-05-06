@@ -25,6 +25,7 @@ import { getAvailableTools, toAnthropicFormat } from '../tools/registry';
 import { getLLMConfig, setActiveModel, streamOpenRouter, ORMessage } from '../core/llm-client';
 import { detectIntent, prefetchTools, buildInjectedPrompt, type PrefetchResult } from '../core/intent-prefetch';
 import { getAllJobs, getRecentRuns } from '../cron';
+import { saveSession, restoreSession, clearSession } from './session-store';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -330,6 +331,15 @@ export function mountUIRoutes(app: Express): void {
         await handleAnthropicStream(req, res, systemPrompt, messages, tools, cfg.agent?.trust_level ?? 1);
       }
 
+      // Save session after every completed exchange.
+      // Filter to string-content turns only — tool result arrays
+      // (ContentBlockParam[]) are not meaningful to restore.
+      const saveable = [
+        ...conversationHistory,
+        { role: 'user' as const, content: message },
+      ].filter(m => typeof m.content === 'string');
+      saveSession(agentId, saveable as any);
+
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       sseEvent(res, 'error', { message: msg });
@@ -354,7 +364,43 @@ export function mountUIRoutes(app: Express): void {
     res.json({ ok: true, model });
   });
 
-    // ── GET /api/help — token-free tool discovery ─────────────
+    // ── Session persistence endpoints ───────────────────────────────
+  //
+  // GET  /api/session/restore?agentId=sherman
+  //   Called on page load. Returns saved messages or [].
+  //
+  // POST /api/session/save
+  //   Called by the browser after the stream closes with the
+  //   full updated history including the assistant turn.
+  //
+  // POST /api/session/clear
+  //   Called when /clear is typed. Deletes the session file.
+
+  app.get('/api/session/restore', (req: Request, res: Response) => {
+    const agentId = (req.query.agentId as string) ?? 'sherman';
+    const messages = restoreSession(agentId);
+    console.log(`[Session] Restored ${messages.length} messages for agent "${agentId}"`);
+    res.json({ ok: true, messages });
+  });
+
+  app.post('/api/session/save', (req: Request, res: Response) => {
+    const { agentId, messages } = req.body as { agentId: string; messages: any[] };
+    if (!agentId || !Array.isArray(messages)) {
+      res.json({ ok: false, error: 'agentId and messages required' });
+      return;
+    }
+    saveSession(agentId, messages);
+    res.json({ ok: true, saved: messages.length });
+  });
+
+  app.post('/api/session/clear', (req: Request, res: Response) => {
+    const { agentId } = req.body as { agentId: string };
+    clearSession(agentId ?? 'sherman');
+    console.log(`[Session] Cleared session for agent "${agentId}"`);
+    res.json({ ok: true });
+  });
+
+  // ── GET /api/help — token-free tool discovery ─────────────
   // Called directly by the UI when /help or /help <tool> is typed.
   // Bypasses the model entirely — zero tokens burned for discovery.
   app.get('/api/help', async (req: Request, res: Response) => {
