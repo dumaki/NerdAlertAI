@@ -107,9 +107,13 @@ const RULES: ScanRule[] = [
     name: 'GOOGLE-APP-PASSWORD',
     tier: 'critical',
     description: 'Google App Password (16 lowercase chars, often space-separated as 4×4)',
-    // Matches "abcd efgh ijkl mnop" or "abcdefghijklmnop" when adjacent to gmail/google/app password context.
-    // We require contextual proximity to avoid eating ordinary 16-char strings.
-    pattern: /(?:app[\s_-]?password|google[\s_-]?app|gmail[\s_-]?app)[^\n]{0,40}?\b([a-z]{4}[\s-]?[a-z]{4}[\s-]?[a-z]{4}[\s-]?[a-z]{4})\b/gi,
+    // Require an explicit separator (':', '=', or ' is ') between the keyword
+    // phrase and the value, AND require the value itself to be either 16
+    // contiguous lowercase letters or exactly four groups of 4 separated by
+    // single spaces. Without this, English phrases with four 4-letter words in
+    // a row ("password look like just") match falsely. Real Google App
+    // Passwords always have one of these explicit shapes.
+    pattern: /(?:app[\s_-]?password|google[\s_-]?app|gmail[\s_-]?app)\s*(?::|=|is)\s*\b([a-z]{16}|[a-z]{4} [a-z]{4} [a-z]{4} [a-z]{4})\b/gi,
   },
   {
     name: 'PASSWORD-IN-CONTEXT',
@@ -290,7 +294,7 @@ export function buildHaltMessage(result: ScanResult): string {
     '',
     "Nothing was stored. Nothing reached the model.",
     '',
-    "If you were trying to set up a credential (Gmail, GitHub, Telegram, etc.), use the secure setup panel — credentials never travel through chat. Type `/setup` or click the gear icon.",
+    "If you were trying to set up a credential (Gmail, GitHub, Telegram, etc.), use the secure setup panel — credentials never travel through chat. Type `/setup` in the chat input.",
     '',
     "If this was a false alarm and you actually need to discuss the value (for example, asking about the *shape* of an API key, not a real one), rephrase without the live value.",
   ].join('\n');

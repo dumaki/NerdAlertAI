@@ -10,7 +10,7 @@
 //   Done.
 // ============================================================
 
-import { Personality } from './base';
+import { Personality, CREDENTIAL_REFUSAL_RULES } from './base';
 import sherman from './sherman';
 import kenny   from './kenny';
 import brett   from './brett';
@@ -35,6 +35,11 @@ const PERSONALITIES: Record<string, Personality> = {
 // Falls back to sherman if the configured personality isn't found.
 // Hard crash is wrong here — a misconfigured personality ID
 // shouldn't take down the whole server.
+//
+// Every returned personality has CREDENTIAL_REFUSAL_RULES appended to its
+// system prompt automatically. This is defense in depth — even if the
+// secret-scanner ever misses a pattern, the agent itself will refuse
+// credentials in chat and direct the user to /setup.
 export function getPersonality(id: string): Personality {
   const personality = PERSONALITIES[id];
 
@@ -43,10 +48,20 @@ export function getPersonality(id: string): Personality {
       `[NerdAlert] Unknown personality "${id}" in config.yaml. ` +
       `Falling back to sherman. Available: ${Object.keys(PERSONALITIES).join(', ')}`
     );
-    return sherman;
+    return wrapWithSecurityRules(sherman);
   }
 
-  return personality;
+  return wrapWithSecurityRules(personality);
+}
+
+// Wraps a personality so its buildSystemPrompt automatically appends the
+// shared credential-refusal rules. The original personality object is not
+// mutated — we return a new object that delegates to the original.
+function wrapWithSecurityRules(p: Personality): Personality {
+  return {
+    ...p,
+    buildSystemPrompt: (params) => p.buildSystemPrompt(params) + '\n\n' + CREDENTIAL_REFUSAL_RULES,
+  };
 }
 
 export { Personality } from './base';

@@ -2721,6 +2721,13 @@
     // Start agent bubble
     const agentDiv = appendAgentMessage();
 
+    // Lifted to function scope so the catch block (which handles AbortError
+    // when the user clicks STOP mid-stream) can read whatever was streamed
+    // before the abort fired. Without this, clicking STOP throws
+    // "fullText is not defined" because these were try-block-scoped.
+    let fullText = '';
+    let buffer   = '';
+
     try {
       // POST to the SSE streaming endpoint
       activeAbortController = new AbortController();
@@ -2748,8 +2755,6 @@
       // a reader to process the raw bytes as text line by line.
       const reader  = response.body.getReader();
       const decoder = new TextDecoder();
-      let   buffer  = '';
-      let   fullText = '';
 
       while (true) {
         const { done, value } = await reader.read();
