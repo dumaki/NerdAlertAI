@@ -31,6 +31,8 @@
 
 import { queryOpenClaw } from '../tools/builtin/soc-client';
 import { getPiholeWallState } from './soc-clients/pihole';
+import { getWazuhWallState }  from './soc-clients/wazuh';
+import { getCrowdsecWallState } from './soc-clients/crowdsec';
 
 // ── Public types ─────────────────────────────────────────────
 
@@ -95,33 +97,17 @@ interface MonitorConfig {
 const MONITORS: MonitorConfig[] = [
   // ── Row 1 — Watch (active monitoring core) ───────────────
   {
-    id:       'wazuh',
-    label:    'WAZUH',
-    category: 'Watch',
-    prompt:
-      'Use the Wazuh get_alert_summary tool for the past 24 hours. ' +
-      'Reply with ONLY this format on one line, no other text: ' +
-      'TOTAL=<integer> CRITICAL=<integer> ' +
-      'where CRITICAL is the count of alerts with rule level >= 10.',
-    parse: (raw) => {
-      const total    = pickInt(raw, 'TOTAL');
-      const critical = pickInt(raw, 'CRITICAL');
-      if (total === null || critical === null) return null;
-      const status: MonitorStatus =
-        critical > 0 ? 'err' :
-        total > 100  ? 'warn' :
-                       'ok';
-      return {
-        metrics: {
-          primaryLabel:   'ALERTS',
-          primaryValue:   formatInt(total),
-          secondaryLabel: 'CRITICAL',
-          secondaryValue: formatInt(critical),
-          computed:       '24H',
-        },
-        status,
-      };
-    },
+    id:           'wazuh',
+    label:        'WAZUH',
+    category:     'Watch',
+    // Second OpenClaw migration (after Pi-hole). Talks directly
+    // to the Wazuh Indexer (OpenSearch on port 9200) with HTTP
+    // Basic Auth — no gateway model in the path. The indexer
+    // answers a tiny aggregation query in <50ms over LAN; the
+    // OpenClaw-routed version routinely sat near the wall's 25s
+    // timeout under parallelism contention.
+    // See src/server/soc-clients/wazuh.ts.
+    directClient: getWazuhWallState,
   },
   {
     id:           'pihole',
@@ -136,33 +122,17 @@ const MONITORS: MonitorConfig[] = [
     directClient: getPiholeWallState,
   },
   {
-    id:       'crowdsec',
-    label:    'CROWDSEC',
-    category: 'Watch',
-    prompt:
-      'Use the CrowdSec crowdsec_get_decisions tool to count active decisions, ' +
-      'and crowdsec_get_alerts to count alerts in the past 24 hours. ' +
-      'Reply with ONLY this format on one line, no other text: ' +
-      'BANS=<integer> ALERTS=<integer>',
-    parse: (raw) => {
-      const bans   = pickInt(raw, 'BANS');
-      const alerts = pickInt(raw, 'ALERTS');
-      if (bans === null || alerts === null) return null;
-      const status: MonitorStatus =
-        bans > 100 ? 'err'  :  // active intrusion territory
-        bans > 0   ? 'warn' :  // some activity, not necessarily bad
-                     'ok';
-      return {
-        metrics: {
-          primaryLabel:   'BANS',
-          primaryValue:   formatInt(bans),
-          secondaryLabel: 'ALERTS',
-          secondaryValue: formatInt(alerts),
-          computed:       '24H',
-        },
-        status,
-      };
-    },
+    id:           'crowdsec',
+    label:        'CROWDSEC',
+    category:     'Watch',
+    // Third OpenClaw migration. Talks directly to the CrowdSec
+    // LAPI on port 8080 with machine-login JWT auth — no gateway
+    // model in the path. We use machine login (not bouncer keys)
+    // because the tile shows both BANS and ALERTS, and bouncer
+    // keys don't reliably grant /v1/alerts access on most
+    // CrowdSec configurations.
+    // See src/server/soc-clients/crowdsec.ts.
+    directClient: getCrowdsecWallState,
   },
 
   // ── Row 2 — Network ──────────────────────────────────────

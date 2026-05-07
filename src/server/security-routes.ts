@@ -94,14 +94,17 @@ function loopbackOnly(req: Request, res: Response, next: NextFunction) {
 // client from cluttering the keychain with unknown entries.
 
 const ALLOWED: Record<string, { description: string; minLen: number; maxLen: number }> = {
-  'gmail-app-password': { description: 'Gmail App Password (16 chars, may include spaces)', minLen: 16, maxLen: 64 },
-  'github-pat':         { description: 'GitHub Personal Access Token',                      minLen: 30, maxLen: 200 },
-  'telegram-bot-token': { description: 'Telegram Bot Token',                                minLen: 40, maxLen: 80 },
-  'sonarr-api-key':     { description: 'Sonarr API key',                                    minLen: 16, maxLen: 64 },
-  'radarr-api-key':     { description: 'Radarr API key',                                    minLen: 16, maxLen: 64 },
-  'openclaw-token':     { description: 'OpenClaw gateway token',                            minLen: 16, maxLen: 200 },
-  'openrouter-key':     { description: 'OpenRouter API key',                                minLen: 30, maxLen: 200 },
-  'anthropic-key':      { description: 'Anthropic API key',                                 minLen: 30, maxLen: 200 },
+  'gmail-app-password':     { description: 'Gmail App Password (16 chars, may include spaces)', minLen: 16, maxLen: 64 },
+  'github-pat':             { description: 'GitHub Personal Access Token',                      minLen: 30, maxLen: 200 },
+  'telegram-bot-token':     { description: 'Telegram Bot Token',                                minLen: 40, maxLen: 80 },
+  'sonarr-api-key':         { description: 'Sonarr API key',                                    minLen: 16, maxLen: 64 },
+  'radarr-api-key':         { description: 'Radarr API key',                                    minLen: 16, maxLen: 64 },
+  'openclaw-token':         { description: 'OpenClaw gateway token',                            minLen: 16, maxLen: 200 },
+  'openrouter-key':         { description: 'OpenRouter API key',                                minLen: 30, maxLen: 200 },
+  'anthropic-key':          { description: 'Anthropic API key',                                 minLen: 30, maxLen: 200 },
+  'wazuh-indexer-password':    { description: 'Wazuh Indexer password (OpenSearch on port 9200)',  minLen: 8,  maxLen: 200 },
+  'crowdsec-machine-password': { description: 'CrowdSec machine password (LAPI, used for /v1/alerts)',  minLen: 8,  maxLen: 200 },
+  'crowdsec-bouncer-api-key':  { description: 'CrowdSec bouncer API key (used for /v1/decisions)',     minLen: 30, maxLen: 64  },
 };
 
 // ---------- Mount ----------
@@ -160,6 +163,52 @@ export function mountSecurityRoutes(app: Express): void {
       const backend = await setCredential(name, trimmed);
       // Audit log: name and backend only. Never the value, never a fingerprint of it.
       console.log(`[security] credential set name=${name} backend=${backend} ts=${new Date().toISOString()}`);
+
+      // If the gmail password was just set, refresh the in-memory cache so the
+      // next loadGmailConfig() picks it up. Without this, the user would have to
+      // restart the server before email started using the new credential.
+      if (name === 'gmail-app-password') {
+        try {
+          const { initGmailCredential } = require('../gmail/config');
+          await initGmailCredential();
+        } catch (e: any) {
+          console.warn('[security] gmail cache refresh after credential write failed:', e?.message);
+        }
+      }
+
+      // Same pattern for Wazuh: refresh the in-memory password cache
+      // so the next wall poll picks up the new value without needing
+      // a server restart. The wazuh client falls back to a lazy init
+      // if this fails, so the worst case is one extra keychain read
+      // on the next poll — not a hard error.
+      if (name === 'wazuh-indexer-password') {
+        try {
+          const { initWazuhCredential } = require('./soc-clients/wazuh');
+          await initWazuhCredential();
+        } catch (e: any) {
+          console.warn('[security] wazuh cache refresh after credential write failed:', e?.message);
+        }
+      }
+
+      // Same pattern for CrowdSec.
+      if (name === 'crowdsec-machine-password') {
+        try {
+          const { initCrowdsecCredential } = require('./soc-clients/crowdsec');
+          await initCrowdsecCredential();
+        } catch (e: any) {
+          console.warn('[security] crowdsec machine cache refresh after credential write failed:', e?.message);
+        }
+      }
+
+      if (name === 'crowdsec-bouncer-api-key') {
+        try {
+          const { initCrowdsecBouncerKey } = require('./soc-clients/crowdsec');
+          await initCrowdsecBouncerKey();
+        } catch (e: any) {
+          console.warn('[security] crowdsec bouncer cache refresh after credential write failed:', e?.message);
+        }
+      }
+
       res.json({ ok: true, backend });
     } catch (e: any) {
       console.error(`[security] credential set failed name=${name}: ${e?.message}`);
