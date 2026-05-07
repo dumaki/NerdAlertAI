@@ -566,6 +566,20 @@ export async function sendDraft(configPath?: string, payload: Record<string, any
   }
 }
 
+// ── testGmailLogin ────────────────────────────────────────────────────────────
+// Convenience wrapper around testConfig() that returns just a boolean.
+// Called by the security panel's Test button via POST /api/setup/test/gmail.
+// Does NOT echo the credential or any account detail back to the caller —
+// the route returns only { ok: true|false } to the panel.
+export async function testGmailLogin(): Promise<boolean> {
+  try {
+    const result = await testConfig()
+    return !!(result.ok && result.imap?.authenticated && result.smtp?.verified)
+  } catch {
+    return false
+  }
+}
+
 // ── executePromoCleanup ───────────────────────────────────────────────────────
 // Moves coupons → Coupons, vinyl → Vinyl Preorders, misc → Review.
 // REQUIRES approved: true — will refuse without explicit approval.

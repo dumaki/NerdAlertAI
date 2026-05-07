@@ -21,6 +21,42 @@
 import fs   from 'fs'
 import path from 'path'
 import { GmailConfig } from '../types/gmail.types'
+import { getCredential } from '../security/credential-store'
+
+// ── Credential cache ─────────────────────────────────────────────────────────
+// The keychain read is async, but loadGmailConfig() is called synchronously
+// from many places. We resolve the credential ONCE at server startup (or after
+// a panel write) and cache it here. loadGmailConfig() then reads from the
+// cache without needing to await anything.
+//
+// If the cache is null, loadGmailConfig falls back to the JSON file —
+// keeping existing testers' setups working until they migrate via /setup.
+let cachedAppPassword: string | null = null
+
+/**
+ * Pull gmail-app-password from the credential store and cache it for
+ * synchronous reads. Call this once at server boot, and again any time
+ * the panel writes a new value.
+ *
+ * Returns true if a credential was found, false otherwise (in which case
+ * loadGmailConfig will fall back to the JSON file).
+ */
+export async function initGmailCredential(): Promise<boolean> {
+  try {
+    const value = await getCredential('gmail-app-password')
+    if (value) {
+      cachedAppPassword = value
+      return true
+    }
+    cachedAppPassword = null
+    return false
+  } catch {
+    // Keychain read failed (rare, e.g. user denied permission post-install).
+    // Fall through to JSON-file fallback.
+    cachedAppPassword = null
+    return false
+  }
+}
 
 // ── Default path — override via .env ─────────────────────────────────────────
 const DEFAULT_CONFIG_PATH =
@@ -64,6 +100,15 @@ export function loadGmailConfig(configPath?: string): GmailConfig {
     parsed = JSON.parse(raw) as GmailConfig
   } catch {
     throw new Error(`[gmail/config] Gmail config is not valid JSON: ${safePath}`)
+  }
+
+  // Prefer the cached credential from the keychain over whatever's in the
+  // JSON file. This is the migration path: testers can still have their
+  // App Password in email-gmail.json, but the moment they enter it via
+  // the /setup panel, the keychain copy takes precedence.
+  if (cachedAppPassword) {
+    parsed.auth = parsed.auth ?? ({} as any)
+    parsed.auth.appPassword = cachedAppPassword
   }
 
   validateGmailConfig(parsed, safePath)
