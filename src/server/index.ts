@@ -21,6 +21,7 @@ import { mountUIRoutes, broadcastCronStatus } from './ui-routes';
 import { mountSecurityRoutes } from './security-routes';
 import { startTelegram } from '../telegram';
 import { startCron, stopCron, setCronStatusEmitter } from '../cron';
+import { initGmailCredential } from '../gmail/config';
 
 // Catch unhandled promise rejections globally
 // The Anthropic SDK throws APIUserAbortError when the browser disconnects
@@ -58,6 +59,7 @@ app.use((req, res, next) => {
   if (req.method === 'GET' && req.path === '/') return next();
   if (req.method === 'GET' && req.path === '/favicon.ico') return next();
   if (req.method === 'GET' && req.path === '/api/cron/stream') return next();
+  if (req.method === 'GET' && req.path === '/api/soc/wall')    return next();
   if (req.method === 'GET' && req.path === '/api/setup/panel') return next();
   requireAuth(req, res, next);
 });
@@ -142,6 +144,16 @@ app.listen(SERVER_PORT, () => {
 
 startTelegram().catch((err: unknown) => {
     console.error('[Telegram] Failed to start:', err);
+  });
+
+  // Pull gmail-app-password from the keychain (or file backend) once at boot.
+  // After this resolves, loadGmailConfig() reads the cached value synchronously.
+  // Migration path: if the keychain has a value, it shadows the JSON file's
+  // copy; if not, the JSON file's password is used as before.
+  initGmailCredential().then(found => {
+    if (found) console.log('[NerdAlert] Gmail credential loaded from credential store');
+  }).catch((err: unknown) => {
+    console.error('[NerdAlert] initGmailCredential failed:', err);
   });
 
   startCron().catch((err: unknown) => {

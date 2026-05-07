@@ -27,6 +27,7 @@ import { detectIntent, prefetchTools, buildInjectedPrompt, type PrefetchResult }
 import { getAllJobs, getRecentRuns } from '../cron';
 import { saveSession, restoreSession, clearSession } from './session-store';
 import { scan, buildHaltMessage } from '../security/secret-scanner';
+import { pollAllMonitors, pollMonitorDetail, getMonitorMetadata, streamMonitorPolls } from './soc-wall';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -545,6 +546,93 @@ export function mountUIRoutes(app: Express): void {
       });
     } catch (err: any) {
       res.json({ ok: false, error: err.message ?? 'Cleanup failed' });
+    }
+  });
+
+  // ── GET /api/soc/wall — progressive monitor wall via SSE ──
+  //
+  // Streams the 3x3 monitor wall to the browser one tile at a time.
+  // Lifecycle:
+  //   1. UI opens an EventSource (auth via ?token=... query param,
+  //      since EventSource can't send custom headers — same trick
+  //      the cron stream uses).
+  //   2. Server emits `init` with monitor metadata (id/label/category)
+  //      so the UI can render tile shells with the right labels
+  //      immediately, in display order.
+  //   3. All 9 monitors poll in parallel. Each one fires a
+  //      `monitor_update` event the instant it settles — fast
+  //      tiles (Pi-hole) come back in 2–5s; slow tiles take
+  //      their full time without blocking anyone else.
+  //   4. When the slowest monitor returns, server emits `done`
+  //      with totalMs and closes the stream cleanly so the
+  //      EventSource doesn't auto-reconnect.
+  //
+  // BYPASSES THE AGENT (P7 — mechanical action). The model is
+  // way too expensive to use as a polling driver, and the wall
+  // doesn't need reasoning — just numbers and thresholds.
+  app.get('/api/soc/wall', async (req: Request, res: Response) => {
+    // EventSource auth: token via query param (browsers can't set
+    // custom headers on EventSource). Mirrors /api/cron/stream.
+    const token = (req.headers.authorization?.replace('Bearer ', '') || req.query.token) as string;
+    if (token !== process.env.SERVER_AUTH_TOKEN) {
+      res.status(401).end();
+      return;
+    }
+
+    res.setHeader('Content-Type',  'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection',    'keep-alive');
+    res.flushHeaders();
+
+    const startMs = Date.now();
+    let clientGone = false;
+    req.on('close', () => { clientGone = true; });
+
+    // Helper for typed event writes — don't try to write to a
+    // closed connection (EPIPE noise) and don't write past `done`.
+    const emit = (event: string, payload: Record<string, unknown>): void => {
+      if (clientGone) return;
+      res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+    };
+
+    // 1. Init — send tile metadata so the UI can render shells
+    emit('init', { monitors: getMonitorMetadata() });
+
+    try {
+      // 2. Stream each monitor as it settles
+      await streamMonitorPolls((state) => emit('monitor_update', state as unknown as Record<string, unknown>));
+
+      // 3. Done — close the connection cleanly so EventSource
+      //    doesn't trigger its auto-reconnect logic.
+      emit('done', {
+        totalMs:     Date.now() - startMs,
+        generatedAt: new Date().toISOString(),
+      });
+      if (!clientGone) res.end();
+
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      emit('wall_error', { message: msg });
+      if (!clientGone) res.end();
+    }
+  });
+
+  // ── GET /api/soc/monitor/:id — single-monitor detail view ─
+  // Fired when the user clicks a monitor in the wall. Returns
+  // the same headline state plus a free-form natural-language
+  // detail string for the expanded view (top items, recent
+  // events, etc). Also bypasses the agent.
+  app.get('/api/soc/monitor/:id', async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    try {
+      const result = await pollMonitorDetail(id);
+      if (!result) {
+        res.json({ ok: false, error: `Unknown monitor: ${id}` });
+        return;
+      }
+      res.json({ ok: true, ...result });
+    } catch (err: any) {
+      res.json({ ok: false, error: err.message ?? 'Detail fetch failed' });
     }
   });
 

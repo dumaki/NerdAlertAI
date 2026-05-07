@@ -1422,6 +1422,317 @@
       letter-spacing: 3px;
     }
 
+    /* ==========================================================
+       SOC MONITOR WALL
+       Sherman's 3x3 surveillance station.
+       Dark grey bezels, dark phosphor screens, scanlines, status LEDs.
+       ========================================================== */
+
+    .soc-wall-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 8px;
+      letter-spacing: 2px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    .soc-refresh-btn {
+      font-family: var(--font-mono);
+      font-size: 8px;
+      letter-spacing: 1px;
+      color: var(--text-dim);
+      background: transparent;
+      border: 1px solid var(--border);
+      padding: 3px 8px;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      border-radius: 1px;
+    }
+    .soc-refresh-btn:hover    { color: var(--cyan); border-color: var(--cyan-mid); }
+    .soc-refresh-btn:disabled { opacity: 0.4; cursor: wait; }
+
+    .soc-wall {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      padding-bottom: 8px;
+    }
+
+    /* Individual monitor unit — dark grey bezel + thin black inner outline */
+    .soc-monitor {
+      position: relative;
+      background: linear-gradient(180deg, #2a2a2a 0%, #1a1a1a 50%, #0a0a0a 100%);
+      border: 1px solid #000;
+      border-radius: 3px;
+      padding: 4px;
+      cursor: pointer;
+      transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+      /* Top-edge highlight = reflected room light. Subtle but sells the 3D feel. */
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.06),
+        0 2px 4px rgba(0,0,0,0.6);
+    }
+
+    .soc-monitor:hover {
+      transform: translateY(-2px);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.08),
+        0 4px 10px rgba(0,0,0,0.7);
+    }
+
+    /* The screen itself — phosphor color set per status below. */
+    .soc-screen {
+      position: relative;
+      border: 1px solid #000;
+      border-radius: 1px;
+      padding: 6px 8px 8px;
+      font-family: var(--font-mono);
+      overflow: hidden;
+      min-height: 84px;
+    }
+
+    /* Soft inner shadow — gives the screen depth (not flat-painted-on). */
+    .soc-screen::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      box-shadow: inset 0 0 14px rgba(0,0,0,0.55);
+      pointer-events: none;
+      border-radius: 1px;
+    }
+
+    /* Per-screen scanline overlay — stronger than the page-wide one. */
+    .soc-screen::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent 0px,
+        transparent 1px,
+        rgba(0,0,0,0.18) 1px,
+        rgba(0,0,0,0.18) 2px
+      );
+      pointer-events: none;
+    }
+
+    /* Phosphor color sets — dark screen, bright text. */
+    .soc-monitor.status-ok .soc-screen   { background: #0e1f0e; color: #7fff7f; }
+    .soc-monitor.status-warn .soc-screen { background: #1f1808; color: #ffb84d; }
+    .soc-monitor.status-err .soc-screen  { background: #1a0808; color: #ff6b6b; }
+    .soc-monitor.status-idle .soc-screen { background: #0e0e0e; color: #888; }
+
+    /* No signal — black screen, dim grey text */
+    .soc-monitor.status-no-signal .soc-screen,
+    .soc-monitor.status-booting .soc-screen {
+      background: #050505;
+      color: #555;
+    }
+
+    /* Subtle outer glow when active. Red gets an attention pulse. */
+    .soc-monitor.status-ok   { outline: 1px solid rgba(127,255,127,0.05); }
+    .soc-monitor.status-warn { outline: 1px solid rgba(255,184,77,0.06); }
+    .soc-monitor.status-err  {
+      outline: 1px solid rgba(255,107,107,0.10);
+      animation: monitor-alert 2.4s infinite;
+    }
+
+    @keyframes monitor-alert {
+      0%, 100% {
+        box-shadow:
+          inset 0 1px 0 rgba(255,255,255,0.06),
+          0 2px 4px rgba(0,0,0,0.6);
+      }
+      50% {
+        box-shadow:
+          inset 0 1px 0 rgba(255,255,255,0.06),
+          0 2px 4px rgba(0,0,0,0.6),
+          0 0 14px rgba(255,107,107,0.28);
+      }
+    }
+
+    .soc-screen-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 8px;
+      font-weight: bold;
+      letter-spacing: 1.5px;
+      margin-bottom: 6px;
+      position: relative;
+      z-index: 2;
+    }
+
+    /* Status LED — inherits color from screen so it matches phosphor. */
+    .soc-screen-led {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 4px currentColor;
+      flex-shrink: 0;
+    }
+    .soc-monitor.status-err .soc-screen-led {
+      animation: led-blink 0.85s infinite;
+    }
+    @keyframes led-blink {
+      0%, 65%   { opacity: 1; }
+      80%, 100% { opacity: 0.15; }
+    }
+
+    .soc-screen-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      font-size: 9px;
+      letter-spacing: 0.5px;
+      position: relative;
+      z-index: 2;
+      margin-bottom: 2px;
+    }
+    .soc-screen-row .label { opacity: 0.65; }
+    .soc-screen-row .value {
+      font-weight: bold;
+      font-size: 11px;
+    }
+
+    .soc-screen-computed {
+      font-size: 13px;
+      font-weight: bold;
+      text-align: right;
+      margin-top: 4px;
+      opacity: 0.85;
+      position: relative;
+      z-index: 2;
+    }
+
+    /* NO SIGNAL state — stays in character for an old surveillance setup. */
+    .soc-no-signal {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      letter-spacing: 2px;
+      min-height: 60px;
+      color: #555;
+      position: relative;
+      z-index: 2;
+      text-align: center;
+      padding: 6px 4px;
+      line-height: 1.4;
+      gap: 4px;
+    }
+    .soc-no-signal-reason {
+      font-size: 8px;
+      opacity: 0.6;
+      letter-spacing: 1px;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* BOOTING — scanline sweep on first load. */
+    .soc-booting {
+      position: relative;
+      z-index: 2;
+      font-size: 9px;
+      letter-spacing: 2px;
+      color: #4a8a4a;
+      text-align: center;
+      padding: 28px 0;
+      overflow: hidden;
+    }
+    .soc-booting::before {
+      content: '';
+      position: absolute;
+      left: 0; right: 0; top: -2px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, rgba(127,255,127,0.55), transparent);
+      animation: booting-sweep 1.6s linear infinite;
+    }
+    @keyframes booting-sweep {
+      0%   { top: -2px; }
+      100% { top: 100%; }
+    }
+
+    .soc-wall-meta {
+      font-size: 8px;
+      color: var(--text-muted);
+      letter-spacing: 1px;
+      margin-top: 8px;
+      text-align: right;
+    }
+
+    /* Detail view — expanded single monitor + natural-language detail. */
+    .soc-detail {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .soc-detail-back {
+      align-self: flex-start;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      color: var(--text-dim);
+      background: transparent;
+      border: 1px solid var(--border);
+      padding: 5px 10px;
+      cursor: pointer;
+      border-radius: 1px;
+      transition: all var(--transition-fast);
+    }
+    .soc-detail-back:hover {
+      color: var(--cyan);
+      border-color: var(--cyan-mid);
+    }
+    .soc-detail-monitor .soc-monitor {
+      cursor: default;
+    }
+    .soc-detail-monitor .soc-monitor:hover {
+      transform: none;
+    }
+    .soc-detail-loading {
+      font-size: 10px;
+      color: var(--text-muted);
+      letter-spacing: 1px;
+      padding: 8px 0;
+      text-align: center;
+    }
+    .soc-detail-body {
+      font-size: 11px;
+      color: var(--text);
+      line-height: 1.7;
+      white-space: pre-wrap;
+      border-top: 1px solid var(--border);
+      padding-top: 12px;
+      max-height: 320px;
+      overflow-y: auto;
+    }
+    .soc-ask-btn {
+      width: 100%;
+      padding: 10px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      color: var(--cyan);
+      background: var(--cyan-dim);
+      border: 1px solid var(--cyan-mid);
+      cursor: pointer;
+      border-radius: 1px;
+      transition: all var(--transition-fast);
+      margin-top: 4px;
+    }
+    .soc-ask-btn:hover {
+      background: rgba(0,255,204,0.18);
+      box-shadow: 0 0 12px var(--cyan-glow);
+    }
+
     /* Cron sidebar panel */
 .cron-panel {
   border-top: 1px solid var(--border);
@@ -2123,6 +2434,13 @@
   function switchView(view, navBtn) {
     currentView = view;
 
+    // Always shut down the SOC wall SSE when switching views.
+    // loadSOCWall() opens a fresh one if we're switching INTO
+    // soc, so this is a no-op there. For everything else, this
+    // is the single guarantee that we never leak a stream when
+    // the user clicks Email/Chat/etc while the wall is mid-poll.
+    closeSOCStream();
+
     // Update nav button active state
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     if (navBtn) navBtn.classList.add('active');
@@ -2138,7 +2456,7 @@
 
     // Open or close the panel based on view
     if (view === 'email')    { openPanel('email'); loadEmailPanel(); return; }
-    if (view === 'soc')      { sendMessage('give me a current SOC status summary — check wazuh alerts, crowdsec decisions, fail2ban recent bans, and pihole summary'); return; }
+    if (view === 'soc')      { openPanel('soc'); loadSOCWall(); return; }
     if (view === 'memory')   { openPanel('memory');   return; }
     if (view === 'settings') { openPanel('settings'); return; }
     if (view === 'chat')     { closePanel(); }
@@ -2177,6 +2495,7 @@
   }
 
   function closePanel() {
+    closeSOCStream(); // close any active wall stream when the panel closes
     document.getElementById('app').classList.remove('panel-open');
     // Reset nav to chat
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
@@ -2295,40 +2614,6 @@
         </div>
       `;
     }
-  }
-
-  // SOC panel — shows security service status
-  function getSOCPanelHTML() {
-    return `
-      <div style="font-size:9px;color:var(--red);letter-spacing:1px;margin-bottom:10px;text-shadow:0 0 8px var(--red)">
-        ⚠ 1 ACTIVE ALERT
-      </div>
-      <div class="soc-alert">
-        <div class="soc-from">Fail2ban // SSH</div>
-        <div class="soc-subject">3 failed login attempts — 192.168.1.44</div>
-      </div>
-      <div style="font-size:9px;color:var(--text-muted);letter-spacing:1px;margin:12px 0 8px">SERVICES</div>
-      <div class="soc-service">
-        <div class="service-dot ok"></div>
-        <div class="service-name">Wazuh</div>
-        <div class="service-meta">All clear</div>
-      </div>
-      <div class="soc-service">
-        <div class="service-dot ok"></div>
-        <div class="service-name">Pi-hole</div>
-        <div class="service-meta">23.4% blocked</div>
-      </div>
-      <div class="soc-service">
-        <div class="service-dot ok"></div>
-        <div class="service-name">CrowdSec</div>
-        <div class="service-meta">2 IPs banned today</div>
-      </div>
-      <div class="soc-service">
-        <div class="service-dot ok"></div>
-        <div class="service-name">Suricata</div>
-        <div class="service-meta">No alerts</div>
-      </div>
-    `;
   }
 
   // Memory panel — placeholder for Phase 5b
@@ -3010,6 +3295,323 @@
     div.appendChild(document.createTextNode(str));
     return div.innerHTML;
   }
+  // ── SOC Monitor Wall ──────────────────────────────────────
+  // Sherman's 3x3 surveillance station. Polls /api/soc/wall on
+  // open and on manual refresh. Click a monitor to expand to
+  // detail view. Bypasses the agent entirely — mechanical action.
+
+  const SOC_WALL_STATE = {
+    monitors:    [],     // last known state per tile (cached for back-from-detail)
+    expandedId:  null,   // monitor id currently expanded, or null
+    eventSource: null,   // active SSE stream, or null when idle
+  };
+
+  // Returns the panel shell. The wall starts empty — the `init`
+  // event from /api/soc/wall fills in the 9 tile shells with
+  // proper labels and IDs the moment the stream connects.
+  function getSOCPanelHTML() {
+    return `
+      <div class="soc-wall-header">
+        <span>MONITOR WALL // 3 × 3</span>
+        <button class="soc-refresh-btn" id="soc-refresh-btn" onclick="loadSOCWall()">↻ REFRESH</button>
+      </div>
+      <div class="soc-wall" id="soc-wall">
+        <!-- Filled by the init event from /api/soc/wall -->
+      </div>
+      <div class="soc-wall-meta" id="soc-wall-meta">CONNECTING…</div>
+    `;
+  }
+
+  // Closes any open wall SSE stream. Idempotent — safe to call
+  // when there's no stream. Called whenever the user leaves the
+  // SOC view, expands a monitor (wall is hidden), or kicks off
+  // a new poll via REFRESH.
+  function closeSOCStream() {
+    if (SOC_WALL_STATE.eventSource) {
+      SOC_WALL_STATE.eventSource.close();
+      SOC_WALL_STATE.eventSource = null;
+    }
+  }
+
+  // Opens an SSE stream to /api/soc/wall and wires up event
+  // handlers that update tiles individually as monitors settle.
+  // Lifecycle: closeSOCStream → EventSource open → init (renders
+  // 9 BOOTING shells) → monitor_update events arriving in finish
+  // order → done event closes the stream. Per-tile DOM swaps
+  // mean fast monitors don't wait for slow ones, and slow ones
+  // don't reset their siblings' boot animations.
+  function loadSOCWall() {
+    closeSOCStream(); // start fresh — no double-stream
+
+    const btn  = document.getElementById('soc-refresh-btn');
+    const meta = document.getElementById('soc-wall-meta');
+    if (btn)  { btn.disabled = true; btn.textContent = '⟳ POLLING…'; }
+    if (meta) meta.textContent = 'CONNECTING…';
+
+    console.log('[SOC Wall] Opening SSE stream /api/soc/wall');
+
+    // EventSource auth: token via query param (browsers can't
+    // attach custom headers to EventSource). The route exempts
+    // /api/soc/wall from the auth middleware and validates the
+    // token inline. Same pattern as /api/cron/stream.
+    const url = `${BASE_URL}/api/soc/wall?token=${encodeURIComponent(CFG.token)}`;
+    const es  = new EventSource(url);
+    SOC_WALL_STATE.eventSource = es;
+
+    let totalCount    = 0;
+    let resolvedCount = 0;
+    const startTime   = Date.now();
+    let receivedDone  = false;
+
+    es.addEventListener('init', (evt) => {
+      try {
+        const data = JSON.parse(evt.data);
+        totalCount = data.monitors.length;
+
+        // Seed cached state with booting placeholders so the
+        // detail view's cached fallback never shows stale data.
+        SOC_WALL_STATE.monitors = data.monitors.map((m) => ({
+          id:       m.id,
+          label:    m.label,
+          category: m.category,
+          status:   'booting',
+          pollMs:   0,
+        }));
+
+        const wall = document.getElementById('soc-wall');
+        if (wall) {
+          wall.innerHTML = SOC_WALL_STATE.monitors.map(renderMonitorTile).join('');
+        }
+        if (meta) meta.textContent = `POLLING ${totalCount} MONITORS…`;
+        console.log(`[SOC Wall] init — ${totalCount} monitors`);
+      } catch (err) {
+        console.error('[SOC Wall] init parse failed:', err);
+      }
+    });
+
+    es.addEventListener('monitor_update', (evt) => {
+      try {
+        const state = JSON.parse(evt.data);
+        resolvedCount++;
+
+        // Update cached state for this monitor only
+        SOC_WALL_STATE.monitors = SOC_WALL_STATE.monitors.map((m) =>
+          m.id === state.id ? state : m
+        );
+
+        // Replace just this tile in place — others keep their
+        // booting animation running uninterrupted.
+        const existing = document.getElementById(`soc-tile-${state.id}`);
+        if (existing) {
+          const tmp = document.createElement('div');
+          tmp.innerHTML = renderMonitorTile(state).trim();
+          const newEl = tmp.firstElementChild;
+          if (newEl) existing.replaceWith(newEl);
+        }
+
+        if (meta) {
+          meta.textContent = `POLLED ${resolvedCount}/${totalCount} • ${Date.now() - startTime}MS`;
+        }
+        console.log(`[SOC Wall] update — ${state.id} (${state.status}, ${state.pollMs}ms)`);
+      } catch (err) {
+        console.error('[SOC Wall] monitor_update parse failed:', err);
+      }
+    });
+
+    es.addEventListener('done', (evt) => {
+      try {
+        receivedDone = true;
+        const data = JSON.parse(evt.data);
+        const t = new Date(data.generatedAt).toLocaleTimeString('en-US', { hour12: false });
+        if (meta) meta.textContent = `LAST POLL ${t} • ${data.totalMs}MS`;
+        console.log(`[SOC Wall] done in ${data.totalMs}ms`);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '↻ REFRESH'; }
+        closeSOCStream();
+      }
+    });
+
+    es.addEventListener('wall_error', (evt) => {
+      try {
+        const data = JSON.parse(evt.data);
+        console.error('[SOC Wall] Server error:', data.message);
+        if (meta) meta.textContent = `ERROR: ${data.message}`;
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '↻ REFRESH'; }
+        closeSOCStream();
+      }
+    });
+
+    // EventSource fires `error` on any disconnect — including the
+    // normal close after `done`. Only treat it as a real error if
+    // we hadn't already seen `done`.
+    es.onerror = () => {
+      if (!receivedDone && SOC_WALL_STATE.eventSource === es) {
+        console.error('[SOC Wall] SSE connection error');
+        if (meta) meta.textContent = 'CONNECTION LOST';
+        if (btn) { btn.disabled = false; btn.textContent = '↻ REFRESH'; }
+        closeSOCStream();
+      }
+    };
+  }
+
+  // Renders one monitor tile. Used both inside the 3x3 wall and
+  // at full panel width inside the detail view (the CSS does the
+  // right thing in both contexts — the tile sizes to its container).
+  //
+  // Always emits a tile id of `soc-tile-${m.id}` so the streaming
+  // path can locate and replace individual tiles in place without
+  // re-rendering the whole grid (which would reset siblings' boot
+  // animations). Booting tiles aren't clickable.
+  function renderMonitorTile(m) {
+    const statusClass = `status-${m.status}`;
+    const clickable   = m.status !== 'booting';
+
+    let inner;
+    if (m.status === 'booting') {
+      inner = `<div class="soc-booting">BOOTING…</div>`;
+    } else if (m.status === 'no-signal') {
+      const reason = m.error
+        ? `<div class="soc-no-signal-reason">${escapeHTML(m.error)}</div>`
+        : '';
+      inner = `<div class="soc-no-signal"><div>▤ NO SIGNAL ▤</div>${reason}</div>`;
+    } else if (!m.metrics) {
+      inner = `<div class="soc-no-signal"><div>▤ NO SIGNAL ▤</div></div>`;
+    } else {
+      const computed = m.metrics.computed
+        ? `<div class="soc-screen-computed">${escapeHTML(m.metrics.computed)}</div>`
+        : '';
+      inner = `
+        <div class="soc-screen-row">
+          <span class="label">${escapeHTML(m.metrics.primaryLabel)}</span>
+          <span class="value">${escapeHTML(m.metrics.primaryValue)}</span>
+        </div>
+        <div class="soc-screen-row">
+          <span class="label">${escapeHTML(m.metrics.secondaryLabel)}</span>
+          <span class="value">${escapeHTML(m.metrics.secondaryValue)}</span>
+        </div>
+        ${computed}
+      `;
+    }
+
+    const onclick     = clickable ? `onclick="expandSOCMonitor('${m.id}')"` : '';
+    const titleSuffix = clickable ? ' — click for details' : ' — booting';
+
+    return `
+      <div id="soc-tile-${m.id}" class="soc-monitor ${statusClass}" ${onclick} title="${escapeHTML(m.label)}${titleSuffix}">
+        <div class="soc-screen">
+          <div class="soc-screen-header">
+            <span>${escapeHTML(m.label)}</span>
+            <span class="soc-screen-led"></span>
+          </div>
+          ${inner}
+        </div>
+      </div>
+    `;
+  }
+
+  // Click → single-monitor detail view. The monitor's headline
+  // block stays at the top (re-rendered with fresh state from the
+  // detail call), then a natural-language summary, then an "ask
+  // <agent> about this" button that returns to chat in character.
+  async function expandSOCMonitor(id) {
+    closeSOCStream(); // stop wall poll while user is reading detail
+    SOC_WALL_STATE.expandedId = id;
+    const body = document.getElementById('panel-body');
+    if (!body) return;
+
+    const cached = SOC_WALL_STATE.monitors.find(m => m.id === id);
+    console.log(`[SOC Wall] Expanding "${id}"`);
+
+    body.innerHTML = `
+      <div class="soc-detail">
+        <button class="soc-detail-back" onclick="collapseSOCMonitor()">← BACK TO WALL</button>
+        <div class="soc-detail-monitor" id="soc-detail-monitor">
+          ${cached ? renderMonitorTile(cached) : ''}
+        </div>
+        <div class="soc-detail-loading" id="soc-detail-loading">FETCHING DETAIL…</div>
+        <div class="soc-detail-body" id="soc-detail-body" style="display:none"></div>
+        <button class="soc-ask-btn" onclick="askAgentAbout('${id}')">
+          ASK ${escapeHTML(activeAgentName.toUpperCase())} ABOUT THIS
+        </button>
+      </div>
+    `;
+
+    try {
+      const res  = await fetch(`${BASE_URL}/api/soc/monitor/${id}`, {
+        headers: { 'Authorization': `Bearer ${CFG.token}` },
+      });
+      const data = await res.json();
+
+      const loading       = document.getElementById('soc-detail-loading');
+      const detailBody    = document.getElementById('soc-detail-body');
+      const detailMonitor = document.getElementById('soc-detail-monitor');
+
+      if (loading) loading.style.display = 'none';
+
+      if (!data.ok) {
+        if (detailBody) {
+          detailBody.style.display = 'block';
+          detailBody.innerHTML = `<span style="color:var(--red)">⚠ ${escapeHTML(data.error)}</span>`;
+        }
+        return;
+      }
+
+      // Refresh the monitor block with the latest state from the detail call
+      if (detailMonitor && data.monitor) {
+        SOC_WALL_STATE.monitors = SOC_WALL_STATE.monitors.map(m =>
+          m.id === id ? data.monitor : m
+        );
+        detailMonitor.innerHTML = renderMonitorTile(data.monitor);
+      }
+
+      if (detailBody) {
+        detailBody.style.display = 'block';
+        detailBody.textContent   = data.detail || '(no details available)';
+      }
+    } catch (err) {
+      console.error('[SOC Wall] Detail fetch failed:', err);
+      const loading = document.getElementById('soc-detail-loading');
+      if (loading) loading.textContent = '⚠ Could not reach server.';
+    }
+  }
+
+  // BACK from detail — restore the wall from cached state.
+  // We deliberately don't auto-restart the SSE stream on every
+  // back-press; each fresh poll is real work on the gateway side.
+  // User can hit REFRESH if they want fresh data.
+  function collapseSOCMonitor() {
+    SOC_WALL_STATE.expandedId = null;
+    const body = document.getElementById('panel-body');
+    if (!body) return;
+    body.innerHTML = getSOCPanelHTML();
+
+    if (SOC_WALL_STATE.monitors.length) {
+      const wall = document.getElementById('soc-wall');
+      if (wall) {
+        wall.innerHTML = SOC_WALL_STATE.monitors.map(renderMonitorTile).join('');
+      }
+      const meta = document.getElementById('soc-wall-meta');
+      if (meta) meta.textContent = '(CACHED) • CLICK REFRESH FOR NEW POLL';
+    }
+  }
+
+  // Switches back to chat and asks the active personality for a
+  // deeper read on the selected service. The personality fires
+  // through the normal /chat/stream path so Sherman/Brett/etc.
+  // narrate in character. On the OpenRouter path, the SOC keyword
+  // detection in intent-prefetch.ts will inject real data.
+  function askAgentAbout(id) {
+    const monitor = SOC_WALL_STATE.monitors.find(m => m.id === id);
+    const label   = monitor?.label ?? id.toUpperCase();
+    switchView('chat', null);
+    setTimeout(() => {
+      sendMessage(`give me a deeper read on ${label} — what's notable in the last 24 hours and is there anything I should be looking at?`);
+    }, 100);
+  }
+
+  // ── /SOC Monitor Wall ─────────────────────────────────────
+
   // ── Cron sidebar ───────────────────────────────────────────
 const cronState = {
   jobs:      [],
