@@ -105,6 +105,11 @@ const ALLOWED: Record<string, { description: string; minLen: number; maxLen: num
   'wazuh-indexer-password':    { description: 'Wazuh Indexer password (OpenSearch on port 9200)',  minLen: 8,  maxLen: 200 },
   'crowdsec-machine-password': { description: 'CrowdSec machine password (LAPI, used for /v1/alerts)',  minLen: 8,  maxLen: 200 },
   'crowdsec-bouncer-api-key':  { description: 'CrowdSec bouncer API key (used for /v1/decisions)',     minLen: 30, maxLen: 64  },
+  'loki-basic-user':           { description: 'Loki basic-auth username (only if Loki is fronted by nginx/Authelia)', minLen: 1,  maxLen: 128 },
+  'loki-basic-pass':           { description: 'Loki basic-auth password (paired with loki-basic-user)', minLen: 1,  maxLen: 200 },
+  'influxdb-api-token':        { description: 'InfluxDB v2 API token (read-only on the configured org)', minLen: 60, maxLen: 200 },
+  'pfsense-api-key':           { description: 'pfSense REST API v2 key (Services → REST API → Keys)', minLen: 16, maxLen: 200 },
+  'ntopng-password':           { description: 'ntopng login password (paired with NTOPNG_USERNAME env var)', minLen: 1,  maxLen: 200 },
 };
 
 // ---------- Mount ----------
@@ -206,6 +211,74 @@ export function mountSecurityRoutes(app: Express): void {
           await initCrowdsecBouncerKey();
         } catch (e: any) {
           console.warn('[security] crowdsec bouncer cache refresh after credential write failed:', e?.message);
+        }
+      }
+
+      // Loki + InfluxDB direct-client cache refresh — same pattern
+      // as Wazuh and CrowdSec. Loki credentials are optional (LAN
+      // setups typically run unauthenticated), but if an operator
+      // has put a reverse proxy in front of Loki and writes new
+      // basic-auth values, we want the next wall poll to pick them
+      // up without a server restart.
+      if (name === 'loki-basic-user') {
+        try {
+          const { initLokiBasicUser } = require('./soc-clients/loki');
+          await initLokiBasicUser();
+        } catch (e: any) {
+          console.warn('[security] loki basic-user cache refresh after credential write failed:', e?.message);
+        }
+        // Zeek shares Loki's basic-auth credentials. Refresh its
+        // cache too so the next wall poll picks up the new value
+        // without a server restart.
+        try {
+          const { initZeekCredential } = require('./soc-clients/zeek');
+          await initZeekCredential();
+        } catch (e: any) {
+          console.warn('[security] zeek cache refresh after loki-basic-user write failed:', e?.message);
+        }
+      }
+
+      if (name === 'loki-basic-pass') {
+        try {
+          const { initLokiBasicPass } = require('./soc-clients/loki');
+          await initLokiBasicPass();
+        } catch (e: any) {
+          console.warn('[security] loki basic-pass cache refresh after credential write failed:', e?.message);
+        }
+        // Zeek also re-reads Loki's pass on this write — same
+        // reason as the user case above.
+        try {
+          const { initZeekCredential } = require('./soc-clients/zeek');
+          await initZeekCredential();
+        } catch (e: any) {
+          console.warn('[security] zeek cache refresh after loki-basic-pass write failed:', e?.message);
+        }
+      }
+
+      if (name === 'influxdb-api-token') {
+        try {
+          const { initInfluxdbCredential } = require('./soc-clients/influxdb');
+          await initInfluxdbCredential();
+        } catch (e: any) {
+          console.warn('[security] influxdb cache refresh after credential write failed:', e?.message);
+        }
+      }
+
+      if (name === 'pfsense-api-key') {
+        try {
+          const { initPfsenseCredential } = require('./soc-clients/pfsense');
+          await initPfsenseCredential();
+        } catch (e: any) {
+          console.warn('[security] pfsense cache refresh after credential write failed:', e?.message);
+        }
+      }
+
+      if (name === 'ntopng-password') {
+        try {
+          const { initNtopngCredential } = require('./soc-clients/ntopng');
+          await initNtopngCredential();
+        } catch (e: any) {
+          console.warn('[security] ntopng cache refresh after credential write failed:', e?.message);
         }
       }
 

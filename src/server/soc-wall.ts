@@ -30,9 +30,14 @@
 // ============================================================
 
 import { queryOpenClaw } from '../tools/builtin/soc-client';
-import { getPiholeWallState } from './soc-clients/pihole';
-import { getWazuhWallState }  from './soc-clients/wazuh';
+import { getPiholeWallState }   from './soc-clients/pihole';
+import { getWazuhWallState }    from './soc-clients/wazuh';
 import { getCrowdsecWallState } from './soc-clients/crowdsec';
+import { getLokiWallState }     from './soc-clients/loki';
+import { getInfluxdbWallState } from './soc-clients/influxdb';
+import { getPfsenseWallState }  from './soc-clients/pfsense';
+import { getNtopngWallState }   from './soc-clients/ntopng';
+import { getZeekWallState }     from './soc-clients/zeek';
 
 // ── Public types ─────────────────────────────────────────────
 
@@ -137,59 +142,40 @@ const MONITORS: MonitorConfig[] = [
 
   // ── Row 2 — Network ──────────────────────────────────────
   {
-    id:       'pfsense',
-    label:    'PFSENSE',
-    category: 'Network',
-    prompt:
-      'Use the pfSense pfsense_get_gateway_status tool. Count gateways that are up and gateways that are down. ' +
-      'Average the RTT in milliseconds across all up gateways. ' +
-      'Reply with ONLY this format on one line, no other text: ' +
-      'UP=<integer> DOWN=<integer> RTT=<float>',
-    parse: (raw) => {
-      const up   = pickInt(raw, 'UP');
-      const down = pickInt(raw, 'DOWN');
-      const rtt  = pickFloat(raw, 'RTT');
-      if (up === null || down === null) return null;
-      const status: MonitorStatus =
-        down > 0      ? 'err'  :
-        (rtt ?? 0) > 100 ? 'warn' :
-                            'ok';
-      return {
-        metrics: {
-          primaryLabel:   'GATEWAYS',
-          primaryValue:   `${up} UP`,
-          secondaryLabel: 'DOWN',
-          secondaryValue: formatInt(down),
-          computed:       rtt !== null ? `${rtt.toFixed(0)}MS` : undefined,
-        },
-        status,
-      };
-    },
+    id:           'pfsense',
+    label:        'PFSENSE',
+    category:     'Network',
+    // Sixth OpenClaw migration. Talks directly to pfREST v2 at
+    // /api/v2/status/gateways with X-API-Key auth. Self-signed
+    // TLS handled via Node stdlib https.Agent (same pattern as
+    // wazuh.ts).
+    //
+    // Tile shape unchanged from the OpenClaw-prompted version:
+    // GATEWAYS "<N> UP" + DOWN count + computed average RTT.
+    // Threshold logic also unchanged: down>0 → err, rtt>100ms
+    // → warn, else ok. Direct path means the answer arrives in
+    // tens of milliseconds rather than the 5-25s OpenClaw was
+    // adding for a JSON parse.
+    // See src/server/soc-clients/pfsense.ts.
+    directClient: getPfsenseWallState,
   },
   {
-    id:       'ntopng',
-    label:    'NTOPNG',
-    category: 'Network',
-    prompt:
-      'Use the NTopNG ntopng_get_interface_stats tool. Sum across all interfaces. ' +
-      'Reply with ONLY this format on one line, no other text: ' +
-      'PPS=<integer> MBPS=<float>',
-    parse: (raw) => {
-      const pps  = pickInt(raw, 'PPS');
-      const mbps = pickFloat(raw, 'MBPS');
-      if (pps === null || mbps === null) return null;
-      // No real threshold — traffic is just traffic. Keep ok unless
-      // someone configures a high-water mark later.
-      return {
-        metrics: {
-          primaryLabel:   'PPS',
-          primaryValue:   formatInt(pps),
-          secondaryLabel: 'MBPS',
-          secondaryValue: mbps.toFixed(1),
-        },
-        status: 'ok',
-      };
-    },
+    id:           'ntopng',
+    label:        'NTOPNG',
+    category:     'Network',
+    // Seventh OpenClaw migration. Talks directly to ntopng's
+    // REST v2 endpoints with cookie-based session auth (POST
+    // /authorize.html → capture cookie → GET /lua/rest/v2/...
+    // → GET /lua/logout.lua). One auth round trip per poll;
+    // sessions are never cached across polls. See the MCP at
+    // openclaw-pc:~/nerdalert/openclaw-export/NTopNG-MCP for
+    // the same flow in Python.
+    //
+    // Tile shape unchanged from the OpenClaw-prompted version:
+    // PPS (packets/sec) and MBPS (megabits/sec), summed across
+    // every active interface (ifid 1..15 scanned).
+    // See src/server/soc-clients/ntopng.ts.
+    directClient: getNtopngWallState,
   },
   {
     id:       'nmap',
@@ -212,75 +198,68 @@ const MONITORS: MonitorConfig[] = [
 
   // ── Row 3 — Logs / Data ──────────────────────────────────
   {
-    id:       'fail2ban',
-    label:    'FAIL2BAN',
-    category: 'Logs/Data',
-    prompt:
-      'Use the Fail2ban get_fail2ban_status tool, and get_recent_bans for the past 24 hours. ' +
-      'Reply with ONLY this format on one line, no other text: ' +
-      'JAILS=<integer> BANS=<integer>',
-    parse: (raw) => {
-      const jails = pickInt(raw, 'JAILS');
-      const bans  = pickInt(raw, 'BANS');
-      if (jails === null || bans === null) return null;
-      const status: MonitorStatus =
-        bans > 50 ? 'warn' :
-                    'ok';
-      return {
-        metrics: {
-          primaryLabel:   'JAILS',
-          primaryValue:   formatInt(jails),
-          secondaryLabel: 'BANS',
-          secondaryValue: formatInt(bans),
-          computed:       '24H',
-        },
-        status,
-      };
-    },
+    id:           'zeek',
+    label:        'ZEEK',
+    category:     'Logs/Data',
+    // Eighth wall tile — replaces Fail2ban per v0.5.8 §19 wall
+    // composition v2. Zeek doesn't have its own API endpoint; it
+    // ships logs into Loki tagged with job="zeek". This client is
+    // a *semantic layer* over Loki — three parallel LogQL queries
+    // (notices, weird, total heartbeat) with Promise.allSettled
+    // graceful degradation. Reuses Loki's auth (loki-basic-user /
+    // loki-basic-pass via /setup), so no new ALLOWED catalog
+    // entries needed in security-routes.ts.
+    //
+    // Tile shape: NOTICES (1h, drives status) + WEIRD (1h,
+    // informational) + computed '1H' window indicator. NO SIGNAL
+    // when the heartbeat query (total {job="zeek"} count) returns
+    // zero — that means the shipping pipeline is broken, since any
+    // active network produces conn entries continuously.
+    //
+    // Pattern note: this is the first "semantic layer" direct
+    // client (queries another direct client's upstream rather than
+    // a fresh service). Suricata via path 1 (syslog → Loki) and
+    // OpenCanary via syslog → Loki will follow the same shape.
+    // See src/server/soc-clients/zeek.ts.
+    directClient: getZeekWallState,
   },
   {
-    id:       'loki',
-    label:    'LOKI',
-    category: 'Logs/Data',
-    prompt:
-      'Use the Loki loki_service_logs tool with service="syslog" and hours=1 to count log lines. ' +
-      'Reply with ONLY this format on one line, no other text: ' +
-      'LINES=<integer>',
-    parse: (raw) => {
-      const lines = pickInt(raw, 'LINES');
-      if (lines === null) return null;
-      return {
-        metrics: {
-          primaryLabel:   'LINES',
-          primaryValue:   formatInt(lines),
-          secondaryLabel: 'WINDOW',
-          secondaryValue: '1H',
-        },
-        status: 'ok',
-      };
-    },
+    id:           'loki',
+    label:        'LOKI',
+    category:     'Logs/Data',
+    // Fourth OpenClaw migration. Talks directly to Loki's
+    // /loki/api/v1/labels and an instant LogQL query for hourly
+    // volume — no gateway model in the path. Loki lives on
+    // openclaw-pc, the same host as OpenClaw, so the direct
+    // path is essentially zero-latency compared to the 5-25s
+    // round trip the gateway model adds.
+    //
+    // Tile shape: LINES (1h volume) + LABELS (label key count)
+    // + computed '1H' window indicator. Replaces the prior
+    // OpenClaw tile's static WINDOW=1H secondary with a real
+    // second metric we get for free over the direct API.
+    // See src/server/soc-clients/loki.ts.
+    directClient: getLokiWallState,
   },
   {
-    id:       'influxdb',
-    label:    'INFLUXDB',
-    category: 'Logs/Data',
-    prompt:
-      'Use the InfluxDB list_hosts tool to count reporting hosts. ' +
-      'Reply with ONLY this format on one line, no other text: ' +
-      'HOSTS=<integer>',
-    parse: (raw) => {
-      const hosts = pickInt(raw, 'HOSTS');
-      if (hosts === null) return null;
-      return {
-        metrics: {
-          primaryLabel:   'HOSTS',
-          primaryValue:   formatInt(hosts),
-          secondaryLabel: 'STATUS',
-          secondaryValue: 'OK',
-        },
-        status: 'ok',
-      };
-    },
+    id:           'influxdb',
+    label:        'INFLUXDB',
+    category:     'Logs/Data',
+    // Fifth OpenClaw migration. Talks directly to InfluxDB v2 —
+    // /api/v2/buckets for bucket count plus a Flux query against
+    // the configured telemetry bucket for distinct host count
+    // over the last 5 minutes. Token-auth, no gateway model in
+    // the path.
+    //
+    // Tile shape: HOSTS (5m distinct host tags) + BUCKETS (org
+    // bucket count) + computed '5M' window indicator. Replaces
+    // the prior OpenClaw tile's static STATUS=OK secondary with
+    // a real second metric.
+    //
+    // Configurable: INFLUXDB_TELEMETRY_BUCKET (default 'telegraf')
+    // and INFLUXDB_HOST_TAG (default 'host'). See client comments.
+    // See src/server/soc-clients/influxdb.ts.
+    directClient: getInfluxdbWallState,
   },
 ];
 
@@ -562,9 +541,15 @@ const DETAIL_PROMPTS: Record<string, string> = {
   nmap:
     'Nmap is a request-driven scanner. List the available nmap tools (quick_scan, port_scan, ping_sweep) ' +
     'and the syntax for invoking each. No active state to report.',
-  fail2ban:
-    'Use the Fail2ban get_fail2ban_status and get_recent_bans (limit=10). ' +
-    'Show jail status and the most recent bans with their source IPs and jail names.',
+  zeek:
+    'Use the Loki MCP to query recent Zeek events from the last hour. ' +
+    'Run two LogQL queries: {job="zeek", log_type="notice"} and ' +
+    '{job="zeek", log_type="weird"}, limit 10 each. ' +
+    'Return the recent notice events with timestamps and a brief description ' +
+    'of what each notice was about (e.g. SSH::Login_By_Password_Guesser, ' +
+    'Scan::Port_Scan). Then one or two sentences on the most common weird ' +
+    'types if there are many — homelab traffic produces noisy weirds from ' +
+    'IoT devices and browsers, so focus on patterns that look anomalous.',
   loki:
     'Use the Loki loki_service_logs with service="syslog" and hours=1, limit=5. ' +
     'Return the most recent significant log lines and any warning/error patterns.',
