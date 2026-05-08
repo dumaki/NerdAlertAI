@@ -32,6 +32,22 @@ server:
 # enabled: true/false controls whether the agent can see/use the tool at all
 # trust_level: minimum trust level required to call this tool
 tools:
+  weather:
+    enabled: true
+    trust_level: 1
+
+  web:
+    enabled: true
+    trust_level: 1
+
+  host_metrics:
+    enabled: true
+    trust_level: 1         # Local OS reads only — no auth, no network
+
+  project:
+    enabled: true
+    trust_level: 1         # Sandboxed reads under ~/.nerdalert/projects/
+
   gmail:
     enabled: true         # Will be enabled when Gmail module is built
     trust_level: 1

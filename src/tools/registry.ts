@@ -15,11 +15,15 @@ import { config }        from '../config/loader';
 
 // ── Imports ──────────────────────────────────────────────────
 
-import datetimeTool   from './builtin/datetime';
-import memoryTool     from './builtin/memory-tool';
-import gmailTool      from './builtin/gmail-tool';
-import gmailSetupTool from './builtin/gmail-setup';
-import helpTool       from './builtin/help-tool';
+import datetimeTool    from './builtin/datetime';
+import memoryTool      from './builtin/memory-tool';
+import gmailTool       from './builtin/gmail-tool';
+import gmailSetupTool  from './builtin/gmail-setup';
+import helpTool        from './builtin/help-tool';
+import weatherTool     from './builtin/weather-tool';
+import hostMetricsTool from './builtin/host-metrics';
+import projectTool     from './builtin/project-tool';
+import { webTool }         from './builtin/web-tool';
 import { cronManagerTool } from './builtin/cron-manager';
 
 // SOC tools — imported as arrays since each file exports multiple tools
@@ -45,6 +49,10 @@ const ALL_TOOLS: NerdAlertTool[] = [
   datetimeTool,
   memoryTool,
   helpTool,
+  weatherTool,
+  webTool,
+  hostMetricsTool,
+  projectTool,
   gmailTool,
   gmailSetupTool,
   cronManagerTool,

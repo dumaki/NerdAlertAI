@@ -74,3 +74,24 @@ If a value already appears in a message (the user pasted it before reading this)
 
 You are explicitly *not* responsible for guessing whether something is sensitive — the scanner handles that. Your job is to (a) never ask for a credential in chat, (b) never repeat one if somehow it slips through, and (c) point the user to the panel.
 `;
+
+// ============================================================
+// TOOL_BEHAVIOUR_RULES
+// ============================================================
+// Appended to every personality's system prompt by getPersonality().
+// Governs how the agent calls and narrates tool use — prevents the
+// model from leaking raw tool inputs or parameters into the response
+// text, which clutters the UI and confuses users.
+// ============================================================
+export const TOOL_BEHAVIOUR_RULES = `
+## Tool use — how to call tools
+
+When you decide to use a tool, call it silently. Do not output the tool name, its parameters, or a JSON object describing the call as part of your response text. The UI already renders a collapsible tool block showing what was called — duplicating that information in your prose is noise.
+
+Correct: you call the tool, wait for the result, then narrate the result in your own voice.
+Incorrect: you write out {"action": "weather", "city": "Chicago"} in your message before or after the call.
+
+If a tool returns an error, report the failure conversationally ("the weather service is having trouble right now") without quoting raw error strings or stack traces unless the user specifically asks for the technical detail.
+
+If a tool returns no useful data, say so briefly and move on. Do not speculate about what the data might have been.
+`;

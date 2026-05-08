@@ -19,6 +19,7 @@ import { chat } from '../core/agent';
 import { getAuthMiddleware } from './auth';
 import { mountUIRoutes, broadcastCronStatus } from './ui-routes';
 import { mountSecurityRoutes } from './security-routes';
+import { mountFilesRoutes, ensureProjectsRoot } from './files-routes';
 import { startTelegram } from '../telegram';
 import { startCron, stopCron, setCronStatusEmitter } from '../cron';
 import { initGmailCredential } from '../gmail/config';
@@ -56,11 +57,12 @@ const requireAuth = getAuthMiddleware();
 // The browser can't send a Bearer token on GET / —
 // the token is injected into the HTML at serve time instead
 app.use((req, res, next) => {
-  if (req.method === 'GET' && req.path === '/') return next();
-  if (req.method === 'GET' && req.path === '/favicon.ico') return next();
-  if (req.method === 'GET' && req.path === '/api/cron/stream') return next();
-  if (req.method === 'GET' && req.path === '/api/soc/wall')    return next();
-  if (req.method === 'GET' && req.path === '/api/setup/panel') return next();
+  if (req.method === 'GET' && req.path === '/')                   return next();
+  if (req.method === 'GET' && req.path === '/favicon.ico')        return next();
+  if (req.method === 'GET' && req.path === '/api/cron/stream')    return next();
+  if (req.method === 'GET' && req.path === '/api/soc/wall')       return next();
+  if (req.method === 'GET' && req.path === '/api/host/metrics')   return next();
+  if (req.method === 'GET' && req.path === '/api/setup/panel')    return next();
   requireAuth(req, res, next);
 });
 
@@ -93,6 +95,12 @@ setCronStatusEmitter((jobId: string, status: string) => {
 // Credentials submitted here go straight to the OS keychain (or file
 // fallback) — they never touch the model, the session store, or the logs.
 mountSecurityRoutes(app);
+
+// ---- FILES ROUTES ----
+// POST /api/files/upload accepts drag-and-drop / paperclip uploads from
+// the chat UI. Files are stored under ~/.nerdalert/projects/<X-Project>/
+// (default "inbox"), where the project tool can later read them.
+mountFilesRoutes(app);
 
 // ---- CHAT ROUTE ----
 // POST /chat — the main endpoint
@@ -144,6 +152,14 @@ app.listen(SERVER_PORT, () => {
 
 startTelegram().catch((err: unknown) => {
     console.error('[Telegram] Failed to start:', err);
+  });
+
+  // Make sure the projects root + default inbox directory exist so the
+  // very first /api/files/upload doesn't have to wait on mkdir, and so
+  // the project tool's `projects` action returns something sensible on
+  // a fresh install.
+  ensureProjectsRoot().catch((err: unknown) => {
+    console.error('[NerdAlert] ensureProjectsRoot failed:', err);
   });
 
   // Pull gmail-app-password from the keychain (or file backend) once at boot.

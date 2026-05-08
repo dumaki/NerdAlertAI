@@ -10,7 +10,7 @@
 //   Done.
 // ============================================================
 
-import { Personality, CREDENTIAL_REFUSAL_RULES } from './base';
+import { Personality, CREDENTIAL_REFUSAL_RULES, TOOL_BEHAVIOUR_RULES } from './base';
 import sherman from './sherman';
 import kenny   from './kenny';
 import brett   from './brett';
@@ -55,12 +55,16 @@ export function getPersonality(id: string): Personality {
 }
 
 // Wraps a personality so its buildSystemPrompt automatically appends the
-// shared credential-refusal rules. The original personality object is not
-// mutated — we return a new object that delegates to the original.
+// shared credential-refusal rules and tool behaviour rules. The original
+// personality object is not mutated — we return a new object that delegates
+// to the original.
 function wrapWithSecurityRules(p: Personality): Personality {
   return {
     ...p,
-    buildSystemPrompt: (params) => p.buildSystemPrompt(params) + '\n\n' + CREDENTIAL_REFUSAL_RULES,
+    buildSystemPrompt: (params) =>
+      p.buildSystemPrompt(params) +
+      '\n\n' + CREDENTIAL_REFUSAL_RULES +
+      '\n\n' + TOOL_BEHAVIOUR_RULES,
   };
 }
 

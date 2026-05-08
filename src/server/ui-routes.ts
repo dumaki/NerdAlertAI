@@ -23,11 +23,12 @@ import { config }                            from '../config/loader';
 import { getPersonality }                    from '../personalities';
 import { getAvailableTools, toAnthropicFormat } from '../tools/registry';
 import { getLLMConfig, setActiveModel, streamOpenRouter, ORMessage } from '../core/llm-client';
-import { detectIntent, prefetchTools, buildInjectedPrompt, type PrefetchResult } from '../core/intent-prefetch';
+import { detectIntent, prefetchTools, buildInjectedPrompt, type PrefetchResult, type HistoryTurn } from '../core/intent-prefetch';
 import { getAllJobs, getRecentRuns } from '../cron';
 import { saveSession, restoreSession, clearSession } from './session-store';
 import { scan, buildHaltMessage } from '../security/secret-scanner';
 import { pollAllMonitors, pollMonitorDetail, getMonitorMetadata, streamMonitorPolls } from './soc-wall';
+import type { Source } from '../types/response.types';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -55,11 +56,26 @@ function sseEvent(res: Response, name: string, payload: Record<string, unknown>)
   res.write(`event: ${name}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
+// Dedupe a Source list by URL. Two tools citing the same upstream API
+// would otherwise produce duplicate footer entries.
+function dedupSources(sources: Source[]): Source[] {
+  const seen = new Set<string>();
+  const out: Source[] = [];
+  for (const s of sources) {
+    if (!s?.url) continue;
+    if (seen.has(s.url)) continue;
+    seen.add(s.url);
+    out.push(s);
+  }
+  return out;
+}
+
 // ── Helper: run one tool call ────────────────────────────────
 async function runTool(
   toolCall:   PendingToolCall,
   trustLevel: number,
-  res:        Response
+  res:        Response,
+  sourceSink: Source[],
 ): Promise<AnthropicToolResultBlock> {
 
   let outputText: string;
@@ -83,6 +99,12 @@ async function runTool(
       ? response.content
       : JSON.stringify(response.content);
 
+    // Aggregate citations into the per-stream sink. Dedup happens
+    // once at the end of the stream, not per call.
+    if (response.metadata?.sources?.length) {
+      sourceSink.push(...response.metadata.sources);
+    }
+
     sseEvent(res, 'tool_result', { name: toolCall.name, id: toolCall.id, output: outputText });
 
   } catch (err: unknown) {
@@ -101,7 +123,8 @@ async function handleAnthropicStream(
   systemPrompt:    string,
   initialMessages: Anthropic.MessageParam[],
   tools:           Anthropic.Tool[],
-  trustLevel:      number
+  trustLevel:      number,
+  sourceSink:      Source[],
 ): Promise<void> {
 
   const llm    = getLLMConfig();
@@ -134,6 +157,9 @@ async function handleAnthropicStream(
       if (event.type === 'content_block_start') {
         if (event.content_block.type === 'tool_use') {
           activeTool = { id: event.content_block.id, name: event.content_block.name, args: '' };
+          // Emit tool_start immediately so the UI can show the spinner.
+          // tool_result (emitted by runTool) replaces it when the tool finishes.
+          sseEvent(res, 'tool_start', { id: event.content_block.id, name: event.content_block.name });
         }
       }
       else if (event.type === 'content_block_delta') {
@@ -166,7 +192,7 @@ async function handleAnthropicStream(
     }
 
     if (stopReason === 'end_turn' || pendingTools.length === 0) {
-      sseEvent(res, 'done', {});
+      sseEvent(res, 'done', { sources: dedupSources(sourceSink) });
       res.end();
       return;
     }
@@ -176,7 +202,7 @@ async function handleAnthropicStream(
 
       const toolResults: AnthropicToolResultBlock[] = [];
       for (const tc of pendingTools) {
-        toolResults.push(await runTool(tc, trustLevel, res));
+        toolResults.push(await runTool(tc, trustLevel, res, sourceSink));
       }
 
       messages.push({
@@ -199,7 +225,8 @@ async function handleAnthropicStream(
 async function handleOpenRouterStream(
   res:          Response,
   systemPrompt: string,
-  messages:     Anthropic.MessageParam[]
+  messages:     Anthropic.MessageParam[],
+  prefetchSources: Source[] = [],
 ): Promise<void> {
 
   // Convert Anthropic MessageParam format → flat ORMessage format.
@@ -219,7 +246,7 @@ async function handleOpenRouterStream(
     sseEvent(res, 'token', { text: chunk });
   }
 
-  sseEvent(res, 'done', {});
+  sseEvent(res, 'done', { sources: dedupSources(prefetchSources) });
   res.end();
 }
 
@@ -336,10 +363,35 @@ export function mountUIRoutes(app: Express): void {
         const detectedGroups = detectIntent(safeMessage);
         let enrichedPrompt = systemPrompt;
         let prefetchResults: PrefetchResult[] = [];
+        const prefetchSources: Source[] = [];
 
         if (detectedGroups.length > 0) {
-          prefetchResults = await prefetchTools(detectedGroups);
+          // Flatten conversationHistory — the project extractor walks
+          // recent turns to resolve pronominal file references like
+          // "repeat the file verbatim". Tool-result blocks aren't useful
+          // for filename extraction; only text content is.
+          const historyTurns: HistoryTurn[] = conversationHistory
+            .map(m => ({
+              role: m.role as 'user' | 'assistant',
+              text: typeof m.content === 'string'
+                ? m.content
+                : (m.content as Array<{ type: string; text?: string }>)
+                    .filter(b => b.type === 'text' && b.text)
+                    .map(b => b.text!)
+                    .join(''),
+            }))
+            .filter(t => t.text.length > 0);
+
+          prefetchResults = await prefetchTools(detectedGroups, safeMessage, historyTurns);
           enrichedPrompt  = systemPrompt + buildInjectedPrompt(prefetchResults);
+
+          // Aggregate citations from every prefetched tool. The done
+          // event will emit these as the final response's sources.
+          for (const r of prefetchResults) {
+            if (r.available && r.sources?.length) {
+              prefetchSources.push(...r.sources);
+            }
+          }
 
           // Tell the frontend which tools were pre-fetched so it can
           // render collapsed blocks in the resolved state immediately.
@@ -355,11 +407,12 @@ export function mountUIRoutes(app: Express): void {
           }
         }
 
-        await handleOpenRouterStream(res, enrichedPrompt, messages);
+        await handleOpenRouterStream(res, enrichedPrompt, messages, prefetchSources);
 
       } else {
         const tools = toAnthropicFormat(getAvailableTools()) as Anthropic.Tool[];
-        await handleAnthropicStream(req, res, systemPrompt, messages, tools, cfg.agent?.trust_level ?? 1);
+        const sourceSink: Source[] = [];
+        await handleAnthropicStream(req, res, systemPrompt, messages, tools, cfg.agent?.trust_level ?? 1, sourceSink);
       }
 
       // Save session after every completed exchange.
@@ -633,6 +686,30 @@ export function mountUIRoutes(app: Express): void {
       res.json({ ok: true, ...result });
     } catch (err: any) {
       res.json({ ok: false, error: err.message ?? 'Detail fetch failed' });
+    }
+  });
+
+  // ── GET /api/host/metrics — sidebar widget polling ─────────
+  //
+  // Called by the host metrics sidebar card on a 30s interval.
+  // Returns the full HostMetricsSnapshot as JSON — the widget
+  // renders CPU, memory, disk, uptime, and service state directly
+  // without going through the agent.
+  //
+  // The same data is available to Sherman via the host_metrics
+  // tool — both call getHostMetrics() in src/server/host-metrics.ts
+  // so the widget and Sherman's narration always agree.
+  //
+  // BYPASSES THE AGENT (P7 — mechanical action). Pure local OS
+  // reads: /proc/stat, /proc/meminfo, df, systemctl. No auth,
+  // no network, ~600ms wall time on Linux (CPU sample).
+  app.get('/api/host/metrics', async (_req: Request, res: Response) => {
+    try {
+      const { getHostMetrics } = await import('./host-metrics');
+      const snapshot = await getHostMetrics();
+      res.json({ ok: true, ...snapshot });
+    } catch (err: any) {
+      res.json({ ok: false, error: err.message ?? 'Host metrics unavailable' });
     }
   });
 

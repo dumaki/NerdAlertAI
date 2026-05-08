@@ -33,6 +33,7 @@ const TOOL_CATEGORIES: Record<string, string> = {
   datetime:        'Core',
   memory:          'Core',
   help:            'Core',
+  project:         'Files',
   gmail:           'Email',
   'gmail-setup':   'Email',
   'cron-manager':  'Automation',
@@ -54,6 +55,7 @@ const TOOL_SUMMARIES: Record<string, string> = {
   datetime:       'Current date, time, and timezone.',
   memory:         'Store and retrieve facts across sessions.',
   help:           'List available tools or get detail on one.',
+  project:        'Read files the user has dropped into the inbox or other projects.',
   gmail:          'Read, triage, draft, and clean up email.',
   'gmail-setup':  'Configure Gmail credentials interactively.',
   'cron-manager': 'View and manage scheduled automation jobs.',
@@ -78,7 +80,7 @@ function formatList(tools: NerdAlertTool[]): string {
     groups[cat].push(tool)
   }
 
-  const ORDER = ['Core', 'Email', 'Automation', 'SOC', 'Other']
+  const ORDER = ['Core', 'Files', 'Email', 'Automation', 'SOC', 'Other']
   const lines: string[] = [
     '━━ AVAILABLE TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
     '',

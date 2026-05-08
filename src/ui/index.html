@@ -891,6 +891,129 @@
     }
 
     /* ==========================================================
+       FILE UPLOAD — paperclip, drop zone, chip tray
+       Files dropped or picked land in ~/.nerdalert/projects/inbox/
+       ========================================================== */
+
+    .upload-button {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      cursor: pointer;
+      padding: 6px 10px;
+      font-size: 14px;
+      line-height: 1;
+      border-radius: 1px;
+      flex-shrink: 0;
+      transition: all var(--transition-fast);
+    }
+    .upload-button:hover:not(:disabled) {
+      color: var(--cyan);
+      border-color: var(--cyan-mid);
+      background: var(--cyan-dim);
+    }
+    .upload-button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    /* Active drop zone state — input bar gets this on dragover */
+    .chat-input-bar.drag-active {
+      background: var(--cyan-dim);
+      outline: 2px dashed var(--cyan-mid);
+      outline-offset: -4px;
+    }
+    .chat-input-bar.drag-active::after {
+      content: '▼ DROP TO INDEX';
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-display);
+      font-size: 11px;
+      letter-spacing: 4px;
+      color: var(--cyan);
+      text-shadow: 0 0 12px var(--cyan);
+      background: rgba(0, 255, 204, 0.05);
+      z-index: 5;
+      pointer-events: none;
+    }
+
+    /* Chip tray — sits above the input bar, hidden when empty */
+    .upload-tray {
+      display: none;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 10px 28px;
+      background: var(--bg-raised);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .upload-tray.has-chips { display: flex; }
+
+    .upload-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 6px 4px 10px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--cyan);
+      background: var(--cyan-dim);
+      border: 1px solid var(--cyan-mid);
+      border-radius: 1px;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      max-width: 320px;
+    }
+    .upload-chip:hover {
+      background: var(--cyan-glow);
+      text-shadow: 0 0 6px var(--cyan);
+    }
+    .upload-chip.error {
+      color: var(--red);
+      border-color: rgba(255, 58, 58, 0.5);
+      background: var(--red-dim);
+      cursor: default;
+    }
+    .upload-chip.uploading {
+      color: var(--text-dim);
+      border-color: var(--border-mid);
+      background: var(--bg-elevated);
+      cursor: wait;
+    }
+    .upload-chip-icon { font-size: 11px; line-height: 1; }
+    .upload-chip.uploading .upload-chip-icon {
+      animation: upload-spin 1s linear infinite;
+      display: inline-block;
+    }
+    @keyframes upload-spin {
+      to { transform: rotate(360deg); }
+    }
+    .upload-chip-name {
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .upload-chip-hint {
+      color: var(--text-dim);
+      margin-left: 2px;
+    }
+    .upload-chip-x {
+      margin-left: 4px;
+      padding: 0 4px;
+      color: var(--text-dim);
+      font-size: 12px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .upload-chip-x:hover {
+      color: var(--red);
+    }
+
+    /* ==========================================================
        SIDE PANEL — slides in from the right
        Controlled by .app.panel-open on the grid container
        ========================================================== */
@@ -1225,6 +1348,73 @@
 
 .tool-result-block.open .tool-result-body {
   display: block;
+}
+
+/* Sources footer ─────────────────────────────────────────────
+   Rendered below an agent bubble when the response carries
+   metadata.sources. Collapsed by default — click the summary to
+   expand the list. Each entry opens in a new tab.
+   Smaller and quieter than .tool-result-block since attribution
+   is supporting metadata, not the main content.
+*/
+.sources-footer {
+  margin: 4px 0 0 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+
+.sources-footer summary {
+  cursor: pointer;
+  user-select: none;
+  padding: 3px 0;
+  text-transform: uppercase;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--cyan-mid);
+}
+
+.sources-footer summary::-webkit-details-marker { display: none; }
+
+.sources-footer summary::before {
+  content: '\25B6';
+  font-size: 8px;
+  transition: transform 0.15s ease;
+  display: inline-block;
+}
+
+.sources-footer[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.sources-footer ul {
+  margin: 4px 0 2px 0;
+  padding: 0 0 0 14px;
+  list-style: none;
+}
+
+.sources-footer li {
+  padding: 2px 0;
+  line-height: 1.45;
+}
+
+.sources-footer a {
+  color: var(--text);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--border-mid);
+}
+
+.sources-footer a:hover {
+  color: var(--cyan);
+  border-bottom-color: var(--cyan-mid);
+}
+
+.sources-footer .source-host {
+  color: var(--text-muted);
+  margin-left: 6px;
 }
 
 .tool-thinking {
@@ -1813,6 +2003,145 @@
 .cron-job-card.paused .cron-job-schedule {
   opacity: 0.45;
 }
+
+    /* ── Host metrics sidebar panel ─────────────────────────────────── */
+    .host-panel {
+      border-top: 1px solid var(--border);
+      padding: 12px 0 0 0;
+      margin-top: 4px;
+    }
+    .host-panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 16px;
+      cursor: pointer;
+      user-select: none;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      transition: color 0.15s;
+    }
+    .host-panel-header:hover { color: var(--text); }
+    .host-panel-header .cron-collapse-icon {
+      font-size: 10px;
+      transition: transform 0.2s;
+    }
+    .host-panel-header.open .cron-collapse-icon { transform: rotate(180deg); }
+    .host-header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    /* LED status dot in the header */
+    .host-led {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--text-muted);
+      transition: background 0.4s, box-shadow 0.4s;
+    }
+    .host-led.ok   { background: var(--green); box-shadow: 0 0 5px var(--green); }
+    .host-led.warn { background: var(--amber); box-shadow: 0 0 5px var(--amber-glow); }
+    .host-led.err  { background: var(--red);   box-shadow: 0 0 5px var(--red-dim); }
+    /* Collapsible body */
+    .host-panel-body {
+      display: none;
+      padding: 6px 12px 8px;
+    }
+    .host-panel-body.open { display: block; }
+    /* Metric rows: LABEL ░░░░░░░░░░ VALUE */
+    .host-metric-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 5px;
+    }
+    .host-metric-label {
+      font-size: 9px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      letter-spacing: 0.06em;
+      width: 34px;
+      flex-shrink: 0;
+    }
+    .host-bar-track {
+      flex: 1;
+      height: 4px;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .host-bar-fill {
+      height: 100%;
+      border-radius: 2px;
+      transition: width 0.6s ease;
+    }
+    .host-metric-value {
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: var(--text);
+      width: 30px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+    /* Uptime + service dot row */
+    .host-info-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+      margin-bottom: 2px;
+    }
+    .host-info-label {
+      font-size: 9px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      letter-spacing: 0.06em;
+      width: 34px;
+      flex-shrink: 0;
+    }
+    .host-info-value {
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: var(--text);
+      flex: 1;
+    }
+    /* Small service-state dot inline with uptime */
+    .host-svc-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .host-svc-dot.ok   { background: var(--green); box-shadow: 0 0 4px var(--green); }
+    .host-svc-dot.warn { background: var(--amber); box-shadow: 0 0 4px var(--amber-glow); }
+    .host-svc-dot.err  { background: var(--red);   box-shadow: 0 0 4px var(--red); }
+    /* Suggestion chip */
+    .host-suggestion {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      margin-top: 8px;
+      padding: 6px 8px;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 10px;
+      color: var(--text-muted);
+      line-height: 1.4;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .host-suggestion:hover {
+      border-color: var(--cyan-mid);
+      color: var(--text);
+    }
+    .host-suggestion-icon { flex-shrink: 0; margin-top: 1px; }
   </style>
 </head>
 <body>
@@ -1900,6 +2229,19 @@
   </div>
 </div>
 
+    <div class="host-panel">
+      <div class="host-panel-header" id="hostPanelHeader">
+        <span class="host-header-left">
+          <span class="host-led" id="host-led"></span>
+          HOST
+        </span>
+        <span class="cron-collapse-icon">▾</span>
+      </div>
+      <div class="host-panel-body" id="hostPanelBody">
+        <div style="padding:4px 0;font-size:11px;color:var(--text-muted)">Loading…</div>
+      </div>
+    </div>
+
     <!-- Push settings to bottom -->
     <div class="sidebar-spacer"></div>
     <div class="sidebar-divider"></div>
@@ -1923,16 +2265,20 @@
       </div>
     </div>
 
-    <div class="chat-input-bar">
+    <div class="upload-tray" id="upload-tray"></div>
+
+    <div class="chat-input-bar" id="chat-input-bar">
       <span class="input-prompt-char">›</span>
       <input
         class="chat-input"
         id="chat-input"
         type="text"
-        placeholder="Send a message..."
+        placeholder="Send a message... or drop a file"
         autocomplete="off"
         spellcheck="false"
       />
+      <input type="file" id="upload-file-input" style="display:none" />
+      <button class="upload-button" id="upload-button" title="Attach a file (or drag-and-drop onto this bar)" onclick="document.getElementById('upload-file-input').click()">📎</button>
       <button class="send-button" id="send-button" onclick="sendMessage()">SEND</button>
     </div>
 
@@ -2314,6 +2660,7 @@
     // Run onboarding check first
     checkOnboarding();
     cronInit();
+    hostMetricsInit();
 
     // Set trust level pips
     for (let i = 1; i <= 5; i++) {
@@ -2435,10 +2782,6 @@
     currentView = view;
 
     // Always shut down the SOC wall SSE when switching views.
-    // loadSOCWall() opens a fresh one if we're switching INTO
-    // soc, so this is a no-op there. For everything else, this
-    // is the single guarantee that we never leak a stream when
-    // the user clicks Email/Chat/etc while the wall is mid-poll.
     closeSOCStream();
 
     // Update nav button active state
@@ -2465,8 +2808,6 @@
 
   // ============================================================
   // PANEL MANAGEMENT
-  // The side panel slides in via CSS grid column transition.
-  // Content is injected here based on which panel is requested.
   // ============================================================
 
   function openPanel(type) {
@@ -2495,9 +2836,8 @@
   }
 
   function closePanel() {
-    closeSOCStream(); // close any active wall stream when the panel closes
+    closeSOCStream();
     document.getElementById('app').classList.remove('panel-open');
-    // Reset nav to chat
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     document.getElementById('nav-chat').classList.add('active');
     document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
@@ -2505,15 +2845,11 @@
     currentView = 'chat';
   }
 
-  // Email panel — fetches live triage data from /api/email/triage
-  // and renders real classified messages grouped by category.
-  // Called when the user opens the Email view or panel.
   async function loadEmailPanel() {
     console.log('[Email Panel] Loading — fetching /api/email/triage');
     const body = document.getElementById('panel-body');
     if (!body) return;
 
-    // Show a loading state immediately while the IMAP call runs
     body.innerHTML = `
       <div style="font-size:9px;color:var(--text-muted);letter-spacing:1px;padding:8px 0">
         CONNECTING TO IMAP…
@@ -2543,7 +2879,6 @@
 
       const { summary, groups, suggestions } = data;
 
-      // Category config — label, tag class, display order
       const CATS = [
         { key: 'urgent',         label: 'URGENT',         tag: 'urgent' },
         { key: 'inbox',          label: 'INBOX',          tag: 'review' },
@@ -2558,7 +2893,6 @@
         </div>
       `;
 
-      // Render each non-empty group
       for (const cat of CATS) {
         const items = groups[cat.key];
         if (!items || items.length === 0) continue;
@@ -2579,8 +2913,6 @@
         }
       }
 
-      // Cleanup suggestion buttons — call /api/email/cleanup directly.
-      // No agent involved — this is a mechanical move operation.
       if (suggestions && suggestions.length > 0) {
         html += `<div style="font-size:8px;color:var(--text-muted);letter-spacing:2px;margin:14px 0 8px">SUGGESTED ACTIONS</div>`;
         for (const s of suggestions) {
@@ -2594,7 +2926,6 @@
         }
       }
 
-      // Refresh button at the bottom
       html += `
         <div style="margin-top:14px">
           <button onclick="loadEmailPanel()" style="width:100%;padding:8px;font-family:var(--font-mono);font-size:9px;letter-spacing:2px;color:var(--text-dim);background:transparent;border:1px solid var(--border);cursor:pointer;border-radius:1px">
@@ -2603,7 +2934,7 @@
         </div>
       `;
 
-      console.log(`[Email Panel] Loaded — ${summary.total} messages (urgent:${summary.urgent} inbox:${summary.inbox} coupons:${summary.coupons} review:${summary.review} vinyl:${summary.vinylPreorders})`);
+      console.log(`[Email Panel] Loaded — ${summary.total} messages`);
       body.innerHTML = html;
 
     } catch (err) {
@@ -2616,7 +2947,6 @@
     }
   }
 
-  // Memory panel — placeholder for Phase 5b
   function getMemoryPanelHTML() {
     return `
       <div style="font-size:9px;color:var(--text-muted);letter-spacing:1px;margin-bottom:12px">
@@ -2634,10 +2964,6 @@
     `;
   }
 
-  // ── Model switcher ────────────────────────────────────────
-  // Calls POST /api/config/model to update the active model
-  // at runtime. No restart required. Dropdown seeds itself
-  // from CFG.model which is injected by the server on page load.
   async function switchModel(model) {
     const flash = document.getElementById('model-flash');
     try {
@@ -2665,7 +2991,6 @@
     const character = CHARACTERS.find(c => c.id === id);
     if (!character) return;
 
-    // Persist
     localStorage.setItem('nerdalert_agent',  character.id);
     localStorage.setItem('nerdalert_accent', JSON.stringify({
       accent:     character.accent,
@@ -2674,14 +2999,12 @@
       accentMid:  character.accentMid,
     }));
 
-    // Apply colors and update UI
     applyAccentColor(character);
     activeAgentName = character.name;
     document.getElementById('agent-name').textContent  = character.name.toUpperCase();
     document.getElementById('agent-title').textContent = character.fullName + ' · ' + character.title;
     document.getElementById('status-text').textContent = `${character.name.toUpperCase()} ONLINE // LVL ${CFG.trustLevel}`;
 
-    // Re-render the panel so the checkmark moves
     openPanel('settings');
   }
 
@@ -2697,11 +3020,9 @@
   `;
 }
 
-  // Settings panel — agent switcher, trust level, clear conversation
   function getSettingsPanelHTML() {
     const currentId = localStorage.getItem('nerdalert_agent');
 
-    // Compact agent cards
     const cards = CHARACTERS.map(char => {
       const isActive = char.id === currentId;
       const border   = isActive
@@ -2762,8 +3083,6 @@
     document.getElementById('approval-tray').classList.remove('open');
   }
 
-  // Add a new approval card to the tray
-  // Called by the response parser when Sherman proposes an action
   function addApprovalCard(action, description, onApprove, onDeny) {
     pendingApprovals.push({ action, description, onApprove, onDeny });
     renderTray();
@@ -2808,7 +3127,6 @@
     item.resolved = true;
 
     if (approved && item.onApprove) {
-      // Send the approval as a message to Sherman
       sendMessage(item.onApprove);
     } else if (!approved && item.onDeny) {
       sendMessage(item.onDeny);
@@ -2820,16 +3138,13 @@
 
   // ============================================================
   // MESSAGE RENDERING
-  // Helpers to build message DOM elements.
   // ============================================================
 
-  // Remove the empty state once the first message is added
   function clearEmptyState() {
     const es = document.getElementById('empty-state');
     if (es) es.remove();
   }
 
-  // Create and append a user message bubble
   function appendUserMessage(text) {
     clearEmptyState();
     const container = document.getElementById('chat-messages');
@@ -2844,7 +3159,6 @@
     return div;
   }
 
-  // Create an agent message bubble that starts empty (for streaming into)
   function appendAgentMessage() {
     clearEmptyState();
     const container = document.getElementById('chat-messages');
@@ -2862,7 +3176,6 @@
     return div;
   }
 
-  // Replace the streaming bubble with finalized content
   function finalizeAgentMessage(text) {
     const bubble = document.getElementById('streaming-bubble');
     const cursor = document.getElementById('streaming-cursor');
@@ -2876,7 +3189,46 @@
     }
   }
 
-  // Show an error inside the chat (streaming failure)
+  function renderSourcesFooter(sources) {
+    if (!Array.isArray(sources) || sources.length === 0) return;
+
+    const messages = document.querySelectorAll('.message.agent');
+    const lastMessage = messages[messages.length - 1];
+    if (!lastMessage) return;
+
+    if (lastMessage.querySelector('.sources-footer')) return;
+
+    const details = document.createElement('details');
+    details.className = 'sources-footer';
+
+    const summary = document.createElement('summary');
+    summary.textContent = `Sources (${sources.length})`;
+    details.appendChild(summary);
+
+    const ul = document.createElement('ul');
+    for (const src of sources) {
+      if (!src || !src.url) continue;
+      const li = document.createElement('li');
+      const a  = document.createElement('a');
+      a.href = src.url;
+      a.target = '_blank';
+      a.rel  = 'noopener noreferrer';
+      a.textContent = src.label || src.url;
+      li.appendChild(a);
+      try {
+        const host = new URL(src.url).host;
+        const span = document.createElement('span');
+        span.className   = 'source-host';
+        span.textContent = host;
+        li.appendChild(span);
+      } catch { /* malformed URL — skip the host hint */ }
+      ul.appendChild(li);
+    }
+    details.appendChild(ul);
+    lastMessage.appendChild(details);
+    scrollToBottom();
+  }
+
   function appendErrorMessage(message) {
     clearEmptyState();
     const container = document.getElementById('chat-messages');
@@ -2890,7 +3242,6 @@
     scrollToBottom();
   }
 
-  // Show thinking dots while a tool call is in progress
   function showThinking() {
     const bubble = document.getElementById('streaming-bubble');
     if (!bubble) return;
@@ -2919,23 +3270,180 @@
 
 
   // ============================================================
-  // SEND MESSAGE + STREAMING
-  // The core of the UI — sends a message and streams the response.
+  // FILE UPLOAD — drag-and-drop + paperclip
+  // ============================================================
   //
-  // Flow:
-  //   1. Validate input, disable UI
-  //   2. Append user bubble
-  //   3. Append empty agent bubble (streaming target)
-  //   4. POST to /chat/stream with message + history
-  //   5. Read SSE stream — append each token to the bubble
-  //   6. On 'done' event — finalize bubble, update history
-  //   7. On 'error' event — show error message
-  //   8. Re-enable UI
+  // Files dropped on the chat-input-bar (or picked via the paperclip
+  // button) POST to /api/files/upload. The server stores them under
+  // ~/.nerdalert/projects/inbox/. After a successful upload, a chip
+  // appears in the upload-tray; clicking it pre-fills `read <name>`
+  // so testers learn the tool name. The chip is dismissable via ✕.
+
+  (function setupUpload() {
+    const inputBar  = document.getElementById('chat-input-bar');
+    const fileInput = document.getElementById('upload-file-input');
+    const tray      = document.getElementById('upload-tray');
+    const chatInput = document.getElementById('chat-input');
+    if (!inputBar || !fileInput || !tray) return;
+
+    // Drag handlers — scoped to the input bar so the rest of the page
+    // is unaffected. dragDepth tracks enter/leave correctly across
+    // child elements (otherwise the bar flickers as the cursor moves
+    // over inner buttons).
+    let dragDepth = 0;
+
+    inputBar.addEventListener('dragenter', e => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth++;
+      inputBar.classList.add('drag-active');
+    });
+    inputBar.addEventListener('dragover', e => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+    inputBar.addEventListener('dragleave', () => {
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) inputBar.classList.remove('drag-active');
+    });
+    inputBar.addEventListener('drop', e => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth = 0;
+      inputBar.classList.remove('drag-active');
+      for (const file of e.dataTransfer.files) uploadFile(file);
+    });
+
+    // Stop the browser's default "open this file as a tab" when a drop
+    // lands outside the zone — otherwise an off-target drop navigates
+    // away from the chat.
+    ['dragover', 'drop'].forEach(ev => {
+      document.addEventListener(ev, e => {
+        if (!hasFiles(e)) return;
+        if (e.target && inputBar.contains(e.target)) return;
+        e.preventDefault();
+      });
+    });
+
+    // Paperclip handler — mirrors the drop path through uploadFile()
+    fileInput.addEventListener('change', () => {
+      for (const file of fileInput.files) uploadFile(file);
+      fileInput.value = '';   // allow same file again immediately
+    });
+
+    function hasFiles(e) {
+      return !!(e.dataTransfer && e.dataTransfer.types
+        && Array.prototype.indexOf.call(e.dataTransfer.types, 'Files') !== -1);
+    }
+
+    async function uploadFile(file) {
+      if (!file || !file.name) return;
+      if (file.size > 10 * 1024 * 1024) {
+        addChip({ name: file.name, error: true, message: 'exceeds 10MB cap' });
+        return;
+      }
+
+      const chip = addChip({ name: file.name, uploading: true });
+
+      try {
+        const res = await fetch(`${BASE_URL}/api/files/upload`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${CFG.token}`,
+            'Content-Type':  'application/octet-stream',
+            'X-File-Name':   file.name,
+            'X-Project':     'inbox',
+          },
+          body: file,
+        });
+
+        let data = null;
+        try { data = await res.json(); } catch (_) { /* non-JSON error */ }
+
+        if (!res.ok || !data || !data.ok) {
+          markChipError(chip, file.name, (data && data.error) || `HTTP ${res.status}`);
+          return;
+        }
+
+        // Success — turn the chip into a clickable shortcut
+        markChipReady(chip, data);
+      } catch (err) {
+        markChipError(chip, file.name, (err && err.message) || 'upload failed');
+      }
+    }
+
+    function addChip(opts) {
+      const chip = document.createElement('div');
+      chip.className = 'upload-chip'
+        + (opts.uploading ? ' uploading' : '')
+        + (opts.error     ? ' error'     : '');
+
+      const icon = document.createElement('span');
+      icon.className = 'upload-chip-icon';
+      icon.textContent = opts.uploading ? '◐' : (opts.error ? '!' : '📎');
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'upload-chip-name';
+      nameEl.textContent = opts.error && opts.message
+        ? `${opts.name} — ${opts.message}`
+        : opts.name;
+
+      const hintEl = document.createElement('span');
+      hintEl.className = 'upload-chip-hint';
+      hintEl.textContent = opts.uploading ? 'uploading…' : '';
+
+      const x = document.createElement('span');
+      x.className = 'upload-chip-x';
+      x.textContent = '✕';
+      x.title = 'Dismiss';
+      x.addEventListener('click', ev => {
+        ev.stopPropagation();
+        chip.remove();
+        if (tray.children.length === 0) tray.classList.remove('has-chips');
+      });
+
+      chip.append(icon, nameEl, hintEl, x);
+      tray.appendChild(chip);
+      tray.classList.add('has-chips');
+      return chip;
+    }
+
+    function markChipError(chip, name, message) {
+      chip.classList.remove('uploading');
+      chip.classList.add('error');
+      const icon   = chip.querySelector('.upload-chip-icon');
+      const nameEl = chip.querySelector('.upload-chip-name');
+      const hintEl = chip.querySelector('.upload-chip-hint');
+      if (icon)   icon.textContent   = '!';
+      if (nameEl) nameEl.textContent = `${name} — ${message}`;
+      if (hintEl) hintEl.textContent = '';
+    }
+
+    function markChipReady(chip, data) {
+      chip.classList.remove('uploading');
+      chip.dataset.path    = data.path;
+      chip.dataset.project = data.project;
+      const icon   = chip.querySelector('.upload-chip-icon');
+      const nameEl = chip.querySelector('.upload-chip-name');
+      const hintEl = chip.querySelector('.upload-chip-hint');
+      if (icon)   icon.textContent   = '📎';
+      if (nameEl) nameEl.textContent = data.path;
+      if (hintEl) hintEl.textContent = `→ ${data.project}/`;
+      chip.title = `Click to ask about ${data.project}/${data.path}`;
+      chip.addEventListener('click', ev => {
+        if (ev.target && ev.target.classList && ev.target.classList.contains('upload-chip-x')) return;
+        chatInput.value = `read ${data.path}`;
+        chatInput.focus();
+      });
+    }
+  })();
+
+
+  // ============================================================
+  // SEND MESSAGE + STREAMING
   // ============================================================
 
-  // Active stream abort controller — set during streaming, null otherwise.
-  // Clicking STOP calls .abort() on this, which throws an AbortError
-  // caught in sendMessage() to clean up the UI gracefully.
   let activeAbortController = null;
 
   function stopStreaming() {
@@ -2949,13 +3457,9 @@
     const input = document.getElementById('chat-input');
     const btn   = document.getElementById('send-button');
 
-    // Support programmatic calls from panel buttons (prefill parameter)
     let text = prefill || input.value.trim();
     if (!text || isStreaming) return;
 
-    // ── /help intercept ───────────────────────────────────────
-    // Catch /help and /help <tool> before they reach the model.
-    // Calls /api/help directly and renders inline. Zero tokens.
     if (text.startsWith('/help')) {
       input.value = '';
       const parts    = text.trim().split(/\s+/);
@@ -2965,20 +3469,13 @@
       return;
     }
 
-        // Wipes the chat window and resets conversation history.
-    // Zero tokens — never reaches the model.
-    if (text.trim() === '/clear') {
+        if (text.trim() === '/clear') {
       input.value = '';
       clearConversation();
       clearSessionOnServer();
       return;
     }
     
-    // ── /setup intercept ──────────────────────────────────────
-    // Opens the secure credential setup panel in a new tab with the
-    // auth token in the URL hash. Zero tokens — never reaches the model.
-    // Credentials entered there go straight to the OS keychain (or file
-    // fallback) — they never touch the model, the session, or the logs.
     if (text.trim() === '/setup') {
       input.value = '';
       const url = `${BASE_URL}/api/setup/panel#token=${encodeURIComponent(window.NERDALERT_CONFIG?.token || "")}`;
@@ -2986,12 +3483,10 @@
       return;
     }
 
-    // If called from a panel button, switch back to chat view first
     if (prefill) {
       switchView('chat', null);
     }
 
-    // Clear input and lock UI while streaming
     input.value  = '';
     isStreaming   = true;
     input.disabled = true;
@@ -3000,21 +3495,14 @@
     btn.disabled  = false;
     btn.onclick   = stopStreaming;
 
-    // Add user message to UI
     appendUserMessage(text);
 
-    // Start agent bubble
     const agentDiv = appendAgentMessage();
 
-    // Lifted to function scope so the catch block (which handles AbortError
-    // when the user clicks STOP mid-stream) can read whatever was streamed
-    // before the abort fired. Without this, clicking STOP throws
-    // "fullText is not defined" because these were try-block-scoped.
     let fullText = '';
     let buffer   = '';
 
     try {
-      // POST to the SSE streaming endpoint
       activeAbortController = new AbortController();
       const response = await fetch(`${BASE_URL}/chat/stream`, {
         method: 'POST',
@@ -3035,9 +3523,6 @@
         throw new Error(`Server error ${response.status}`);
       }
 
-      // Read the SSE stream
-      // response.body is a ReadableStream. We use a TextDecoder and
-      // a reader to process the raw bytes as text line by line.
       const reader  = response.body.getReader();
       const decoder = new TextDecoder();
 
@@ -3045,21 +3530,15 @@
         const { done, value } = await reader.read();
         if (done) break;
 
-        // Decode the bytes and add to our buffer
         buffer += decoder.decode(value, { stream: true });
 
-        // SSE events are separated by double newlines (\n\n)
-        // Split on that to get individual events
         const events = buffer.split('\n\n');
 
-        // The last element might be an incomplete event — keep it in the buffer
         buffer = events.pop() || '';
 
         for (const event of events) {
           if (!event.trim()) continue;
 
-          // Parse the SSE event
-          // Format is: "event: <type>\ndata: <json>"
           const lines     = event.split('\n');
           let   eventType = 'message';
           let   eventData = '';
@@ -3078,7 +3557,6 @@
           // ---- HANDLE EVENTS ----
 
           if (eventType === 'token') {
-            // A new text chunk — append to the streaming bubble
             const span = document.getElementById('streaming-text');
             if (span) {
               span.textContent += parsed.text;
@@ -3154,23 +3632,22 @@
           }
 
           else if (eventType === 'done') {
-            // Response complete
             hideThinking();
             finalizeAgentMessage(fullText || parsed.text);
 
-            // Update conversation history
+            if (parsed.sources && parsed.sources.length > 0) {
+              renderSourcesFooter(parsed.sources);
+            }
+
             conversationHistory.push({ role: 'user',      content: text });
             conversationHistory.push({ role: 'assistant', content: parsed.text || fullText });
 
-            // Persist full history (including assistant turn) to server
             saveSessionToServer();
 
-            // Check if response contains actionable items
             parseForApprovals(parsed.text || fullText);
           }
 
           else if (eventType === 'error') {
-            // Stream error — show error UI
             hideThinking();
             if (agentDiv) agentDiv.remove();
             appendErrorMessage(parsed.message || 'Streaming failed — server may be down.');
@@ -3179,7 +3656,6 @@
       }
 
     } catch (err) {
-      // AbortError = user clicked STOP — clean exit, no error message
       if (err.name === 'AbortError') {
         hideThinking();
         finalizeAgentMessage(fullText);
@@ -3191,13 +3667,11 @@
           agentDiv.remove();
         }
       } else {
-        // Network-level failure
         if (agentDiv) agentDiv.remove();
         appendErrorMessage(`Connection error: ${err.message}`);
       }
     }
 
-    // Restore button to SEND state
     activeAbortController = null;
     isStreaming     = false;
     input.disabled  = false;
@@ -3211,20 +3685,12 @@
 
   // ============================================================
   // APPROVAL PARSER
-  // Scans Sherman's response text for action phrases and
-  // surfaces them as approval cards in the bottom tray.
-  //
-  // This is a simple keyword approach for Phase 5 —
-  // a more robust version would use structured tool_call events
-  // from the agent once Phase 6 SOC tools are integrated.
   // ============================================================
 
   function parseForApprovals(text) {
   if (!text) return;
   const lower = text.toLowerCase();
 
-  // Don't parse responses to approval actions — they'll always contain
-  // the same keywords and re-trigger the card.
   const approvalTriggers = [
     'triage my mailbox',
     'go ahead and run the cleanup',
@@ -3239,9 +3705,6 @@
     : '';
   if (approvalTriggers.some(t => lastUserMessage.includes(t))) return;
 
-  // Tightened: only fires when the agent is actively offering to run cleanup
-  // (i.e. response is done and contains an offer phrase), not just mentioning
-  // the words 'move' or 'coupon' mid-sentence during a triage summary.
   if (!approvalShownThisSession.has('coupons') &&
       (lower.includes('want me to') || lower.includes('shall i') || lower.includes('just say the word')) &&
       (lower.includes('promo') || lower.includes('coupon') || lower.includes('cleanup'))) {
@@ -3289,26 +3752,19 @@
     });
   }
 
-  // Prevent XSS — escape user-supplied text before injecting into innerHTML
   function escapeHTML(str) {
     const div = document.createElement('div');
     div.appendChild(document.createTextNode(str));
     return div.innerHTML;
   }
   // ── SOC Monitor Wall ──────────────────────────────────────
-  // Sherman's 3x3 surveillance station. Polls /api/soc/wall on
-  // open and on manual refresh. Click a monitor to expand to
-  // detail view. Bypasses the agent entirely — mechanical action.
 
   const SOC_WALL_STATE = {
-    monitors:    [],     // last known state per tile (cached for back-from-detail)
-    expandedId:  null,   // monitor id currently expanded, or null
-    eventSource: null,   // active SSE stream, or null when idle
+    monitors:    [],
+    expandedId:  null,
+    eventSource: null,
   };
 
-  // Returns the panel shell. The wall starts empty — the `init`
-  // event from /api/soc/wall fills in the 9 tile shells with
-  // proper labels and IDs the moment the stream connects.
   function getSOCPanelHTML() {
     return `
       <div class="soc-wall-header">
@@ -3322,10 +3778,6 @@
     `;
   }
 
-  // Closes any open wall SSE stream. Idempotent — safe to call
-  // when there's no stream. Called whenever the user leaves the
-  // SOC view, expands a monitor (wall is hidden), or kicks off
-  // a new poll via REFRESH.
   function closeSOCStream() {
     if (SOC_WALL_STATE.eventSource) {
       SOC_WALL_STATE.eventSource.close();
@@ -3333,15 +3785,8 @@
     }
   }
 
-  // Opens an SSE stream to /api/soc/wall and wires up event
-  // handlers that update tiles individually as monitors settle.
-  // Lifecycle: closeSOCStream → EventSource open → init (renders
-  // 9 BOOTING shells) → monitor_update events arriving in finish
-  // order → done event closes the stream. Per-tile DOM swaps
-  // mean fast monitors don't wait for slow ones, and slow ones
-  // don't reset their siblings' boot animations.
   function loadSOCWall() {
-    closeSOCStream(); // start fresh — no double-stream
+    closeSOCStream();
 
     const btn  = document.getElementById('soc-refresh-btn');
     const meta = document.getElementById('soc-wall-meta');
@@ -3350,10 +3795,6 @@
 
     console.log('[SOC Wall] Opening SSE stream /api/soc/wall');
 
-    // EventSource auth: token via query param (browsers can't
-    // attach custom headers to EventSource). The route exempts
-    // /api/soc/wall from the auth middleware and validates the
-    // token inline. Same pattern as /api/cron/stream.
     const url = `${BASE_URL}/api/soc/wall?token=${encodeURIComponent(CFG.token)}`;
     const es  = new EventSource(url);
     SOC_WALL_STATE.eventSource = es;
@@ -3368,8 +3809,6 @@
         const data = JSON.parse(evt.data);
         totalCount = data.monitors.length;
 
-        // Seed cached state with booting placeholders so the
-        // detail view's cached fallback never shows stale data.
         SOC_WALL_STATE.monitors = data.monitors.map((m) => ({
           id:       m.id,
           label:    m.label,
@@ -3394,13 +3833,10 @@
         const state = JSON.parse(evt.data);
         resolvedCount++;
 
-        // Update cached state for this monitor only
         SOC_WALL_STATE.monitors = SOC_WALL_STATE.monitors.map((m) =>
           m.id === state.id ? state : m
         );
 
-        // Replace just this tile in place — others keep their
-        // booting animation running uninterrupted.
         const existing = document.getElementById(`soc-tile-${state.id}`);
         if (existing) {
           const tmp = document.createElement('div');
@@ -3442,9 +3878,6 @@
       }
     });
 
-    // EventSource fires `error` on any disconnect — including the
-    // normal close after `done`. Only treat it as a real error if
-    // we hadn't already seen `done`.
     es.onerror = () => {
       if (!receivedDone && SOC_WALL_STATE.eventSource === es) {
         console.error('[SOC Wall] SSE connection error');
@@ -3455,14 +3888,6 @@
     };
   }
 
-  // Renders one monitor tile. Used both inside the 3x3 wall and
-  // at full panel width inside the detail view (the CSS does the
-  // right thing in both contexts — the tile sizes to its container).
-  //
-  // Always emits a tile id of `soc-tile-${m.id}` so the streaming
-  // path can locate and replace individual tiles in place without
-  // re-rendering the whole grid (which would reset siblings' boot
-  // animations). Booting tiles aren't clickable.
   function renderMonitorTile(m) {
     const statusClass = `status-${m.status}`;
     const clickable   = m.status !== 'booting';
@@ -3510,12 +3935,8 @@
     `;
   }
 
-  // Click → single-monitor detail view. The monitor's headline
-  // block stays at the top (re-rendered with fresh state from the
-  // detail call), then a natural-language summary, then an "ask
-  // <agent> about this" button that returns to chat in character.
   async function expandSOCMonitor(id) {
-    closeSOCStream(); // stop wall poll while user is reading detail
+    closeSOCStream();
     SOC_WALL_STATE.expandedId = id;
     const body = document.getElementById('panel-body');
     if (!body) return;
@@ -3557,7 +3978,6 @@
         return;
       }
 
-      // Refresh the monitor block with the latest state from the detail call
       if (detailMonitor && data.monitor) {
         SOC_WALL_STATE.monitors = SOC_WALL_STATE.monitors.map(m =>
           m.id === id ? data.monitor : m
@@ -3576,10 +3996,6 @@
     }
   }
 
-  // BACK from detail — restore the wall from cached state.
-  // We deliberately don't auto-restart the SSE stream on every
-  // back-press; each fresh poll is real work on the gateway side.
-  // User can hit REFRESH if they want fresh data.
   function collapseSOCMonitor() {
     SOC_WALL_STATE.expandedId = null;
     const body = document.getElementById('panel-body');
@@ -3596,11 +4012,6 @@
     }
   }
 
-  // Switches back to chat and asks the active personality for a
-  // deeper read on the selected service. The personality fires
-  // through the normal /chat/stream path so Sherman/Brett/etc.
-  // narrate in character. On the OpenRouter path, the SOC keyword
-  // detection in intent-prefetch.ts will inject real data.
   function askAgentAbout(id) {
     const monitor = SOC_WALL_STATE.monitors.find(m => m.id === id);
     const label   = monitor?.label ?? id.toUpperCase();
@@ -3609,8 +4020,6 @@
       sendMessage(`give me a deeper read on ${label} — what's notable in the last 24 hours and is there anything I should be looking at?`);
     }, 100);
   }
-
-  // ── /SOC Monitor Wall ─────────────────────────────────────
 
   // ── Cron sidebar ───────────────────────────────────────────
 const cronState = {
@@ -3721,9 +4130,6 @@ function escapeHtml(str) {
 }
 
   // ── renderHelpResponse ───────────────────────────────────────
-  // Called by the /help intercept in sendMessage().
-  // Fetches from /api/help directly — no model involved.
-  // Renders the result as a normal agent bubble in the chat.
   async function renderHelpResponse(toolName) {
     const agentDiv = appendAgentMessage();
     const span     = document.getElementById('streaming-text');
@@ -3762,16 +4168,11 @@ function escapeHtml(str) {
   }
 
   // ── openEmailMessage ───────────────────────────────────────
-  // Called when a message row is clicked in the email panel.
-  // Fetches from /api/email/message/:uid directly — no agent.
-  // Renders the message inline in the panel, with a back button
-  // to return to the triage list.
   async function openEmailMessage(uid, el) {
     console.log(`[Email Message] Fetching UID ${uid}`);
     const body = document.getElementById('panel-body');
     if (!body) return;
 
-    // Highlight the clicked row while loading
     document.querySelectorAll('.email-item').forEach(e => e.style.opacity = '0.4');
     if (el) el.style.opacity = '1';
 
@@ -3826,9 +4227,6 @@ function escapeHtml(str) {
   }
 
   // ── runEmailCleanup ──────────────────────────────────────
-  // Called by cleanup buttons in the email side panel.
-  // POSTs directly to /api/email/cleanup — no agent involved.
-  // Updates the button state inline, then reloads the panel.
   async function runEmailCleanup(btn) {
     console.log('[Email Cleanup] Starting — POST /api/email/cleanup');
     const original    = btn.textContent;
@@ -3869,6 +4267,147 @@ function escapeHtml(str) {
       btn.disabled      = false;
     }
   }
+
+  // ============================================================
+  // HOST METRICS SIDEBAR CARD
+  // ============================================================
+  // Polls /api/host/metrics every 30s and renders CPU, memory,
+  // disk bars, uptime, and a context-aware suggestion chip in
+  // the collapsible HOST card below Scheduled Jobs.
+  //
+  // The same data is available to Sherman via the host_metrics
+  // tool — both read from the same server endpoint so what the
+  // card shows and what Sherman narrates always agree.
+  // ============================================================
+
+  const hostState = {
+    snapshot:   null,
+    open:       false,
+    pollTimer:  null,
+  };
+
+  function hostMetricsInit() {
+    const header = document.getElementById('hostPanelHeader');
+    const body   = document.getElementById('hostPanelBody');
+    if (!header || !body) return;
+
+    // Toggle collapse on header click
+    header.addEventListener('click', () => {
+      hostState.open = !hostState.open;
+      header.classList.toggle('open', hostState.open);
+      body.classList.toggle('open',   hostState.open);
+    });
+
+    // Initial poll + 30s interval
+    hostMetricsPoll();
+    hostState.pollTimer = setInterval(hostMetricsPoll, 30_000);
+  }
+
+  async function hostMetricsPoll() {
+    try {
+      const token = window.NERDALERT_CONFIG?.token ?? '';
+      const res   = await fetch('/api/host/metrics', {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.ok) {
+        hostState.snapshot = data;
+        hostMetricsRender();
+      }
+    } catch (err) {
+      console.warn('[Host] Poll failed:', err);
+      // Don't blank the card on a transient failure — keep last values
+    }
+  }
+
+  function hostMetricsRender() {
+    const snap = hostState.snapshot;
+    if (!snap) return;
+
+    // Update header LED
+    const led = document.getElementById('host-led');
+    if (led) led.className = `host-led ${snap.overallStatus ?? 'ok'}`;
+
+    const body = document.getElementById('hostPanelBody');
+    if (!body) return;
+
+    const rows = [];
+
+    // CPU bar
+    const cpuColor = snap.cpu.utilizationPct >= 90
+      ? 'var(--red)' : 'var(--cyan)';
+    rows.push(hostBarRow('CPU', snap.cpu.utilizationPct, 100, cpuColor,
+      snap.cpu.utilizationPct + '%'));
+
+    // Memory bar
+    const memColor = snap.memory.usedPct >= 85
+      ? 'var(--amber)' : 'var(--cyan)';
+    rows.push(hostBarRow('MEM', snap.memory.usedPct, 100, memColor,
+      snap.memory.usedPct + '%'));
+
+    // Disk — show the most concerning mount (already sorted worst-first by server)
+    if (snap.disk && snap.disk.length > 0) {
+      const d = snap.disk[0];
+      const diskColor = d.status === 'err'  ? 'var(--red)'
+                      : d.status === 'warn' ? 'var(--amber)'
+                      :                       'var(--cyan)';
+      // Label: "/" for root, short path for others
+      const diskLabel = d.mount === '/' ? 'DISK' : ('/' + d.mount.split('/').pop()).slice(0, 5);
+      rows.push(hostBarRow(diskLabel, d.usedPct, 100, diskColor, d.usedPct + '%'));
+    }
+
+    // Uptime + service dot
+    const svcState = snap.service?.state ?? null;
+    const svcClass = svcState === 'active' ? 'ok'
+                   : svcState === null     ? ''
+                   :                        'err';
+    const svcDot = svcState
+      ? `<span class="host-svc-dot ${svcClass}" title="${escapeHtml(svcState)}"></span>`
+      : '';
+    rows.push(`
+      <div class="host-info-row">
+        <span class="host-info-label">UP</span>
+        <span class="host-info-value">${escapeHtml(snap.uptime?.formatted ?? '—')}</span>
+        ${svcDot}
+      </div>`);
+
+    // Suggestion chip — tapping pre-fills and sends the message
+    if (snap.suggestion?.text) {
+      rows.push(`
+        <div class="host-suggestion" onclick="hostSuggestionClick(this)">
+          <span class="host-suggestion-icon">${snap.suggestion.icon ?? '›'}</span>
+          <span>${escapeHtml(snap.suggestion.text)}</span>
+        </div>`);
+    }
+
+    body.innerHTML = rows.join('\n');
+  }
+
+  // Build a label + bar + value row
+  function hostBarRow(label, value, max, color, display) {
+    const pct = Math.min(100, Math.max(0, Math.round((value / max) * 100)));
+    return `
+      <div class="host-metric-row">
+        <span class="host-metric-label">${escapeHtml(String(label))}</span>
+        <div class="host-bar-track">
+          <div class="host-bar-fill" style="width:${pct}%;background:${color}"></div>
+        </div>
+        <span class="host-metric-value">${escapeHtml(String(display))}</span>
+      </div>`;
+  }
+
+  // Tapping the suggestion chip pre-fills the input and sends
+  function hostSuggestionClick(el) {
+    const text = el.querySelector('span:last-child')?.textContent?.trim();
+    if (!text) return;
+    const input = document.getElementById('chat-input');
+    if (!input) return;
+    input.value = text;
+    sendMessage();
+  }
+
+
 </script>
 </body>
 </html>
