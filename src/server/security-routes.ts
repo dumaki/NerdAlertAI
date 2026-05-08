@@ -110,6 +110,7 @@ const ALLOWED: Record<string, { description: string; minLen: number; maxLen: num
   'influxdb-api-token':        { description: 'InfluxDB v2 API token (read-only on the configured org)', minLen: 60, maxLen: 200 },
   'pfsense-api-key':           { description: 'pfSense REST API v2 key (Services → REST API → Keys)', minLen: 16, maxLen: 200 },
   'ntopng-password':           { description: 'ntopng login password (paired with NTOPNG_USERNAME env var)', minLen: 1,  maxLen: 200 },
+  'synology-password':         { description: 'Synology DSM password (paired with SYNOLOGY_USERNAME env var; recommend a dedicated read-only DSM user)', minLen: 1,  maxLen: 200 },
 };
 
 // ---------- Mount ----------
@@ -279,6 +280,15 @@ export function mountSecurityRoutes(app: Express): void {
           await initNtopngCredential();
         } catch (e: any) {
           console.warn('[security] ntopng cache refresh after credential write failed:', e?.message);
+        }
+      }
+
+      if (name === 'synology-password') {
+        try {
+          const { initSynologyCredential } = require('./soc-clients/synology');
+          await initSynologyCredential();
+        } catch (e: any) {
+          console.warn('[security] synology cache refresh after credential write failed:', e?.message);
         }
       }
 
