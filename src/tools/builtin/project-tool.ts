@@ -76,7 +76,7 @@ const SKIP_DIRS = new Set([
 // extractor; the read path will return a polite "can't open this yet" message.
 const BINARY_EXT = new Set([
   '.xlsx', '.xls', '.pptx', '.ppt',
-  '.odt', '.ods', '.odp', '.fdx', '.fdr',
+  '.odt', '.ods', '.odp',
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.ico', '.svg',
   '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar',
   '.mp3', '.wav', '.flac', '.ogg', '.m4a',
@@ -445,6 +445,20 @@ async function readFile(project: string, relPath: string): Promise<NerdAlertResp
     };
   }
 
+  // Legacy .fdr (pre-2008 Final Draft binary) follows the same pattern.
+  // No open-source library reads it; supporting it would mean reverse-
+  // engineering the format or shelling out to Final Draft itself.
+  if (ext === '.fdr') {
+    return {
+      type:    'text',
+      content:
+        `"${fileLabel}" is a legacy Final Draft .fdr file (pre-2008 binary format), ` +
+        `which I can't read. Open it in Final Draft, save as .fdx (the modern XML format), ` +
+        `and drop the new file — I'll read it then.`,
+      metadata: { sources },
+    };
+  }
+
   // ── Determine the body text via one of three paths ──────────
   //   1. Binary with a registered extractor — run it, get text
   //   2. Binary with no extractor — polite refusal early return
@@ -496,7 +510,7 @@ async function readFile(project: string, relPath: string): Promise<NerdAlertResp
       type:    'text',
       content:
         `"${fileLabel}" is a ${ext} file (${formatSize(stat.size)}). ` +
-        `I can see the file but I can't extract its contents — only PDF, DOCX, and ` +
+        `I can see the file but I can't extract its contents — only PDF, DOCX, FDX, and ` +
         `text-based formats (.md, .txt, .json, .yaml, source code) are supported right now. ` +
         `If you have a text version of this file, drop that and I'll read it.`,
       metadata: { sources },
@@ -589,13 +603,15 @@ Files dropped into the chat via drag-and-drop or the paperclip button land
 in the "inbox" project. So when the user says "what's in this PDF I just
 dropped?", call read with just the path — inbox is the default.
 
-PDF and DOCX files are now extracted to plain text automatically — say "summarize
-NDA.pdf" or "what's in contract.docx" and the contents come through. Encrypted
-PDFs and scanned (image-only) PDFs return clear refusal messages explaining why.
-Legacy .doc files (pre-2007 binary format) prompt the user to save as .docx.
-XLSX, FDX, images, and other binary formats are recognized but not yet
-extracted — the tool will tell you when this is the case so you can let the
-user know clearly. Text formats (.md, .txt, .json, .yaml, source code) work
+PDF, DOCX, and FDX files are extracted to plain text automatically — say
+"summarize NDA.pdf", "what's in contract.docx", or "who's the protagonist
+in script.fdx" and the contents come through. Encrypted PDFs and scanned
+(image-only) PDFs return clear refusal messages explaining why. Legacy
+.doc files (pre-2007 binary) prompt the user to save as .docx; legacy
+.fdr files (pre-2008 Final Draft binary) prompt to save as .fdx. XLSX,
+images, and other binary formats are recognized but not yet extracted —
+the tool will tell you when this is the case so you can let the user
+know clearly. Text formats (.md, .txt, .json, .yaml, source code) work
 directly.
 
 Files are scoped to ~/.nerdalert/projects/ — the agent has no access to

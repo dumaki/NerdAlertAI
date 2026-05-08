@@ -19,13 +19,15 @@
 
 import { extractPDF }  from './pdf';
 import { extractDOCX } from './docx';
+import { extractFDX }  from './fdx';
 
 export type Extractor = (buffer: Buffer) => Promise<string>;
 
 const EXTRACTORS: Record<string, Extractor> = {
   '.pdf':  extractPDF,
   '.docx': extractDOCX,
-  // Future: '.fdx', '.xlsx', '.fdr-as-fdx', etc.
+  '.fdx':  extractFDX,
+  // Future: '.xlsx', etc.
 };
 
 export function getExtractor(ext: string): Extractor | undefined {
@@ -63,6 +65,19 @@ export function explainExtractionError(
     return (
       `Couldn't read "${fileLabel}" — the .docx file appears to be corrupt or malformed. ` +
       `If you can re-save it from Word, that usually fixes it.`
+    );
+  }
+  if (errorMessage.startsWith('FDX_INVALID')) {
+    return (
+      `"${fileLabel}" doesn't look like a valid Final Draft document. ` +
+      `If it was renamed from another format, that's likely why. ` +
+      `Re-export from Final Draft if you have access to it.`
+    );
+  }
+  if (errorMessage.startsWith('FDX_NO_CONTENT')) {
+    return (
+      `"${fileLabel}" parsed as a Final Draft document but contained no readable paragraphs. ` +
+      `It may be a blank template or an empty draft.`
     );
   }
   return null;
