@@ -22,8 +22,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { config }                            from '../config/loader';
 import { getPersonality }                    from '../personalities';
 import { getAvailableTools, toAnthropicFormat } from '../tools/registry';
-import { getLLMConfig, setActiveModel, streamOpenRouter, ORMessage } from '../core/llm-client';
-import { detectIntent, prefetchTools, buildInjectedPrompt, type PrefetchResult, type HistoryTurn } from '../core/intent-prefetch';
+import { getLLMConfig, setActiveModel, streamOpenRouter, streamOllama, ORMessage } from '../core/llm-client';
+import { detectIntent, prefetchTools, buildInjectedPrompt, clipPrefetchForFreeTier, type PrefetchResult, type HistoryTurn } from '../core/intent-prefetch';
 import { getAllJobs, getRecentRuns } from '../cron';
 import { saveSession, restoreSession, clearSession } from './session-store';
 import { scan, buildHaltMessage } from '../security/secret-scanner';
@@ -242,7 +242,10 @@ async function handleOpenRouterStream(
   }));
 
   const llm = getLLMConfig();
-  for await (const chunk of streamOpenRouter(orMessages, systemPrompt, llm.model)) {
+  const stream = llm.provider === 'ollama'
+    ? streamOllama(orMessages, systemPrompt, llm.model)
+    : streamOpenRouter(orMessages, systemPrompt, llm.model);
+  for await (const chunk of stream) {
     sseEvent(res, 'token', { text: chunk });
   }
 
@@ -353,9 +356,13 @@ export function mountUIRoutes(app: Express): void {
         { role: 'user', content: safeMessage },
       ];
 
-      // Route to the right streaming handler based on provider
+      // Route to the right streaming handler based on provider.
+      // Both 'openrouter' and 'ollama' use the prefetch + single-turn path
+      // since neither has the full ReAct tool loop wired up. Only Anthropic
+      // gets the tool loop. handleOpenRouterStream() dispatches to either
+      // streamOpenRouter or streamOllama based on llm.provider internally.
       const llm = getLLMConfig();
-      if (llm.provider === 'openrouter') {
+      if (llm.provider === 'openrouter' || llm.provider === 'ollama') {
 
         // Detect intent and pre-fetch real tool data before dispatching.
         // This gives free/flat-rate models real data to narrate instead
@@ -383,7 +390,16 @@ export function mountUIRoutes(app: Express): void {
             .filter(t => t.text.length > 0);
 
           prefetchResults = await prefetchTools(detectedGroups, safeMessage, historyTurns);
-          enrichedPrompt  = systemPrompt + buildInjectedPrompt(prefetchResults);
+
+          // Replace oversized prefetch blocks with a "switch model"
+          // directive before they reach the model. Small models
+          // (Nemotron) degrade past ~6KB per tool and emit raw JSON
+          // tool-call syntax instead of narrating the result. Source
+          // rail aggregation below still uses the original
+          // prefetchResults, so the user gets a working file link
+          // even when summarization is skipped.
+          const narratable = clipPrefetchForFreeTier(prefetchResults);
+          enrichedPrompt  = systemPrompt + buildInjectedPrompt(narratable);
 
           // Aggregate citations from every prefetched tool. The done
           // event will emit these as the final response's sources.
@@ -439,6 +455,8 @@ export function mountUIRoutes(app: Express): void {
     const allowed = [
       'anthropic/claude-sonnet-4-6',
       'nvidia/nemotron-3-super-120b-a12b:free',
+      'ollama/qwen3:14b',
+      'ollama/mistral-small3.2',
     ];
     if (!allowed.includes(model)) {
       res.status(400).json({ ok: false, error: 'Unknown model' });

@@ -3058,9 +3058,11 @@
       <div class="settings-section-label" style="margin-top:16px">MODEL</div>
       <select class="settings-model-select" id="model-select" onchange="switchModel(this.value)">
         <option value="anthropic/claude-sonnet-4-6">Claude Sonnet 4.6 (Full ReAct)</option>
+        <option value="ollama/qwen3:14b">Qwen3 14B (Local LAN — Ollama)</option>
+        <option value="ollama/mistral-small3.2">Mistral Small 3.2 24B (Local)</option>
         <option value="nvidia/nemotron-3-super-120b-a12b:free">Nemotron 120B (Free tier)</option>
       </select>
-      <div class="settings-model-note">Anthropic = tool loop + SOC. Free = single-turn.</div>
+      <div class="settings-model-note">Anthropic = tool loop + SOC. Local/Free = single-turn with prefetch.</div>
       <div class="settings-model-flash" id="model-flash"></div>
 
       <div class="settings-section-label" style="margin-top:16px">SESSION</div>

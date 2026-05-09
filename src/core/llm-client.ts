@@ -2,7 +2,7 @@
 // src/core/llm-client.ts
 // ============================================================
 // Unified LLM client. Reads MODEL from .env and routes to
-// either Anthropic (Claude) or OpenRouter (everything else).
+// Anthropic (Claude), local Ollama, or OpenRouter (everything else).
 //
 // WHY THIS FILE EXISTS
 // ─────────────────────────────────────────────────────────────
@@ -22,29 +22,270 @@
 //     → model string passed to SDK is "claude-sonnet-4-6"
 //       (the "anthropic/" prefix is stripped — SDK doesn't want it)
 //
+//   MODEL=ollama/qwen3:14b
+//     → uses local Ollama instance at OLLAMA_HOST
+//     → model string passed as "qwen3:14b" (prefix stripped)
+//     → endpoint: OLLAMA_HOST/v1/chat/completions (OpenAI-compatible)
+//     → think: false suppresses Qwen3 <think>...</think> traces
+//
 //   MODEL=nvidia/llama-3.1-nemotron-70b-instruct:free   (default)
 //     → uses OpenRouter via fetch with OPENROUTER_API_KEY
 //     → model string passed as-is — OpenRouter uses the full path
 //     → endpoint: https://openrouter.ai/api/v1/chat/completions
 //
-// OpenRouter is OpenAI-compatible, so the message format is
-// identical to what we already send Anthropic. The only
+// OpenRouter and Ollama are both OpenAI-compatible, so the message
+// format is identical to what we already send Anthropic. The only
 // differences are the endpoint URL and the auth header.
 //
 // WHAT THIS FILE EXPORTS
 // ─────────────────────────────────────────────────────────────
-//   getLLMConfig()   → { provider, model, anthropicClient? }
+//   getLLMConfig()     → { provider, model, anthropicClient? }
 //
-//   provider         → 'anthropic' | 'openrouter'
-//   model            → the model string to pass in API calls
-//   anthropicClient  → Anthropic SDK instance (only when provider is 'anthropic')
-//                      undefined when using OpenRouter (use callOpenRouter instead)
+//   provider           → 'anthropic' | 'ollama' | 'openrouter'
+//   model              → the model string to pass in API calls
+//   anthropicClient    → Anthropic SDK instance (only when provider is 'anthropic')
+//                        undefined when using Ollama or OpenRouter
 //
-//   callOpenRouter() → makes a single non-streaming call to OpenRouter
-//                      used by agent.ts (the ReAct loop)
+//   callOpenRouter()   → single non-streaming call to OpenRouter
+//                        used by agent.ts (the ReAct loop)
 //
-//   streamOpenRouter() → makes a streaming call to OpenRouter
+//   streamOpenRouter() → streaming call to OpenRouter
 //                        used by ui-routes.ts (SSE streaming)
+//
+//   callOllama()       → single non-streaming call to local Ollama
+//                        used by agent.ts (the ReAct loop)
+//
+//   streamOllama()     → streaming call to local Ollama
+//                        used by ui-routes.ts (SSE streaming)
+// ============================================================
+
+// ============================================================
+// FUTURE: streamOllamaWithTools / streamOpenAICompatibleWithTools
+// ============================================================
+// Target milestone: v0.7 — Multi-Provider Tool Loop
+// Status:           DESIGN SKETCH — do not implement until L2 read-only
+//                   foundation is locked.
+//
+// Reference: docs/milestones/v0_7_multi_provider_tool_loop.md
+//
+// WHY THIS COMMENT BLOCK EXISTS
+// ──────────────────────────────────────────────────────────────
+// At v0.5.x we deliberately keep OpenRouter and Ollama on the
+// prefetch-narration path while only Anthropic runs the full
+// ReAct tool loop. This is a guardrail decision documented in
+// callOpenRouter's preamble: weak/free models have unreliable
+// tool-calling, and the prefetch path constrains them to known-
+// safe parameters chosen by intent matching.
+//
+// Mistral Small 3.2 24B and similarly capable mid-size open
+// models support OpenAI-compatible tool calling reliably enough
+// to lift this restriction. When that work happens, this is
+// what the new function should look like. Sketching it now while
+// the architecture is fresh so we don't redesign it later under
+// time pressure.
+//
+// FUNCTION SIGNATURE
+// ──────────────────────────────────────────────────────────────
+//
+//   export async function* streamOpenAICompatibleWithTools(
+//     messages:     ORMessage[],
+//     systemPrompt: string,
+//     model:        string,
+//     tools:        OpenAITool[],
+//     transport:    TransportConfig,
+//   ): AsyncGenerator<ParsedStreamEvent>
+//
+// The function is provider-agnostic. `transport` carries the
+// per-provider differences (base URL, auth, extra headers) so
+// one parser handles Mistral local, GPT, Groq, OpenRouter,
+// Together, DeepSeek, and Gemini compat mode.
+//
+// CALLER CONTRACT (in ui-routes.ts)
+// ──────────────────────────────────────────────────────────────
+// The new ui-routes handler — handleOpenAIToolStream() — mirrors
+// handleAnthropicStream almost exactly. It iterates the generator,
+// pattern-matches on event type, and dispatches:
+//
+//   for await (const event of streamOpenAICompatibleWithTools(...)) {
+//     switch (event.type) {
+//       case 'text':
+//         sseEvent(res, 'token', { text: event.chunk });
+//         break;
+//
+//       case 'tool_call_start':
+//         sseEvent(res, 'tool_start', {
+//           id:   event.id,
+//           name: event.name,
+//         });
+//         break;
+//
+//       case 'tool_call_complete':
+//         // runTool() is reused unchanged — it already validates
+//         // trust level, executes via the registry, aggregates
+//         // sources, and emits the 'tool_result' SSE event.
+//         const result = await runTool(
+//           { id: event.id, name: event.name, args: event.args },
+//           trustLevel,
+//           res,
+//           sourceSink,
+//         );
+//         pendingToolResults.push(result);
+//         break;
+//
+//       case 'turn_complete':
+//         if (event.stopReason === 'tool_calls' && pendingToolResults.length) {
+//           // Inject tool results, loop for next turn
+//           messages.push(/* assistant turn with tool_calls */);
+//           messages.push(/* user turn with tool results */);
+//           // Re-enter the generator for the next iteration
+//         } else {
+//           sseEvent(res, 'done', { sources: dedupSources(sourceSink) });
+//           res.end();
+//           return;
+//         }
+//         break;
+//     }
+//   }
+//
+// The frontend collapsible cards work as-is. Browser only knows
+// about tool_start, tool_result, and done events — same as the
+// Anthropic path produces today.
+//
+// PARSED EVENT TYPES
+// ──────────────────────────────────────────────────────────────
+//
+//   type ParsedStreamEvent =
+//     | { type: 'text'; chunk: string }
+//     | { type: 'tool_call_start'; id: string; name: string }
+//     | { type: 'tool_call_delta'; id: string; argsChunk: string }  // for debug/log only
+//     | { type: 'tool_call_complete'; id: string; name: string; args: Record<string, unknown> }
+//     | { type: 'turn_complete'; stopReason: 'stop' | 'tool_calls' | 'length' | 'error' };
+//
+// The generator yields a normalized event stream. Provider-specific
+// raw chunk parsing happens inside; the caller never sees raw SSE
+// frames or provider quirks.
+//
+// TRANSPORT CONFIG
+// ──────────────────────────────────────────────────────────────
+//
+//   interface TransportConfig {
+//     base_url:       string;                    // e.g. "https://api.openai.com/v1"
+//     auth?:          { type: 'bearer'; token: string }
+//                   | { type: 'none' };
+//     extra_headers?: Record<string, string>;    // OpenRouter wants HTTP-Referer + X-Title
+//     system_role?:   'system' | 'developer';    // OpenAI o-series wants 'developer'
+//     quirks?: {
+//       partial_tool_call_timeout_ms?: number;   // Groq drops deltas, recover after N ms quiet
+//       single_tool_call_only?:        boolean;  // Gemini compat mode parallel-call workaround
+//     };
+//   }
+//
+// TOOL FORMAT CONVERSION
+// ──────────────────────────────────────────────────────────────
+// Add a peer to toAnthropicFormat() in tools/registry.ts:
+//
+//   export function toOpenAIFormat(tools: NerdAlertTool[]): OpenAITool[] {
+//     return tools.map(t => ({
+//       type: 'function',
+//       function: {
+//         name:        t.name,
+//         description: t.description,
+//         parameters:  t.inputSchema,  // already JSON Schema, OpenAI-compatible
+//       },
+//     }));
+//   }
+//
+// Anthropic's tool format is flatter: { name, description, input_schema }
+// OpenAI nests inside a function wrapper:        { type, function: { name, description, parameters } }
+// Field rename: input_schema → parameters
+//
+// The actual JSON Schema body is identical in both. ~30 lines total.
+//
+// PROVIDER QUIRK REGISTRY
+// ──────────────────────────────────────────────────────────────
+// Quirks are config, not code. Each provider's known sharp edges
+// land in their TransportConfig.quirks block:
+//
+//   GROQ:    { partial_tool_call_timeout_ms: 2000 }
+//            // sometimes drops the closing tool-call delta;
+//            // finalize after 2s of silence
+//
+//   GEMINI:  { single_tool_call_only: true }
+//            // compat mode handles parallel calls oddly;
+//            // hint the model to emit one at a time
+//
+//   OPENAI:  { system_role: 'developer' }  // for o-series, GPT-5
+//            { /* none */ }                // for GPT-4o
+//
+//   MISTRAL: { /* none currently known */ }
+//
+//   OLLAMA:  { /* none — runs locally */ }
+//
+// New provider quirks are discovered during slice 6 (per-provider
+// polish) and added to the registry without touching the parser.
+//
+// TRUST CEILING ENFORCEMENT
+// ──────────────────────────────────────────────────────────────
+// The model-config max_trust_level field is enforced inside
+// runTool(), not here. Stream parser doesn't know or care about
+// trust levels — it just yields tool calls as the model emits
+// them. runTool already has access to the active trust level
+// and rejects calls above it; we add a second check that
+// compares against the active model's max_trust_level cap.
+//
+// This keeps the parser pure and the security gate centralized
+// in one place that already sees every tool execution.
+//
+// WHAT THIS REPLACES
+// ──────────────────────────────────────────────────────────────
+// streamOpenRouter() and streamOllama() (the current single-turn
+// narration generators) become thin wrappers around the new
+// streamOpenAICompatibleWithTools() with tools=[] passed in.
+// When tools is empty, the generator skips the tool-call parse
+// path entirely and behaves identically to today's narration
+// streams. No regression risk for Nemotron / Qwen3 paths.
+//
+// Eventually, callOllama() and callOpenRouter() (non-streaming)
+// can be removed if no caller still needs them. agent.ts is the
+// only current consumer of the non-streaming variants and it
+// would migrate to the streaming generator on its own timeline.
+//
+// IMPLEMENTATION ORDER (matches v0.7 milestone slices)
+// ──────────────────────────────────────────────────────────────
+// 1. Refactor streamOpenRouter / streamOllama to call a shared
+//    streamOpenAICompatible() — no tools parameter yet, just
+//    transport abstraction. Confirms the OpenRouter and Ollama
+//    paths still work identically.
+//
+// 2. Add tools parameter and the parsed-event generator pattern.
+//    Default tools=[] preserves narration behavior.
+//
+// 3. Add toOpenAIFormat() in tools/registry.ts.
+//
+// 4. Build handleOpenAIToolStream() in ui-routes.ts. Initially
+//    gated behind a feature flag so production users stay on the
+//    prefetch path while the new path is validated.
+//
+// 5. Flip Mistral local to tool_loop: true in config and run the
+//    full SOC tool set against it. Iterate on Mistral-specific
+//    quirks discovered here.
+//
+// 6. Add hosted providers (OpenAI, Groq) one at a time. Each is
+//    a config row plus quirk validation, not new code.
+//
+// REFERENCES
+// ──────────────────────────────────────────────────────────────
+// OpenAI Chat Completions API:
+//   https://platform.openai.com/docs/api-reference/chat
+//
+// Mistral function calling:
+//   https://docs.mistral.ai/capabilities/function_calling/
+//
+// Ollama OpenAI compatibility:
+//   https://github.com/ollama/ollama/blob/main/docs/openai.md
+//
+// Anthropic streaming (current implementation reference):
+//   https://docs.anthropic.com/en/api/messages-streaming
 // ============================================================
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -61,28 +302,33 @@ export function setActiveModel(model: string): void {
   activeModel = model;
   console.log(`[NerdAlert] Model switched to: ${model}`);
 }
-const OR_KEY   = process.env.OPENROUTER_API_KEY ?? '';
-const ANT_KEY  = process.env.ANTHROPIC_API_KEY  ?? '';
-const OR_URL   = 'https://openrouter.ai/api/v1/chat/completions';
+
+const OR_KEY  = process.env.OPENROUTER_API_KEY ?? '';
+const ANT_KEY = process.env.ANTHROPIC_API_KEY  ?? '';
+const OR_URL  = 'https://openrouter.ai/api/v1/chat/completions';
 
 // ── Determine provider from model string ──────────────────────
 //
-// If the model starts with "anthropic/" we use the Anthropic SDK.
-// Everything else goes to OpenRouter.
+// "anthropic/" → Anthropic SDK
+// "ollama/"    → local Ollama instance at OLLAMA_HOST
+// anything else → OpenRouter
 
-type Provider = 'anthropic' | 'openrouter';
+type Provider = 'anthropic' | 'ollama' | 'openrouter';
 
 function resolveProvider(model: string): Provider {
-  return model.startsWith('anthropic/') ? 'anthropic' : 'openrouter';
+  if (model.startsWith('anthropic/')) return 'anthropic';
+  if (model.startsWith('ollama/'))    return 'ollama';
+  return 'openrouter';
 }
 
-// Strip "anthropic/" prefix for the SDK — it doesn't want it.
+// Strip provider prefix for the downstream client.
 // "anthropic/claude-sonnet-4-6" → "claude-sonnet-4-6"
+// "ollama/qwen3:14b"            → "qwen3:14b"
+// OpenRouter wants the full path including org prefix — no strip.
 function resolveModelString(model: string, provider: Provider): string {
-  if (provider === 'anthropic') {
-    return model.replace(/^anthropic\//, '');
-  }
-  return model; // OpenRouter wants the full path including org prefix
+  if (provider === 'anthropic') return model.replace(/^anthropic\//, '');
+  if (provider === 'ollama')    return model.replace(/^ollama\//, '');
+  return model;
 }
 
 // ── LLMConfig shape ───────────────────────────────────────────
@@ -114,11 +360,13 @@ export function getLLMConfig(): LLMConfig {
       model:           modelString,
       anthropicClient: new Anthropic({ apiKey: ANT_KEY }),
     };
-  } else {
-    if (!OR_KEY) {
+  }
+
+  if (provider === 'ollama') {
+    if (!process.env.OLLAMA_HOST) {
       console.warn(
-        '[NerdAlert] OPENROUTER_API_KEY is missing in .env.\n' +
-        '            Get a free key at https://openrouter.ai and add it to .env.'
+        '[NerdAlert] MODEL is set to ollama/ but OLLAMA_HOST is missing in .env.\n' +
+        '            Add OLLAMA_HOST=http://192.168.10.100:11434 to .env.'
       );
     }
     return {
@@ -127,13 +375,25 @@ export function getLLMConfig(): LLMConfig {
       anthropicClient: null,
     };
   }
+
+  // OpenRouter (default)
+  if (!OR_KEY) {
+    console.warn(
+      '[NerdAlert] OPENROUTER_API_KEY is missing in .env.\n' +
+      '            Get a free key at https://openrouter.ai and add it to .env.'
+    );
+  }
+  return {
+    provider,
+    model:           modelString,
+    anthropicClient: null,
+  };
 }
 
-// ── OpenRouter message types ──────────────────────────────────
+// ── OpenRouter / Ollama message types ────────────────────────
 //
-// OpenRouter uses OpenAI-compatible message format.
-// These are simpler than Anthropic's typed blocks — content is
-// always a string at this level. Tools are handled separately.
+// Both use OpenAI-compatible message format.
+// Content is always a string at this level. Tools are handled separately.
 
 export interface ORMessage {
   role:    'system' | 'user' | 'assistant';
@@ -167,7 +427,7 @@ export async function callOpenRouter(
   model: string
 ): Promise<string> {
 
-  // Prepend system prompt as the first message
+  // Prepend system prompt as the first message.
   // OpenRouter expects system messages in the messages array,
   // not as a separate parameter like Anthropic does.
   const fullMessages: ORMessage[] = [
@@ -281,5 +541,199 @@ export async function* streamOpenRouter(
         // Malformed JSON line — skip it
       }
     }
+  }
+}
+
+// ── callOllama ────────────────────────────────────────────────
+//
+// Single non-streaming call to local Ollama instance.
+// Ollama exposes an OpenAI-compatible endpoint at /v1/chat/completions.
+//
+// Same single-turn pre-fetch narration pattern as OpenRouter —
+// intent-prefetch runs first, tools are called server-side, and
+// the local model narrates the results. No data leaves the LAN.
+//
+// Qwen3 thinking mode suppression: Qwen3 uses a chat template
+// that responds to /no_think appended to the system prompt.
+// The OpenAI-compatible endpoint doesn't pass through `options`
+// like the native /api/chat endpoint does, so we have to inject
+// /no_think into the prompt itself. Without this, the <think>
+// block leaks into the streamed response.
+
+export async function callOllama(
+  messages: ORMessage[],
+  systemPrompt: string,
+  model: string
+): Promise<string> {
+
+  const host = process.env.OLLAMA_HOST ?? 'http://localhost:11434';
+
+  const noThink = model.startsWith('qwen3') ? '\n\n/no_think' : '';
+  const fullMessages: ORMessage[] = [
+    { role: 'system', content: systemPrompt + noThink },
+    ...messages,
+  ];
+
+  const response = await fetch(`${host}/v1/chat/completions`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      messages:   fullMessages,
+      max_tokens: 1024,
+      stream:     false,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Ollama error ${response.status}: ${errorText}`);
+  }
+
+  const data = await response.json() as {
+    choices: Array<{ message: { content: string } }>;
+  };
+
+  // Belt-and-braces: strip any <think>...</think> block that
+  // slipped through despite /no_think. Qwen3 sometimes emits an
+  // empty <think></think> pair even in non-thinking mode.
+  const raw = data.choices?.[0]?.message?.content ?? 'No response from local model.';
+  return stripThinkBlock(raw);
+}
+
+// Strip <think>...</think> blocks from model output.
+// Used by both callOllama and streamOllama as a safety net for
+// when /no_think doesn't fully suppress the reasoning trace.
+function stripThinkBlock(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>\s*/gi, '').trim();
+}
+
+// ── streamOllama ──────────────────────────────────────────────
+//
+// Streaming call for ui-routes.ts SSE path.
+// Same async generator pattern as streamOpenRouter — the caller
+// in ui-routes.ts iterates identically regardless of which
+// non-Anthropic provider is active.
+//
+// Like callOllama, this injects /no_think into the system prompt
+// to suppress Qwen3 reasoning traces, and filters out any <think>
+// blocks that slip through anyway. The filter is line-buffered:
+// chunks inside an open <think> tag are silently dropped until
+// </think> is seen.
+
+export async function* streamOllama(
+  messages: ORMessage[],
+  systemPrompt: string,
+  model: string
+): AsyncGenerator<string> {
+
+  const host = process.env.OLLAMA_HOST ?? 'http://localhost:11434';
+
+  const noThink = model.startsWith('qwen3') ? '\n\n/no_think' : '';
+  const fullMessages: ORMessage[] = [
+    { role: 'system', content: systemPrompt + noThink },
+    ...messages,
+  ];
+
+  const response = await fetch(`${host}/v1/chat/completions`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      messages:   fullMessages,
+      max_tokens: 1024,
+      stream:     true,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Ollama stream error ${response.status}: ${errorText}`);
+  }
+
+  if (!response.body) {
+    throw new Error('Ollama returned no response body');
+  }
+
+  // Ollama SSE format is identical to OpenRouter:
+  //   data: {"choices":[{"delta":{"content":"Hello"}}]}
+  //   data: [DONE]
+
+  const reader  = response.body.getReader();
+  const decoder = new TextDecoder();
+  let   buffer  = '';
+
+  // Streaming <think> filter state. We accumulate chunks across
+  // SSE events so we can detect <think> and </think> tags that
+  // arrive split across chunk boundaries (e.g. "<thi" + "nk>").
+  let   inThinkBlock     = false;
+  let   pendingChunk     = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed === 'data: [DONE]') continue;
+      if (!trimmed.startsWith('data: '))          continue;
+
+      try {
+        const json  = JSON.parse(trimmed.slice(6));
+        const chunk = json?.choices?.[0]?.delta?.content;
+        if (!chunk) continue;
+
+        // Append the new chunk to anything we're holding back
+        // for tag-boundary safety.
+        pendingChunk += chunk;
+
+        // Process the buffer, peeling off complete segments and
+        // suppressing anything inside <think>...</think>.
+        let   output = '';
+        while (pendingChunk.length > 0) {
+          if (inThinkBlock) {
+            const closeIdx = pendingChunk.indexOf('</think>');
+            if (closeIdx === -1) {
+              // Still inside the think block — drop everything
+              // we have and wait for more.
+              pendingChunk = '';
+              break;
+            }
+            // Found the close tag — drop up to and including it.
+            pendingChunk = pendingChunk.slice(closeIdx + '</think>'.length);
+            inThinkBlock = false;
+          } else {
+            const openIdx = pendingChunk.indexOf('<think>');
+            if (openIdx === -1) {
+              // No open tag in sight. Emit everything except the
+              // last few chars in case a tag is mid-arrival.
+              if (pendingChunk.length > 8) {
+                output      += pendingChunk.slice(0, -8);
+                pendingChunk = pendingChunk.slice(-8);
+              }
+              break;
+            }
+            // Found <think> — emit text before it, then enter the block.
+            output      += pendingChunk.slice(0, openIdx);
+            pendingChunk = pendingChunk.slice(openIdx + '<think>'.length);
+            inThinkBlock = true;
+          }
+        }
+
+        if (output) yield output;
+      } catch {
+        // Malformed JSON line — skip it
+      }
+    }
+  }
+
+  // Flush any trailing safe content. If we ended mid-think-block,
+  // discard it (the model never closed the tag).
+  if (!inThinkBlock && pendingChunk) {
+    yield pendingChunk;
   }
 }
