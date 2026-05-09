@@ -214,6 +214,19 @@ const INTENT_MAP: Record<string, IntentGroup> = {
       // collide with web's 'read this url' phrasing.
       '.pdf', '.txt', '.md', '.docx', '.doc', '.json', '.yaml', '.yml',
       '.csv', '.html', '.log', '.xml',
+      // v0.5.12 additions — keeping these in sync with the EXTRACTORS map
+      // in extractors/index.ts is what makes intent-prefetch fire on file
+      // questions for the free/flat-rate model tier. Without these,
+      // "can you read budget.xlsx?" never gets the extracted text
+      // injected into the system prompt, and the model falls back to its
+      // own priors about whether it can read the format — which for
+      // Nemotron means refusing PPTX and RTF outright.
+      //
+      // Legacy formats (.ppt, .fdr) are included so the legacy short-
+      // circuit message ("save as .pptx") gets injected via prefetch
+      // too — otherwise the model refuses without ever hearing the
+      // helpful guidance the project tool would have provided.
+      '.xlsx', '.xls', '.pptx', '.ppt', '.rtf', '.epub', '.fdx', '.fdr',
       // Explicit verbs paired with file context — specific enough to
       // not collide with general English usage.
       'open the file', 'show me the file', 'show me the doc',
@@ -442,4 +455,54 @@ export function buildInjectedPrompt(results: PrefetchResult[]): string {
 
 export function requiresNarration(results: PrefetchResult[]): boolean {
   return results.some(r => r.available);
+}
+
+// ── clipPrefetchForFreeTier ───────────────────────────────────
+//
+// Small models' instruction-following degrades with long prefetched
+// data blocks. Above ~6KB per tool, Nemotron starts emitting raw JSON
+// tool-call syntax instead of narrating the result — the model gets
+// overwhelmed and falls back to "what does a tool call for this look
+// like?" rather than reading what was already retrieved for it.
+//
+// We catch this before the model sees the oversized data and replace
+// the block with a first-person "switch model" directive that the
+// existing buildInjectedPrompt language ("narrate what you see as if
+// you retrieved it yourself") makes the model relay cleanly.
+//
+// The source rail is unaffected — it's aggregated from prefetchResults
+// in ui-routes.ts BEFORE this clip runs, so the user still gets a
+// working link to the underlying file even when the model is told it
+// can't summarize the content. That's the graceful degradation: the
+// response says "switch models," the Sources panel link still opens
+// the actual file.
+//
+// Threshold of 6000 chars is empirical, picked to sit just below the
+// project tool's MODEL_CONTENT_CAP=8000 so the largest extractor
+// outputs (novel-length EPUB, wide multi-sheet XLSX) trigger the
+// switch-model message while smaller files (RTF, short PPTX, modest
+// spreadsheets) continue to narrate normally. Tune by observing
+// failures: drop to 4000 if more cases bleed through, raise to 8000
+// if false positives appear.
+
+export const FREE_TIER_NARRATION_CAP = 6000;
+
+export function clipPrefetchForFreeTier(
+  results: PrefetchResult[],
+  maxChars: number = FREE_TIER_NARRATION_CAP,
+): PrefetchResult[] {
+  return results.map(r => {
+    if (!r.available || r.data.length <= maxChars) return r;
+
+    // First-person phrasing so the existing buildInjectedPrompt
+    // instruction ("narrate what you see as if you retrieved it
+    // yourself") makes the model relay this directly as its response
+    // rather than wrapping it in third-person commentary.
+    const replacement =
+      `That file is too long for me to summarize at my current model size. ` +
+      `Switch to a stronger model in Settings (Sonnet via the model selector) ` +
+      `and try again, or open the file directly via the Sources panel below.`;
+
+    return { ...r, data: replacement };
+  });
 }

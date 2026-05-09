@@ -38,6 +38,7 @@ import { getInfluxdbWallState } from './soc-clients/influxdb';
 import { getPfsenseWallState }  from './soc-clients/pfsense';
 import { getNtopngWallState }   from './soc-clients/ntopng';
 import { getZeekWallState }     from './soc-clients/zeek';
+import { getSynologyWallState } from './soc-clients/synology';
 
 // ── Public types ─────────────────────────────────────────────
 
@@ -178,22 +179,34 @@ const MONITORS: MonitorConfig[] = [
     directClient: getNtopngWallState,
   },
   {
-    id:       'nmap',
-    label:    'NMAP',
-    category: 'Network',
-    prompt:   '', // intentionally empty — see below
-    // Nmap is request-driven, not continuously running. No live state
-    // to poll. Show it as IDLE / READY so it still occupies its
-    // square on the wall — Sherman's gear is on but nothing's running.
-    parse: () => ({
-      metrics: {
-        primaryLabel:   'STATUS',
-        primaryValue:   'IDLE',
-        secondaryLabel: 'READY',
-        secondaryValue: '✓',
-      },
-      status: 'idle',
-    }),
+    id:           'synology',
+    label:        'SYNOLOGY',
+    category:     'Network',
+    // Ninth wall tile — replaces Nmap per v0.5.10 §19 wall composition v3.
+    // Talks directly to Synology DSM 7's web API on the configured URL/port
+    // with SID auth (SYNO.API.Auth v6, format=sid). Per-poll: login →
+    // Promise.allSettled(Volume.list, Disk.list) → best-effort logout. No
+    // cross-poll session caching — DSM sessions are cheap to create over
+    // LAN and stateless polling avoids any session-expiry edge cases.
+    //
+    // Tile shape (Option A — state first, numbers second):
+    //   ARRAY     raid type + drive count, with degraded/crashed surfaced
+    //             inline so the redundancy picture is always legible
+    //   USED      worst-volume capacity %
+    //   N SMART   computed badge — count of disks reporting non-normal SMART
+    //
+    // Status thresholds (spec §19):
+    //   raid degraded || crashed       → 'err'
+    //   smart warnings > 0             → 'warn'
+    //   any volume capacity > 90%      → 'warn'
+    //   single-drive vdev + smart > 0  → 'err' (no parity = actionable)
+    //   else                           → 'ok'
+    //
+    // Permission caveat: DSM 7 has no granular "view storage" permission.
+    // SYNOLOGY_USERNAME must be in the administrators group; a true
+    // read-only DSM user cannot serve this tile (code 105 from the API).
+    // See src/server/soc-clients/synology.ts.
+    directClient: getSynologyWallState,
   },
 
   // ── Row 3 — Logs / Data ──────────────────────────────────
@@ -538,9 +551,6 @@ const DETAIL_PROMPTS: Record<string, string> = {
   ntopng:
     'Use the NTopNG ntopng_get_interface_stats and ntopng_get_top_hosts (limit=5). ' +
     'Return overall traffic rates, then the top hosts by bandwidth.',
-  nmap:
-    'Nmap is a request-driven scanner. List the available nmap tools (quick_scan, port_scan, ping_sweep) ' +
-    'and the syntax for invoking each. No active state to report.',
   zeek:
     'Use the Loki MCP to query recent Zeek events from the last hour. ' +
     'Run two LogQL queries: {job="zeek", log_type="notice"} and ' +

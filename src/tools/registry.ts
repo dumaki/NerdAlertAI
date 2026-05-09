@@ -97,6 +97,21 @@ interface AnthropicTool {
   };
 }
 
+// ── OpenAI tool format ─────────────────────────────────────
+
+interface OpenAITool {
+  type: 'function';
+  function: {
+    name:        string;
+    description: string;
+    parameters: {
+      type:       string;
+      properties: Record<string, unknown>;
+      required:   string[];
+    };
+  };
+}
+
 // ── Registry functions ────────────────────────────────────────
 
 export function getAvailableTools(): NerdAlertTool[] {
@@ -120,6 +135,23 @@ export function toAnthropicFormat(tools: NerdAlertTool[]): AnthropicTool[] {
         properties: Record<string, unknown>;
         required:   string[];
       }),
+    },
+  }));
+}
+
+export function toOpenAIFormat(tools: NerdAlertTool[]): OpenAITool[] {
+  return tools.map(tool => ({
+    type: 'function' as const,
+    function: {
+      name:        tool.name,
+      description: tool.description,
+      parameters: {
+        ...(tool.parameters as {
+          type:       string;
+          properties: Record<string, unknown>;
+          required:   string[];
+        }),
+      },
     },
   }));
 }

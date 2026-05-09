@@ -117,6 +117,13 @@ export async function setCredential(name: string, value: string): Promise<Backen
   if (backend === 'keychain') {
     const kt = tryLoadKeytar();
     if (!kt) throw new Error('keychain backend selected but keytar not loadable');
+    // Delete any existing entry first. Without this, keytar.setPassword on macOS
+    // appends a duplicate entry to the keychain rather than overwriting — silently
+    // making subsequent reads ambiguous and burning real debugging time during
+    // credential rotation (notably during v0.5.5 Wazuh + CrowdSec setup).
+    // .catch(() => {}) swallows the expected "no such entry" case where this is
+    // the first write for `name`.
+    await kt.deletePassword(SERVICE, name).catch(() => {});
     await kt.setPassword(SERVICE, name, value);
     if (!readBackendMarker()) writeBackendMarker('keychain');
     return 'keychain';

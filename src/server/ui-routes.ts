@@ -3,259 +3,319 @@
 // ============================================================
 // Express routes for the NerdAlert Web UI.
 //
-// GET  /            → serves src/ui/index.html
-// POST /chat/stream → streaming chat via Server-Sent Events
+// PROVIDER ROUTING (v0.5.13)
+// ─────────────────────────────────────────────────────────────
+//   Anthropic    → runAnthropicAdapter   (native tool_use blocks)
+//   Ollama       → runOpenAIAdapter      (native tool_calls deltas)
+//   OpenRouter   → runPseudoToolAdapter  (XML <tool_call> blocks)
 //
-// What changed from the previous version:
-//   - Anthropic client no longer instantiated here directly
-//   - getLLMConfig() determines provider at startup
-//   - OpenRouter path uses streamOpenRouter() from llm-client.ts
-//   - Anthropic path uses the full tool loop (unchanged)
-//   - Both paths emit the same SSE events so the browser doesn't
-//     need to know or care which model is running
+// Mistral 3.2 (via Ollama's OpenAI-compat /v1 endpoint) was
+// trained on OpenAI function calling. Routing it through native
+// tool_calls eliminates the pseudo-tool format ambiguity entirely.
+// OpenRouter's free tier doesn't reliably honor the tools
+// parameter, so those models stay on the pseudo-tool adapter.
+//
+// SSE wire format is unchanged on every path — bridge translates.
 // ============================================================
 
 import path    from 'path';
 import type { Express, Request, Response } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 
-import { config }                            from '../config/loader';
-import { getPersonality }                    from '../personalities';
-import { getAvailableTools, toAnthropicFormat } from '../tools/registry';
-import { getLLMConfig, setActiveModel, streamOpenRouter, streamOllama, ORMessage } from '../core/llm-client';
-import { detectIntent, prefetchTools, buildInjectedPrompt, clipPrefetchForFreeTier, type PrefetchResult, type HistoryTurn } from '../core/intent-prefetch';
+import { config }                                from '../config/loader';
+import { getPersonality }                        from '../personalities';
+import { getAvailableTools, toAnthropicFormat, toOpenAIFormat } from '../tools/registry';
+import {
+  getLLMConfig,
+  setActiveModel,
+  type ORMessage,
+} from '../core/llm-client';
+import {
+  detectIntent,
+  prefetchTools,
+  buildInjectedPrompt,
+  clipPrefetchForFreeTier,
+  type PrefetchResult,
+  type HistoryTurn,
+} from '../core/intent-prefetch';
 import { getAllJobs, getRecentRuns } from '../cron';
 import { saveSession, restoreSession, clearSession } from './session-store';
 import { scan, buildHaltMessage } from '../security/secret-scanner';
-import { pollAllMonitors, pollMonitorDetail, getMonitorMetadata, streamMonitorPolls } from './soc-wall';
+import {
+  pollAllMonitors,
+  pollMonitorDetail,
+  getMonitorMetadata,
+  streamMonitorPolls,
+} from './soc-wall';
 import type { Source } from '../types/response.types';
 
-// ── Types ────────────────────────────────────────────────────
+// ── New layer imports ────────────────────────────────────────
+import { type AgentEvent } from '../core/agent-events';
+import { type BrokerContext } from '../core/permission-broker';
+import { runAnthropicAdapter } from '../core/event-adapter-anthropic';
+import { runPseudoToolAdapter } from '../core/event-adapter-pseudo';
+import {
+  runOpenAIAdapter,
+  buildOllamaTransport,
+  ToolCapabilityError,
+} from '../core/event-adapter-openai';
+import { buildSSEBridge, dedupSources } from './event-bridge';
 
-interface PendingToolCall {
-  id:   string;
-  name: string;
-  args: string;
-}
-
-interface AnthropicToolUseBlock {
-  type:  'tool_use';
-  id:    string;
-  name:  string;
-  input: Record<string, unknown>;
-}
-
-interface AnthropicToolResultBlock {
-  type:        'tool_result';
-  tool_use_id: string;
-  content:     string;
-}
-
-// ── Helper: write one SSE event ───────────────────────────────
+// ── Helper: write one SSE event (kept for non-stream endpoints) ──
 function sseEvent(res: Response, name: string, payload: Record<string, unknown>): void {
   res.write(`event: ${name}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
-// Dedupe a Source list by URL. Two tools citing the same upstream API
-// would otherwise produce duplicate footer entries.
-function dedupSources(sources: Source[]): Source[] {
-  const seen = new Set<string>();
-  const out: Source[] = [];
-  for (const s of sources) {
-    if (!s?.url) continue;
-    if (seen.has(s.url)) continue;
-    seen.add(s.url);
-    out.push(s);
-  }
-  return out;
-}
+// ── Per-model native-tool capability cache ──────────────────
+//
+// Some Ollama models (e.g. mistral-small3.2:latest) are tagged
+// without tool-calling capability even though the underlying
+// model supports it. The first request to such a model fires a
+// ToolCapabilityError; we record the model name here and route
+// straight to the pseudo-tool adapter on subsequent calls. The
+// cache is in-memory and clears on server restart — long enough
+// to avoid round-trip overhead, short enough that a model reflag
+// (after `ollama pull` of an updated tag) auto-recovers on next
+// startup.
 
-// ── Helper: run one tool call ────────────────────────────────
-async function runTool(
-  toolCall:   PendingToolCall,
-  trustLevel: number,
-  res:        Response,
-  sourceSink: Source[],
-): Promise<AnthropicToolResultBlock> {
+const noNativeToolSupport = new Set<string>();
 
-  let outputText: string;
-
-  try {
-    const args    = JSON.parse(toolCall.args || '{}');
-    const allTools = getAvailableTools();
-    const tool     = allTools.find(t => t.name === toolCall.name);
-
-    if (!tool) throw new Error(`Tool "${toolCall.name}" not found in registry`);
-
-    if ((tool.trustLevel ?? 0) > trustLevel) {
-      throw new Error(
-        `Tool "${toolCall.name}" requires trust level ${tool.trustLevel}, ` +
-        `current level is ${trustLevel}`
-      );
-    }
-
-    const response = await tool.execute(args);
-    outputText = typeof response.content === 'string'
-      ? response.content
-      : JSON.stringify(response.content);
-
-    // Aggregate citations into the per-stream sink. Dedup happens
-    // once at the end of the stream, not per call.
-    if (response.metadata?.sources?.length) {
-      sourceSink.push(...response.metadata.sources);
-    }
-
-    sseEvent(res, 'tool_result', { name: toolCall.name, id: toolCall.id, output: outputText });
-
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    outputText    = `Error: ${message}`;
-    sseEvent(res, 'tool_result', { name: toolCall.name, id: toolCall.id, output: outputText, error: true });
-  }
-
-  return { type: 'tool_result', tool_use_id: toolCall.id, content: outputText };
-}
-
-// ── Anthropic streaming handler (with tool loop) ─────────────
+// ── Anthropic streaming handler — through the AgentEvent layer ──
 async function handleAnthropicStream(
-  req:             Request,
   res:             Response,
   systemPrompt:    string,
   initialMessages: Anthropic.MessageParam[],
   tools:           Anthropic.Tool[],
   trustLevel:      number,
-  sourceSink:      Source[],
 ): Promise<void> {
 
-  const llm    = getLLMConfig();
-  const client = llm.anthropicClient!;
-  let   messages = [...initialMessages];
-
-  const MAX_ITERATIONS = 8;
-  let   iteration      = 0;
-
-  while (iteration < MAX_ITERATIONS) {
-    iteration++;
-
-    const stream = await client.messages.create({
-      model:       llm.model,
-      max_tokens:  1024,
-      system:      systemPrompt,
-      tools,
-      tool_choice: { type: 'auto' },
-      messages,
-      stream:      true,
-    });
-
-    const pendingTools:     PendingToolCall[]                                       = [];
-    let   activeTool:       PendingToolCall | null                                  = null;
-    const assistantContent: Array<Anthropic.TextBlockParam | AnthropicToolUseBlock> = [];
-    let   currentTextBlock  = '';
-    let   stopReason:       string | null                                           = null;
-
-    for await (const event of stream) {
-      if (event.type === 'content_block_start') {
-        if (event.content_block.type === 'tool_use') {
-          activeTool = { id: event.content_block.id, name: event.content_block.name, args: '' };
-          // Emit tool_start immediately so the UI can show the spinner.
-          // tool_result (emitted by runTool) replaces it when the tool finishes.
-          sseEvent(res, 'tool_start', { id: event.content_block.id, name: event.content_block.name });
-        }
-      }
-      else if (event.type === 'content_block_delta') {
-        if (event.delta.type === 'text_delta') {
-          sseEvent(res, 'token', { text: event.delta.text });
-          currentTextBlock += event.delta.text;
-        }
-        else if (event.delta.type === 'input_json_delta' && activeTool) {
-          activeTool.args += event.delta.partial_json;
-        }
-      }
-      else if (event.type === 'content_block_stop') {
-        if (activeTool) {
-          pendingTools.push(activeTool);
-          assistantContent.push({
-            type:  'tool_use',
-            id:    activeTool.id,
-            name:  activeTool.name,
-            input: JSON.parse(activeTool.args || '{}'),
-          });
-          activeTool = null;
-        } else if (currentTextBlock) {
-          assistantContent.push({ type: 'text', text: currentTextBlock });
-          currentTextBlock = '';
-        }
-      }
-      else if (event.type === 'message_delta') {
-        stopReason = event.delta.stop_reason ?? null;
-      }
-    }
-
-    if (stopReason === 'end_turn' || pendingTools.length === 0) {
-      sseEvent(res, 'done', { sources: dedupSources(sourceSink) });
-      res.end();
-      return;
-    }
-
-    if (stopReason === 'tool_use') {
-      messages.push({ role: 'assistant', content: assistantContent as Anthropic.ContentBlock[] });
-
-      const toolResults: AnthropicToolResultBlock[] = [];
-      for (const tc of pendingTools) {
-        toolResults.push(await runTool(tc, trustLevel, res, sourceSink));
-      }
-
-      messages.push({
-        role:    'user',
-        content: toolResults as unknown as Anthropic.ContentBlockParam[],
-      });
-    }
+  const llm = getLLMConfig();
+  if (!llm.anthropicClient) {
+    sseEvent(res, 'error', { message: 'Anthropic provider selected but no client available.' });
+    res.end();
+    return;
   }
 
-  sseEvent(res, 'error', { message: 'Max tool iterations reached. Try again.' });
-  res.end();
+  const sourceSink: Source[] = [];
+
+  const emit = buildSSEBridge(res, {
+    onEvent: (event: AgentEvent) => {
+      if (event.kind === 'tool_result' && event.sources?.length) {
+        sourceSink.push(...event.sources);
+      }
+    },
+  });
+
+  const brokerContext: BrokerContext = {
+    userTrustLevel: trustLevel,
+    modelLabel: llm.model,
+  };
+
+  try {
+    await runAnthropicAdapter(
+      {
+        client: llm.anthropicClient,
+        model: llm.model,
+        systemPrompt,
+        initialMessages,
+        tools,
+        brokerContext,
+      },
+      emit,
+    );
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    sseEvent(res, 'error', { message });
+  } finally {
+    res.end();
+  }
+
+  void sourceSink;
 }
 
-// ── OpenRouter streaming handler (single turn, no tool loop) ──
+// ── Ollama OpenAI-native streaming handler — NEW in v0.5.13 ───
 //
-// For Nemotron and other OpenRouter models. Streams tokens using
-// the same SSE events as the Anthropic path so the browser UI
-// works identically regardless of which model is running.
-
-async function handleOpenRouterStream(
-  res:          Response,
-  systemPrompt: string,
-  messages:     Anthropic.MessageParam[],
-  prefetchSources: Source[] = [],
+// Routes Ollama-hosted models (Mistral 3.2 today, others later)
+// through the OpenAI-compat /v1/chat/completions endpoint with
+// proper streaming tool_calls. No XML protocol prompt, no tag
+// scanner — tool calls arrive as native deltas the model was
+// trained for.
+//
+// AUTO-FALLBACK: if the provider rejects the request because the
+// model isn't flagged tool-capable (Ollama Modelfile quirk), we
+// catch ToolCapabilityError and route through the pseudo-tool
+// adapter on the same response. The model name gets cached so
+// subsequent requests skip the probe.
+//
+// Prefetch still runs first to prime common queries with real
+// data (matches existing behavior).
+async function handleOllamaStream(
+  res:             Response,
+  systemPrompt:    string,
+  initialMessages: Anthropic.MessageParam[],
+  prefetchSources: Source[],
+  trustLevel:      number,
 ): Promise<void> {
 
-  // Convert Anthropic MessageParam format → flat ORMessage format.
-  // Tool result turns (content arrays) are flattened to text.
-  const orMessages: ORMessage[] = messages.map(m => ({
-    role:    m.role as 'user' | 'assistant',
+  const llm = getLLMConfig();
+  const bareModel = llm.model.replace(/^ollama\//, '');
+
+  // If we've already learned this model can't do native tools,
+  // skip the probe and route straight to pseudo-tool.
+  if (noNativeToolSupport.has(bareModel)) {
+    console.log(`[capability-cache] ${bareModel} → pseudo-tool (cached)`);
+    return handlePseudoToolStream(res, systemPrompt, initialMessages, prefetchSources, trustLevel, 'ollama');
+  }
+
+  // Convert Anthropic MessageParam history → ORMessage. Tool-call
+  // history from previous turns won't survive the round-trip; the
+  // OpenAI adapter only needs text-only history (it builds its own
+  // tool_calls/tool turns inside the loop).
+  const orMessages: ORMessage[] = initialMessages.map((m) => ({
+    role: m.role as 'user' | 'assistant',
     content: typeof m.content === 'string'
       ? m.content
       : (m.content as Array<{ type: string; text?: string }>)
-          .filter(b => b.type === 'text' && b.text)
-          .map(b => b.text!)
+          .filter((b) => b.type === 'text' && b.text)
+          .map((b) => b.text!)
           .join(''),
   }));
 
-  const llm = getLLMConfig();
-  const stream = llm.provider === 'ollama'
-    ? streamOllama(orMessages, systemPrompt, llm.model)
-    : streamOpenRouter(orMessages, systemPrompt, llm.model);
-  for await (const chunk of stream) {
-    sseEvent(res, 'token', { text: chunk });
+  const sourceSink: Source[] = [...prefetchSources];
+
+  const emit = buildSSEBridge(res, {
+    onEvent: (event: AgentEvent) => {
+      if (event.kind === 'tool_result' && event.sources?.length) {
+        sourceSink.push(...event.sources);
+      }
+    },
+  });
+
+  const availableTools = getAvailableTools();
+  const openAITools = toOpenAIFormat(availableTools);
+
+  const brokerContext: BrokerContext = {
+    userTrustLevel: trustLevel,
+    modelLabel: llm.model,
+  };
+
+  try {
+    await runOpenAIAdapter(
+      {
+        transport: buildOllamaTransport(),
+        model: bareModel,
+        systemPrompt,
+        initialMessages: orMessages,
+        tools: openAITools,
+        brokerContext,
+      },
+      emit,
+    );
+  } catch (err: unknown) {
+    // Capability mismatch → cache + fall back to pseudo-tool on the
+    // same response. No SSE text events have been emitted yet at
+    // the point this fires, so the fallback stream is clean.
+    if (err instanceof ToolCapabilityError) {
+      console.log(
+        `[capability] ${bareModel} does not support native tools; ` +
+        `falling back to pseudo-tool adapter and caching the decision`,
+      );
+      noNativeToolSupport.add(bareModel);
+      try {
+        await runPseudoToolAdapter(
+          {
+            transport: 'ollama',
+            model: bareModel,
+            systemPrompt,
+            initialMessages: orMessages,
+            availableTools,
+            brokerContext,
+          },
+          emit,
+        );
+      } catch (fallbackErr: unknown) {
+        const fbMessage = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+        sseEvent(res, 'error', { message: fbMessage });
+      }
+    } else {
+      const message = err instanceof Error ? err.message : String(err);
+      sseEvent(res, 'error', { message });
+    }
+  } finally {
+    res.end();
   }
 
-  sseEvent(res, 'done', { sources: dedupSources(prefetchSources) });
-  res.end();
+  void dedupSources(sourceSink);
 }
 
-// ── Cron SSE broadcast ────────────────────────────────────────
-// Called by the engine via setCronStatusEmitter() in server/index.ts
-// to push live status updates to connected sidebar clients.
+// ── OpenRouter pseudo-tool streaming handler — for free-tier ──
+//
+// Free OpenRouter models (Nemotron 70B free, etc.) don't reliably
+// honor the tools parameter. The pseudo-tool adapter parses
+// <tool_call> XML blocks the model emits in its text output.
+// Also reused as the Ollama fallback when a model isn't tagged
+// tool-capable in its Modelfile.
+async function handlePseudoToolStream(
+  res:               Response,
+  systemPrompt:      string,
+  initialMessages:   Anthropic.MessageParam[],
+  prefetchSources:   Source[],
+  trustLevel:        number,
+  transportOverride?: 'openrouter' | 'ollama',
+): Promise<void> {
+
+  const llm = getLLMConfig();
+
+  const orMessages: ORMessage[] = initialMessages.map((m) => ({
+    role: m.role as 'user' | 'assistant',
+    content: typeof m.content === 'string'
+      ? m.content
+      : (m.content as Array<{ type: string; text?: string }>)
+          .filter((b) => b.type === 'text' && b.text)
+          .map((b) => b.text!)
+          .join(''),
+  }));
+
+  const sourceSink: Source[] = [...prefetchSources];
+
+  const emit = buildSSEBridge(res, {
+    onEvent: (event: AgentEvent) => {
+      if (event.kind === 'tool_result' && event.sources?.length) {
+        sourceSink.push(...event.sources);
+      }
+    },
+  });
+
+  const availableTools = getAvailableTools();
+
+  const brokerContext: BrokerContext = {
+    userTrustLevel: trustLevel,
+    modelLabel: llm.model,
+  };
+
+  try {
+    await runPseudoToolAdapter(
+      {
+        transport: transportOverride ?? 'openrouter',
+        model: llm.model.replace(/^ollama\//, ''),
+        systemPrompt,
+        initialMessages: orMessages,
+        availableTools,
+        brokerContext,
+      },
+      emit,
+    );
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    sseEvent(res, 'error', { message });
+  } finally {
+    res.end();
+  }
+
+  void dedupSources(sourceSink);
+}
+
+// ── Cron SSE broadcast (unchanged) ───────────────────────────
 const cronClients = new Set<Response>();
 
 export function broadcastCronStatus(jobId: string, status: string): void {
@@ -268,8 +328,6 @@ export function broadcastCronStatus(jobId: string, status: string): void {
 // ── Mount routes ──────────────────────────────────────────────
 export function mountUIRoutes(app: Express): void {
   const cfg = config;
-
-  
 
   // ── GET / — serve the UI ───────────────────────────────────
   app.get('/', (_req, res) => {
@@ -312,15 +370,9 @@ export function mountUIRoutes(app: Express): void {
       return;
     }
 
-    // ── Secret scan — runs BEFORE prefetch, BEFORE the model, BEFORE persistence.
-    // Catches passwords, API keys, SSNs, credit cards, etc. and redacts them.
-    // Critical/High tier hits halt the message entirely — the user gets an inline
-    // explanation pointing at /setup. The original value never reaches the model,
-    // the session store, the memory engine, or the structured logs.
     const scanResult = scan(message);
 
     if (scanResult.hits.length > 0) {
-      // Audit log: fact and fingerprint only. Never the value.
       console.log(
         `[security] scan tier=${scanResult.tier} hits=${scanResult.hits.length} ` +
         `rules=${scanResult.hits.map(h => h.rule).join(',')} ` +
@@ -329,16 +381,12 @@ export function mountUIRoutes(app: Express): void {
     }
 
     if (scanResult.halt) {
-      // Emit the halt explanation as a streaming token, then close.
       sseEvent(res, 'token', { text: buildHaltMessage(scanResult) });
       sseEvent(res, 'done', {});
       res.end();
       return;
     }
 
-    // The redacted string is identical to the original unless a critical/high
-    // hit was found. Use it from here on so any future medium-tier extension
-    // (where we might want to redact emails before they hit memory) Just Works.
     const safeMessage = scanResult.redacted;
 
     try {
@@ -356,27 +404,26 @@ export function mountUIRoutes(app: Express): void {
         { role: 'user', content: safeMessage },
       ];
 
-      // Route to the right streaming handler based on provider.
-      // Both 'openrouter' and 'ollama' use the prefetch + single-turn path
-      // since neither has the full ReAct tool loop wired up. Only Anthropic
-      // gets the tool loop. handleOpenRouterStream() dispatches to either
-      // streamOpenRouter or streamOllama based on llm.provider internally.
+      const trustLevel = cfg.agent?.trust_level ?? 1;
       const llm = getLLMConfig();
-      if (llm.provider === 'openrouter' || llm.provider === 'ollama') {
 
-        // Detect intent and pre-fetch real tool data before dispatching.
-        // This gives free/flat-rate models real data to narrate instead
-        // of hallucinating values. Anthropic path is untouched.
+      // ── Run prefetch for non-Anthropic providers ──────────
+      //
+      // Both Ollama and OpenRouter benefit from prefetch. Ollama
+      // also supports native tool calling for follow-up calls,
+      // but the prefetch primes commonly-asked queries with real
+      // data so the first response is fast and accurate.
+
+      const needsPrefetch = llm.provider === 'openrouter' || llm.provider === 'ollama';
+
+      let enrichedPrompt = systemPrompt;
+      const prefetchSources: Source[] = [];
+
+      if (needsPrefetch) {
         const detectedGroups = detectIntent(safeMessage);
-        let enrichedPrompt = systemPrompt;
         let prefetchResults: PrefetchResult[] = [];
-        const prefetchSources: Source[] = [];
 
         if (detectedGroups.length > 0) {
-          // Flatten conversationHistory — the project extractor walks
-          // recent turns to resolve pronominal file references like
-          // "repeat the file verbatim". Tool-result blocks aren't useful
-          // for filename extraction; only text content is.
           const historyTurns: HistoryTurn[] = conversationHistory
             .map(m => ({
               role: m.role as 'user' | 'assistant',
@@ -391,26 +438,15 @@ export function mountUIRoutes(app: Express): void {
 
           prefetchResults = await prefetchTools(detectedGroups, safeMessage, historyTurns);
 
-          // Replace oversized prefetch blocks with a "switch model"
-          // directive before they reach the model. Small models
-          // (Nemotron) degrade past ~6KB per tool and emit raw JSON
-          // tool-call syntax instead of narrating the result. Source
-          // rail aggregation below still uses the original
-          // prefetchResults, so the user gets a working file link
-          // even when summarization is skipped.
           const narratable = clipPrefetchForFreeTier(prefetchResults);
-          enrichedPrompt  = systemPrompt + buildInjectedPrompt(narratable);
+          enrichedPrompt = systemPrompt + buildInjectedPrompt(narratable);
 
-          // Aggregate citations from every prefetched tool. The done
-          // event will emit these as the final response's sources.
           for (const r of prefetchResults) {
             if (r.available && r.sources?.length) {
               prefetchSources.push(...r.sources);
             }
           }
 
-          // Tell the frontend which tools were pre-fetched so it can
-          // render collapsed blocks in the resolved state immediately.
           if (prefetchResults.length > 0) {
             sseEvent(res, 'tool_prefetch', {
               tools: prefetchResults.map(r => ({
@@ -422,18 +458,19 @@ export function mountUIRoutes(app: Express): void {
             });
           }
         }
-
-        await handleOpenRouterStream(res, enrichedPrompt, messages, prefetchSources);
-
-      } else {
-        const tools = toAnthropicFormat(getAvailableTools()) as Anthropic.Tool[];
-        const sourceSink: Source[] = [];
-        await handleAnthropicStream(req, res, systemPrompt, messages, tools, cfg.agent?.trust_level ?? 1, sourceSink);
       }
 
-      // Save session after every completed exchange.
-      // Filter to string-content turns only — tool result arrays
-      // (ContentBlockParam[]) are not meaningful to restore.
+      // ── Route to the right adapter ────────────────────────
+      if (llm.provider === 'ollama') {
+        await handleOllamaStream(res, enrichedPrompt, messages, prefetchSources, trustLevel);
+      } else if (llm.provider === 'openrouter') {
+        await handlePseudoToolStream(res, enrichedPrompt, messages, prefetchSources, trustLevel);
+      } else {
+        // Anthropic
+        const tools = toAnthropicFormat(getAvailableTools()) as Anthropic.Tool[];
+        await handleAnthropicStream(res, systemPrompt, messages, tools, trustLevel);
+      }
+
       const saveable = [
         ...conversationHistory,
         { role: 'user' as const, content: message },
@@ -448,14 +485,11 @@ export function mountUIRoutes(app: Express): void {
   });
 
   // ── POST /api/config/model — runtime model switcher ───────
-  // Called by the Settings panel dropdown. Updates the active
-  // model at runtime — no restart required.
   app.post('/api/config/model', (req: Request, res: Response) => {
     const { model } = req.body as { model: string };
     const allowed = [
       'anthropic/claude-sonnet-4-6',
       'nvidia/nemotron-3-super-120b-a12b:free',
-      'ollama/qwen3:14b',
       'ollama/mistral-small3.2',
     ];
     if (!allowed.includes(model)) {
@@ -466,18 +500,7 @@ export function mountUIRoutes(app: Express): void {
     res.json({ ok: true, model });
   });
 
-    // ── Session persistence endpoints ───────────────────────────────
-  //
-  // GET  /api/session/restore?agentId=sherman
-  //   Called on page load. Returns saved messages or [].
-  //
-  // POST /api/session/save
-  //   Called by the browser after the stream closes with the
-  //   full updated history including the assistant turn.
-  //
-  // POST /api/session/clear
-  //   Called when /clear is typed. Deletes the session file.
-
+  // ── Session persistence endpoints ──────────────────────────
   app.get('/api/session/restore', (req: Request, res: Response) => {
     const agentId = (req.query.agentId as string) ?? 'sherman';
     const messages = restoreSession(agentId);
@@ -503,8 +526,6 @@ export function mountUIRoutes(app: Express): void {
   });
 
   // ── GET /api/help — token-free tool discovery ─────────────
-  // Called directly by the UI when /help or /help <tool> is typed.
-  // Bypasses the model entirely — zero tokens burned for discovery.
   app.get('/api/help', async (req: Request, res: Response) => {
     try {
       const tool     = req.query.tool as string | undefined;
@@ -522,17 +543,12 @@ export function mountUIRoutes(app: Express): void {
     }
   });
 
-  // ── GET /api/email/triage — live inbox data for the side panel ──
-  // Called by getEmailPanelHTML() in the browser when the Email
-  // panel opens. Returns structured triage groups so the panel
-  // can render real classified messages without going through chat.
+  // ── GET /api/email/triage ──────────────────────────────────
   app.get('/api/email/triage', async (_req: Request, res: Response) => {
     try {
       const { triageInbox } = await import('../gmail/client');
       const result = await triageInbox(undefined, { limit: 20 });
 
-      // Shape the response so the panel only gets what it needs.
-      // Each message gets uid, subject, from, date, category.
       const format = (messages: any[], category: string) =>
         messages.map((m: any) => ({
           uid:      m.uid,
@@ -556,15 +572,11 @@ export function mountUIRoutes(app: Express): void {
         suggestions: result.cleanupSuggestions,
       });
     } catch (err: any) {
-      // Gmail not configured or IMAP error — return a clean error
-      // the panel can render rather than a 500.
       res.json({ ok: false, error: err.message ?? 'Gmail unavailable' });
     }
   });
 
-  // ── GET /api/email/message/:uid — fetch single message directly ──
-  // Called by openEmailMessage() in the panel. Bypasses the agent
-  // entirely — returns a clean formatted object the panel renders.
+  // ── GET /api/email/message/:uid ────────────────────────────
   app.get('/api/email/message/:uid', async (req: Request, res: Response) => {
     const uid = parseInt(Array.isArray(req.params.uid) ? req.params.uid[0] : req.params.uid, 10);
     if (isNaN(uid)) {
@@ -597,10 +609,7 @@ export function mountUIRoutes(app: Express): void {
     }
   });
 
-  // ── POST /api/email/cleanup — run promo cleanup directly ──
-  // Bypasses the agent entirely — mechanical action that doesn't
-  // need reasoning. Called by the cleanup buttons in the email
-  // side panel. Requires approved: true enforced server-side.
+  // ── POST /api/email/cleanup ────────────────────────────────
   app.post('/api/email/cleanup', async (_req: Request, res: Response) => {
     try {
       const { executePromoCleanup } = await import('../gmail/client');
@@ -621,29 +630,7 @@ export function mountUIRoutes(app: Express): void {
   });
 
   // ── GET /api/soc/wall — progressive monitor wall via SSE ──
-  //
-  // Streams the 3x3 monitor wall to the browser one tile at a time.
-  // Lifecycle:
-  //   1. UI opens an EventSource (auth via ?token=... query param,
-  //      since EventSource can't send custom headers — same trick
-  //      the cron stream uses).
-  //   2. Server emits `init` with monitor metadata (id/label/category)
-  //      so the UI can render tile shells with the right labels
-  //      immediately, in display order.
-  //   3. All 9 monitors poll in parallel. Each one fires a
-  //      `monitor_update` event the instant it settles — fast
-  //      tiles (Pi-hole) come back in 2–5s; slow tiles take
-  //      their full time without blocking anyone else.
-  //   4. When the slowest monitor returns, server emits `done`
-  //      with totalMs and closes the stream cleanly so the
-  //      EventSource doesn't auto-reconnect.
-  //
-  // BYPASSES THE AGENT (P7 — mechanical action). The model is
-  // way too expensive to use as a polling driver, and the wall
-  // doesn't need reasoning — just numbers and thresholds.
   app.get('/api/soc/wall', async (req: Request, res: Response) => {
-    // EventSource auth: token via query param (browsers can't set
-    // custom headers on EventSource). Mirrors /api/cron/stream.
     const token = (req.headers.authorization?.replace('Bearer ', '') || req.query.token) as string;
     if (token !== process.env.SERVER_AUTH_TOKEN) {
       res.status(401).end();
@@ -659,22 +646,16 @@ export function mountUIRoutes(app: Express): void {
     let clientGone = false;
     req.on('close', () => { clientGone = true; });
 
-    // Helper for typed event writes — don't try to write to a
-    // closed connection (EPIPE noise) and don't write past `done`.
     const emit = (event: string, payload: Record<string, unknown>): void => {
       if (clientGone) return;
       res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
     };
 
-    // 1. Init — send tile metadata so the UI can render shells
     emit('init', { monitors: getMonitorMetadata() });
 
     try {
-      // 2. Stream each monitor as it settles
       await streamMonitorPolls((state) => emit('monitor_update', state as unknown as Record<string, unknown>));
 
-      // 3. Done — close the connection cleanly so EventSource
-      //    doesn't trigger its auto-reconnect logic.
       emit('done', {
         totalMs:     Date.now() - startMs,
         generatedAt: new Date().toISOString(),
@@ -688,11 +669,7 @@ export function mountUIRoutes(app: Express): void {
     }
   });
 
-  // ── GET /api/soc/monitor/:id — single-monitor detail view ─
-  // Fired when the user clicks a monitor in the wall. Returns
-  // the same headline state plus a free-form natural-language
-  // detail string for the expanded view (top items, recent
-  // events, etc). Also bypasses the agent.
+  // ── GET /api/soc/monitor/:id ───────────────────────────────
   app.get('/api/soc/monitor/:id', async (req: Request, res: Response) => {
     const id = String(req.params.id);
     try {
@@ -707,20 +684,7 @@ export function mountUIRoutes(app: Express): void {
     }
   });
 
-  // ── GET /api/host/metrics — sidebar widget polling ─────────
-  //
-  // Called by the host metrics sidebar card on a 30s interval.
-  // Returns the full HostMetricsSnapshot as JSON — the widget
-  // renders CPU, memory, disk, uptime, and service state directly
-  // without going through the agent.
-  //
-  // The same data is available to Sherman via the host_metrics
-  // tool — both call getHostMetrics() in src/server/host-metrics.ts
-  // so the widget and Sherman's narration always agree.
-  //
-  // BYPASSES THE AGENT (P7 — mechanical action). Pure local OS
-  // reads: /proc/stat, /proc/meminfo, df, systemctl. No auth,
-  // no network, ~600ms wall time on Linux (CPU sample).
+  // ── GET /api/host/metrics ──────────────────────────────────
   app.get('/api/host/metrics', async (_req: Request, res: Response) => {
     try {
       const { getHostMetrics } = await import('./host-metrics');
@@ -731,19 +695,18 @@ export function mountUIRoutes(app: Express): void {
     }
   });
 
-  // ── GET /api/cron/stream — SSE for sidebar job status ─────
+  // ── GET /api/cron/stream ───────────────────────────────────
   app.get('/api/cron/stream', (req: Request, res: Response) => {
-  // EventSource can't send headers — accept token from query param too
-  const token = (req.headers.authorization?.replace('Bearer ', '') || req.query.token) as string;
-  if (token !== process.env.SERVER_AUTH_TOKEN) {
-    res.status(401).end();
-    return;
-  }
+    const token = (req.headers.authorization?.replace('Bearer ', '') || req.query.token) as string;
+    if (token !== process.env.SERVER_AUTH_TOKEN) {
+      res.status(401).end();
+      return;
+    }
 
-  res.setHeader('Content-Type',  'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection',    'keep-alive');
-  res.flushHeaders();
+    res.setHeader('Content-Type',  'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection',    'keep-alive');
+    res.flushHeaders();
 
     cronClients.add(res);
 
@@ -760,12 +723,12 @@ export function mountUIRoutes(app: Express): void {
     req.on('close', () => cronClients.delete(res));
   });
 
-  // ── GET /api/cron/jobs — full job list ─────────────────────
+  // ── GET /api/cron/jobs ─────────────────────────────────────
   app.get('/api/cron/jobs', (_req: Request, res: Response) => {
     res.json({ jobs: getAllJobs() });
   });
 
-  // ── POST /api/cron/action — sidebar card click ─────────────
+  // ── POST /api/cron/action ──────────────────────────────────
   app.post('/api/cron/action', async (req: Request, res: Response) => {
     const { jobId, action } = req.body as { jobId: string; action: string };
     const { chat } = await import('../core/agent');

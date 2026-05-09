@@ -35,7 +35,7 @@ import {
   logAvailableTools
 } from '../tools/registry';
 import { getPersonality } from '../personalities';
-import { getLLMConfig, callOpenRouter, ORMessage } from './llm-client';
+import { getLLMConfig, callOpenRouter, callOllama, ORMessage } from './llm-client';
 
 // ── Resolve LLM config once at startup ───────────────────────
 const llm = getLLMConfig();
@@ -99,32 +99,24 @@ export async function chat(
   // Nemotron and other OpenRouter models get a clean single-turn
   // response. Memory tool still works (it runs before this call
   // in the registry layer). Full tool loop requires Anthropic.
-  if (llm.provider === 'openrouter') {
-    // Convert history to the flat ORMessage format OpenRouter expects.
-    // Anthropic history can contain content arrays (from tool turns) —
-    // we flatten those to strings for OpenRouter compatibility.
-    const orHistory: ORMessage[] = history.map(m => ({
-      role:    m.role as 'user' | 'assistant',
-      content: typeof m.content === 'string'
-        ? m.content
-        : (m.content as ContentBlock[])
-            .filter((b): b is TextBlock => b.type === 'text')
-            .map(b => b.text)
-            .join(''),
-    }));
+  if (llm.provider === 'openrouter' || llm.provider === 'ollama') {
+  const orHistory: ORMessage[] = history.map(m => ({
+    role:    m.role as 'user' | 'assistant',
+    content: typeof m.content === 'string'
+      ? m.content
+      : (m.content as ContentBlock[])
+          .filter((b): b is TextBlock => b.type === 'text')
+          .map(b => b.text)
+          .join(''),
+  }));
 
-    const responseText = await callOpenRouter(
-      [...orHistory, { role: 'user', content: message }],
-      systemPrompt,
-      llm.model
-    );
+  const msgs = [...orHistory, { role: 'user' as const, content: message }];
+  const responseText = llm.provider === 'ollama'
+    ? await callOllama(msgs, systemPrompt, llm.model)
+    : await callOpenRouter(msgs, systemPrompt, llm.model);
 
-    return {
-      type:     'text',
-      content:  responseText,
-      metadata: {},
-    };
-  }
+  return { type: 'text', content: responseText, metadata: {} };
+}
 
   // ── Anthropic path — full ReAct tool loop ─────────────────
   const client = llm.anthropicClient!;

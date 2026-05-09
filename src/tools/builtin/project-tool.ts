@@ -70,13 +70,15 @@ const SKIP_DIRS = new Set([
 ]);
 
 // Extensions we recognize as binary / not-yet-extractable.
-// PDF and DOCX are deliberately NOT in this list — they go through the
-// extractor branch in readFile() and never reach the binary refusal path.
-// Add an extension here only when the file type is recognized but has no
-// extractor; the read path will return a polite "can't open this yet" message.
+// PDF, DOCX, FDX, XLSX, XLS, PPTX, RTF, and EPUB are deliberately NOT in
+// this list — they go through the extractor branch in readFile() and never
+// reach the binary refusal path. Add an extension here only when the file
+// type is recognized but has no extractor; the read path will return a
+// polite "can't open this yet" message.
 const BINARY_EXT = new Set([
-  '.xlsx', '.xls', '.pptx', '.ppt',
+  '.ppt',
   '.odt', '.ods', '.odp',
+  '.mobi', '.azw', '.azw3',
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.ico', '.svg',
   '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar',
   '.mp3', '.wav', '.flac', '.ogg', '.m4a',
@@ -459,6 +461,21 @@ async function readFile(project: string, relPath: string): Promise<NerdAlertResp
     };
   }
 
+  // Legacy .ppt (pre-2007 PowerPoint binary) follows the same pattern.
+  // No portable Node library reads it without shelling to LibreOffice or
+  // similar; the modern .pptx format is a zip with XML inside, which we
+  // handle natively.
+  if (ext === '.ppt') {
+    return {
+      type:    'text',
+      content:
+        `"${fileLabel}" is a legacy PowerPoint .ppt file (pre-2007 binary format), ` +
+        `which I can't read. Open it in PowerPoint or Keynote, save as .pptx ` +
+        `(the modern format), and drop the new file — I'll read it then.`,
+      metadata: { sources },
+    };
+  }
+
   // ── Determine the body text via one of three paths ──────────
   //   1. Binary with a registered extractor — run it, get text
   //   2. Binary with no extractor — polite refusal early return
@@ -510,7 +527,7 @@ async function readFile(project: string, relPath: string): Promise<NerdAlertResp
       type:    'text',
       content:
         `"${fileLabel}" is a ${ext} file (${formatSize(stat.size)}). ` +
-        `I can see the file but I can't extract its contents — only PDF, DOCX, FDX, and ` +
+        `I can see the file but I can't extract its contents — only PDF, DOCX, FDX, XLSX, XLS, PPTX, RTF, EPUB, and ` +
         `text-based formats (.md, .txt, .json, .yaml, source code) are supported right now. ` +
         `If you have a text version of this file, drop that and I'll read it.`,
       metadata: { sources },
@@ -603,16 +620,22 @@ Files dropped into the chat via drag-and-drop or the paperclip button land
 in the "inbox" project. So when the user says "what's in this PDF I just
 dropped?", call read with just the path — inbox is the default.
 
-PDF, DOCX, and FDX files are extracted to plain text automatically — say
-"summarize NDA.pdf", "what's in contract.docx", or "who's the protagonist
-in script.fdx" and the contents come through. Encrypted PDFs and scanned
-(image-only) PDFs return clear refusal messages explaining why. Legacy
-.doc files (pre-2007 binary) prompt the user to save as .docx; legacy
-.fdr files (pre-2008 Final Draft binary) prompt to save as .fdx. XLSX,
-images, and other binary formats are recognized but not yet extracted —
-the tool will tell you when this is the case so you can let the user
-know clearly. Text formats (.md, .txt, .json, .yaml, source code) work
-directly.
+PDF, DOCX, FDX, XLSX, XLS, PPTX, RTF, and EPUB files are extracted to plain
+text automatically — say "summarize NDA.pdf", "what's in contract.docx",
+"who's the protagonist in script.fdx", "what's the Q4 total in budget.xlsx",
+"give me the key points from pitch.pptx", or "what's chapter 3 of book.epub
+about" and the contents come through. Spreadsheets are returned as CSV per
+sheet with row/col counts. PowerPoint decks are returned slide-by-slide
+with speaker notes when present. EPUBs are returned in reading order with
+title/author metadata. Encrypted PDFs, encrypted spreadsheets, scanned
+(image-only) PDFs, and DRM-protected EPUBs return clear refusal messages
+explaining why. Legacy .doc files (pre-2007 binary) prompt the user to
+save as .docx; legacy .fdr files (pre-2008 Final Draft binary) prompt to
+save as .fdx; legacy .ppt files (pre-2007 PowerPoint binary) prompt to
+save as .pptx. Images, archives, and other binary formats are recognized
+but not yet extracted — the tool will tell you when this is the case so
+you can let the user know clearly. Text formats (.md, .txt, .json, .yaml,
+.html, .xml, source code) work directly.
 
 Files are scoped to ~/.nerdalert/projects/ — the agent has no access to
 anything outside that sandbox.

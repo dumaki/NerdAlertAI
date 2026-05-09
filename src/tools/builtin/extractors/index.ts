@@ -20,6 +20,10 @@
 import { extractPDF }  from './pdf';
 import { extractDOCX } from './docx';
 import { extractFDX }  from './fdx';
+import { extractXLSX } from './xlsx';
+import { extractPPTX } from './pptx';
+import { extractRTF }  from './rtf';
+import { extractEPUB } from './epub';
 
 export type Extractor = (buffer: Buffer) => Promise<string>;
 
@@ -27,7 +31,12 @@ const EXTRACTORS: Record<string, Extractor> = {
   '.pdf':  extractPDF,
   '.docx': extractDOCX,
   '.fdx':  extractFDX,
-  // Future: '.xlsx', etc.
+  '.xlsx': extractXLSX,
+  '.xls':  extractXLSX,   // SheetJS reads pre-2007 BIFF natively
+  '.pptx': extractPPTX,
+  '.rtf':  extractRTF,
+  '.epub': extractEPUB,
+  // Future: '.odt', '.mobi', etc.
 };
 
 export function getExtractor(ext: string): Extractor | undefined {
@@ -78,6 +87,76 @@ export function explainExtractionError(
     return (
       `"${fileLabel}" parsed as a Final Draft document but contained no readable paragraphs. ` +
       `It may be a blank template or an empty draft.`
+    );
+  }
+  if (errorMessage.startsWith('XLSX_ENCRYPTED')) {
+    return (
+      `"${fileLabel}" is encrypted or password-protected. ` +
+      `I can only read spreadsheets that don't require a password. ` +
+      `If you have an unprotected version, drop that and I'll read it.`
+    );
+  }
+  if (errorMessage.startsWith('XLSX_PARSE_FAILED')) {
+    return (
+      `Couldn't read "${fileLabel}" — the spreadsheet appears to be corrupt or malformed. ` +
+      `If you can re-save it from Excel, that usually fixes it.`
+    );
+  }
+  if (errorMessage.startsWith('XLSX_NO_CONTENT')) {
+    return (
+      `"${fileLabel}" parsed as a spreadsheet but every sheet was empty. ` +
+      `It may be a blank template or a workbook with only formatting and no data.`
+    );
+  }
+  if (errorMessage.startsWith('PPTX_PARSE_FAILED')) {
+    return (
+      `Couldn't read "${fileLabel}" — the .pptx file appears to be corrupt or malformed. ` +
+      `If you can re-save it from PowerPoint, that usually fixes it.`
+    );
+  }
+  if (errorMessage.startsWith('PPTX_NOT_PPTX')) {
+    return (
+      `"${fileLabel}" doesn't look like a valid PowerPoint .pptx file. ` +
+      `If it was renamed from another format (like Keynote .key or Google Slides), ` +
+      `that's likely why. Re-export as .pptx and drop the new file.`
+    );
+  }
+  if (errorMessage.startsWith('PPTX_NO_CONTENT')) {
+    return (
+      `"${fileLabel}" parsed as a PowerPoint deck but contained no readable text. ` +
+      `It may be image-only slides, a blank template, or use unsupported features.`
+    );
+  }
+  if (errorMessage.startsWith('RTF_INVALID')) {
+    return (
+      `"${fileLabel}" doesn't look like a valid RTF document. ` +
+      `If it was renamed from another format, that's likely why. ` +
+      `Re-save it from your editor in RTF format if possible.`
+    );
+  }
+  if (errorMessage.startsWith('RTF_NO_CONTENT')) {
+    return (
+      `"${fileLabel}" parsed as RTF but contained no readable text. ` +
+      `It may be a blank document or contain only embedded objects.`
+    );
+  }
+  if (errorMessage.startsWith('EPUB_PARSE_FAILED')) {
+    return (
+      `Couldn't read "${fileLabel}" — the .epub file appears to be corrupt. ` +
+      `If you can re-download or re-export it, that usually fixes it.`
+    );
+  }
+  if (errorMessage.startsWith('EPUB_INVALID')) {
+    return (
+      `"${fileLabel}" doesn't look like a valid EPUB. ` +
+      `It might be DRM-protected, missing its manifest, or a different format ` +
+      `renamed to .epub. Try a non-DRM version if you have one.`
+    );
+  }
+  if (errorMessage.startsWith('EPUB_NO_CONTENT')) {
+    return (
+      `"${fileLabel}" parsed as an EPUB but contained no readable text. ` +
+      `It may be DRM-protected, image-only (graphic novel), or use unsupported features.`
     );
   }
   return null;

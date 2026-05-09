@@ -1,131 +1,47 @@
-// ============================================================
 // src/server/soc-clients/synology.ts
-// ============================================================
-// STUB — Synology DSM 7 direct client.
 //
-// Ninth wall tile, slot completion. Implementation deferred to
-// the next session. This file exists in stub form so:
+// Synology DSM 7 storage health direct client.
+// v0.5.11 — fills in the v0.5.10 stub.
 //
-//   1. The credential 'synology-password' can be registered in
-//      security-routes.ts and accepted via /setup right now.
-//   2. The user can populate the keychain entry whenever
-//      convenient, without waiting on the wall wiring.
-//   3. The cache-refresh hook in security-routes.ts has a real
-//      target to require() — no dangling import on first run.
-//   4. Next session's work is purely "fill in the function
-//      bodies and add the MonitorConfig" — no scaffolding work.
+// Auth:        SYNO.API.Auth (DSM 7 version 6) → SID via format=sid
+// Per-poll:    login → load_info → best-effort logout
+// Endpoint:    SYNO.Storage.CGI.Storage.load_info — returns disks, volumes,
+//              and storage pools in one call. The original v0.5.10 plan was
+//              two-endpoint fan-out (SYNO.Core.Storage.Volume.list +
+//              SYNO.Core.Storage.Disk.list); DSM 7.1.1 rejects that shape
+//              with error 101 (invalid parameter). load_info is the same
+//              endpoint DSM's Storage Manager UI uses — stable across DSM
+//              6 and 7. Single call means Pattern 9 (allSettled fan-out)
+//              no longer applies; we either get the whole snapshot or
+//              NO SIGNAL.
+// Tile shape:  ARRAY (raid + drives) / USED (worst volume %) / N SMART (badge)
 //
-// What's INTENTIONALLY missing right now:
-//   - Real auth (DSM SID flow)
-//   - Real fetch (volumes + disks)
-//   - MonitorConfig entry in soc-wall.ts (added at implementation
-//     time so we don't render a NO SIGNAL tile prematurely)
+// Patterns honoured (spec §18):
+//   1  module shape (initSynologyCredential + getSynologyWallState)
+//   2  password from keychain, topology from .env
+//   4  http/https dual-scheme via stdlib, insecure agent gated by SYNOLOGY_INSECURE=1
+//   5  per-poll SID auth, no cross-poll caching, best-effort logout
+//   7  USER_AGENT on every request (stamped 'nerdalert/0.5.11')
+//   8  log error response bodies (clipped ~120 chars)
+//   10 direct path bypasses model entirely
 //
-// ── ARCHITECTURE NOTE — DSM 7 auth shape ─────────────────────
-// DSM 7 uses a SID-based session flow rather than a cookie:
-//
-//   POST  /webapi/entry.cgi
-//         ?api=SYNO.API.Auth&version=6&method=login
-//         &account=USER&passwd=PASS&format=sid
-//   →     { "data": { "sid": "..." }, "success": true }
-//
-// The SID is replayed on subsequent calls as either a cookie
-// (`id=SID`) or a query parameter (`_sid=SID`). We'll use the
-// query param form — simpler than cookie management, and DSM 7
-// accepts it unconditionally.
-//
-//   POST  /webapi/entry.cgi
-//         ?api=SYNO.API.Auth&version=6&method=logout&_sid=SID
-//
-// One-shot session per poll, same model as ntopng. No session
-// caching across polls — a 5-second poll cycle and a sub-50ms
-// auth round trip make the cost negligible, and stateless
-// polling avoids session-expiry edge cases.
-//
-// ── ENDPOINTS we'll consume ──────────────────────────────────
-//   SYNO.Core.Storage.Volume.list
-//     Returns volumes with status, raid_type, size_total/used,
-//     and drive count. This is the primary metric source.
-//
-//   SYNO.Core.Storage.Disk.list
-//     Returns per-disk SMART status. We only need the count of
-//     disks NOT reporting 'normal' for the computed badge.
-//
-// Both fan out via Promise.allSettled so a partial failure
-// degrades gracefully — primary tile state survives even if the
-// SMART query times out, and vice versa.
-//
-// ── TILE METRICS (Option A) ──────────────────────────────────
-//   primaryLabel    'ARRAY'
-//   primaryValue    e.g. 'SHR (1 drive)' | 'RAID 5 (4 drives)' |
-//                   'Basic' | 'JBOD (3 drives)' — RAID type +
-//                   disk count where applicable. Degraded states
-//                   surface as 'SHR (degraded)' so the
-//                   redundancy reality is always legible at a
-//                   glance, not buried in a status word.
-//   secondaryLabel  'USED'
-//   secondaryValue  worst-volume capacity %, e.g. '62%'
-//   computed        SMART warning count, e.g. '0 SMART' /
-//                   '1 SMART' / '3 SMART'
-//
-// ── STATUS THRESHOLDS ────────────────────────────────────────
-//   raid degraded || raid crashed                  → 'err'
-//   smart warnings > 0                             → 'warn'
-//   any volume capacity > 90%                      → 'warn'
-//   single-drive vdev with smart warnings > 0      → 'err'
-//                                                    (no parity →
-//                                                    a warning is
-//                                                    a real risk,
-//                                                    not advisory)
-//   else                                           → 'ok'
-//
-// The single-drive escalation rule matters for the current
-// homelab state — one drive, no redundancy, so a SMART warning
-// is not "watch this," it's "buy a second drive this weekend."
-// When a second drive lands, the rule keeps protecting against
-// degraded states, so it stays correct without further work.
-//
-// ── SECURITY BOUNDARY ────────────────────────────────────────
-// LAN-only. Use SYNOLOGY_URL pointing at the local IP. DSM's
-// HTTPS uses a self-signed cert by default; the implementation
-// will need to handle that the same way wazuh.ts does
-// (rejectUnauthorized: false on a per-request agent — only on
-// LAN URLs).
-//
-// Recommend creating a read-only DSM user for this credential
-// rather than reusing the admin account. DSM 7 supports this
-// through Control Panel → User & Group; assign to a group that
-// has read-only access to Storage Manager.
-//
-// ── CONFIGURATION ────────────────────────────────────────────
-//   SYNOLOGY_URL       — base URL incl. protocol and port
-//                        (e.g. https://192.168.1.100:5001)
-//   SYNOLOGY_USERNAME  — DSM user (default 'admin'; recommend
-//                        a dedicated read-only user)
-//   credential 'synology-password' via /setup
-//
-// USER-AGENT sent on every request per the v0.5.5 CrowdSec
-// lesson.
-// ============================================================
+// PERMISSION NOTE
+// ─────────────────────────────────────────────────────────
+// DSM 7 Storage Manager APIs require admin group membership — there is no
+// granular "view storage" permission in DSM 7. SYNOLOGY_USERNAME must
+// therefore belong to the administrators group. Code 105 ('insufficient
+// user privilege') in the API error mapping below catches the case where
+// this is wrong.
 
+import * as http from 'http';
+import * as https from 'https';
 import { getCredential } from '../../security/credential-store';
 
-// ── Config from environment ──────────────────────────────────
+const USER_AGENT = 'nerdalert/0.5.11';
 
-const SYNOLOGY_URL  = (process.env.SYNOLOGY_URL ?? '').replace(/\/$/, '');
-const SYNOLOGY_USER =  process.env.SYNOLOGY_USERNAME ?? 'admin';
-const TIMEOUT_MS    = 5000;
-const USER_AGENT    = 'nerdalert/0.5.10';
-
-// Suppress unused-warning lint until the implementation lands.
-// These are referenced in the JSDoc above and will be consumed
-// by authenticate() / fetchVolumes() / fetchDisks() next session.
-void SYNOLOGY_USER; void TIMEOUT_MS; void USER_AGENT;
-
-// ── Result shape ─────────────────────────────────────────────
-//
-// Same shape every other direct client returns. Inline rather
-// than imported from soc-wall to avoid a circular import.
+// ---------------------------------------------------------------------------
+// Result shape
+// ---------------------------------------------------------------------------
 
 export interface DirectClientResult {
   metrics: {
@@ -138,115 +54,462 @@ export interface DirectClientResult {
   status: 'ok' | 'warn' | 'err';
 }
 
-// ── Credential cache ─────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Module-scoped state
+// ---------------------------------------------------------------------------
 
 let cachedPassword: string | null = null;
 
-/**
- * Pre-loads the Synology DSM password from the OS credential
- * store into the module-private cache. Called once at server
- * boot from index.ts and again whenever /setup writes a new
- * value (security-routes.ts wires the refresh hook).
- *
- * Returns true if a credential was found and cached, false if
- * the keychain entry doesn't exist or read failed. Either is a
- * valid state — the wall tile will render NO SIGNAL until a
- * credential is configured.
- */
-export async function initSynologyCredential(): Promise<boolean> {
+interface ParsedConfig {
+  isHttps:  boolean;
+  hostname: string;
+  port:     number;
+  basePath: string;        // empty string or '/something' (no trailing slash)
+  username: string;
+  agent:    http.Agent | https.Agent;
+}
+let parsedConfig: ParsedConfig | null = null;
+
+// `initTried` flips true the first time initSynologyCredential() runs, even
+// on failure. Without it, every wall poll would retry initialisation when
+// SYNOLOGY_URL/USERNAME are missing — flooding the log with the same
+// diagnostic. /setup writes call init explicitly, so a runtime credential
+// add still works without restart.
+let initTried = false;
+
+// Logged once per process — surfaces the load_info data shape on the first
+// successful poll so we can verify the parser assumptions match what this
+// particular DSM version actually returns. Cheap to keep, valuable on the
+// next "why isn't field X populated?" debugging round.
+let loggedShape = false;
+
+// ---------------------------------------------------------------------------
+// Setup — called lazily on first poll, and again from security-routes
+// after a /setup write of synology-password.
+// ---------------------------------------------------------------------------
+
+function parseConfig(): ParsedConfig | null {
+  const raw = process.env.SYNOLOGY_URL;
+  const username = process.env.SYNOLOGY_USERNAME;
+  if (!raw || !username) return null;
+
+  let parsed: URL;
   try {
-    const value = await getCredential('synology-password');
-    if (value) { cachedPassword = value; return true; }
-    cachedPassword = null;
-    return false;
+    parsed = new URL(raw);
   } catch {
-    cachedPassword = null;
+    return null;
+  }
+
+  const isHttps = parsed.protocol === 'https:';
+  const port = parsed.port ? parseInt(parsed.port, 10) : (isHttps ? 5001 : 5000);
+  const insecure = process.env.SYNOLOGY_INSECURE === '1';
+
+  const agent = isHttps
+    ? new https.Agent({ rejectUnauthorized: !insecure, keepAlive: false })
+    : new http.Agent({ keepAlive: false });
+
+  return {
+    isHttps,
+    hostname: parsed.hostname,
+    port,
+    basePath: parsed.pathname.replace(/\/+$/, ''),
+    username,
+    agent,
+  };
+}
+
+export async function initSynologyCredential(): Promise<boolean> {
+  initTried = true;
+  parsedConfig = parseConfig();
+  if (!parsedConfig) {
+    console.log('[synology] SYNOLOGY_URL or SYNOLOGY_USERNAME not set; tile will be NO SIGNAL');
     return false;
+  }
+
+  try {
+    cachedPassword = await getCredential('synology-password');
+  } catch (err) {
+    console.log('[synology] credential read failed:', (err as Error).message);
+    cachedPassword = null;
+  }
+
+  if (!cachedPassword) {
+    console.log('[synology] no synology-password set; tile will be NO SIGNAL');
+    return false;
+  }
+
+  const scheme = parsedConfig.isHttps ? 'https' : 'http';
+  console.log(
+    `[synology] init ok (${scheme}://${parsedConfig.hostname}:${parsedConfig.port}, user=${parsedConfig.username})`
+  );
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// HTTP helper — stdlib for dual-scheme + self-signed agent control
+// ---------------------------------------------------------------------------
+
+function dsmRequest(
+  path: string,
+  method: 'GET' | 'POST' = 'GET',
+  body?: string
+): Promise<{ status: number; body: string }> {
+  if (!parsedConfig) {
+    return Promise.reject(new Error('synology not initialised'));
+  }
+  const cfg = parsedConfig;
+  const mod = cfg.isHttps ? https : http;
+
+  return new Promise((resolve, reject) => {
+    const req = mod.request(
+      {
+        hostname: cfg.hostname,
+        port: cfg.port,
+        path: cfg.basePath + path,
+        method,
+        agent: cfg.agent,
+        headers: {
+          'User-Agent': USER_AGENT,
+          ...(body
+            ? {
+                'Content-Type':   'application/x-www-form-urlencoded',
+                'Content-Length': Buffer.byteLength(body).toString(),
+              }
+            : {}),
+        },
+        timeout: 8000,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () =>
+          resolve({
+            status: res.statusCode || 0,
+            body:   Buffer.concat(chunks).toString('utf8'),
+          })
+        );
+      }
+    );
+    req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy(new Error('synology request timeout'));
+    });
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// DSM 7 errors — surface the useful ones explicitly
+// ---------------------------------------------------------------------------
+
+function dsmErrorMessage(code: number | undefined, kind: 'auth' | 'api'): string {
+  if (kind === 'auth') {
+    switch (code) {
+      case 400: return 'no such account or wrong password';
+      case 401: return 'account disabled';
+      case 402: return 'permission denied';
+      case 403: return '2FA code required (cannot proceed without OTP)';
+      case 404: return '2FA code authentication failed';
+      case 407: return 'max login attempts reached (intruder lockout)';
+      default:  return `auth error code=${code}`;
+    }
+  }
+  switch (code) {
+    case 101: return 'invalid parameter';
+    case 102: return 'API does not exist';
+    case 103: return 'method does not exist';
+    case 104: return 'version not supported';
+    case 105: return 'insufficient user privilege (user needs admin group)';
+    case 106: return 'session timeout';
+    case 107: return 'session interrupted';
+    default:  return `api error code=${code}`;
   }
 }
 
-// ── Auth + fetch — TODO(next session) ────────────────────────
-//
-// Skeletons left as comments so the implementation slot is
-// obvious. Each function below will follow the ntopng/wazuh
-// patterns already in this directory.
-//
-// async function authenticate(): Promise<string | null> {
-//   // POST /webapi/entry.cgi?api=SYNO.API.Auth&method=login&format=sid
-//   // → JSON { data: { sid }, success }
-//   // Return SID on success, null on failure.
-// }
-//
-// interface VolumeStats {
-//   raidType:   string;   // 'shr_without_protection' | 'raid_5' | 'basic' | …
-//   driveCount: number;
-//   degraded:   boolean;
-//   usedPct:    number;   // 0..100, this volume's used capacity
-// }
-//
-// async function fetchVolumes(sid: string): Promise<VolumeStats[] | null> {
-//   // GET  /webapi/entry.cgi?api=SYNO.Core.Storage.Volume&method=list&_sid=SID
-// }
-//
-// async function fetchDisks(sid: string): Promise<{ smartWarnings: number } | null> {
-//   // GET  /webapi/entry.cgi?api=SYNO.Core.Storage.Disk&method=list&_sid=SID
-// }
-//
-// async function logout(sid: string): Promise<void> {
-//   // POST /webapi/entry.cgi?api=SYNO.API.Auth&method=logout&_sid=SID
-//   // Best-effort, short timeout, swallow errors.
-// }
-//
-// function describeRaid(v: VolumeStats): string {
-//   // 'SHR (1 drive)' | 'RAID 5 (4 drives)' | 'Basic' | 'SHR (degraded)'
-// }
-//
-// function chooseStatus(volumes: VolumeStats[], smartWarnings: number): 'ok'|'warn'|'err' {
-//   // Apply the threshold rules in the header comment, including the
-//   // single-drive SMART escalation.
-// }
+// ---------------------------------------------------------------------------
+// Auth — SYNO.API.Auth v6, format=sid
+// ---------------------------------------------------------------------------
 
-// ── Public entry point — STUB ────────────────────────────────
+async function authenticate(): Promise<string | null> {
+  if (!parsedConfig || !cachedPassword) return null;
 
-/**
- * Returns the current Synology Storage Health tile state, or null
- * if the tile should render NO SIGNAL.
- *
- * Currently always returns null. The cache-refresh path is real
- * (writing 'synology-password' through /setup correctly populates
- * the cache), so credential setup can happen now and the implementation
- * can land cleanly without re-touching this module's plumbing.
- */
+  const params = new URLSearchParams({
+    api:     'SYNO.API.Auth',
+    version: '6',
+    method:  'login',
+    account: parsedConfig.username,
+    passwd:  cachedPassword,
+    session: 'NerdAlert',
+    format:  'sid',
+  });
+
+  try {
+    const { status, body } = await dsmRequest(`/webapi/entry.cgi?${params.toString()}`);
+    if (status !== 200) {
+      console.log(`[synology] auth http ${status}: ${body.slice(0, 120)}`);
+      return null;
+    }
+    const json = JSON.parse(body);
+    if (!json.success) {
+      console.log(
+        `[synology] auth failed: ${dsmErrorMessage(json.error?.code, 'auth')} body=${body.slice(0, 120)}`
+      );
+      return null;
+    }
+    const sid = json.data?.sid;
+    if (!sid) {
+      console.log('[synology] auth ok but no sid in response');
+      return null;
+    }
+    return sid;
+  } catch (err) {
+    console.log('[synology] auth error:', (err as Error).message);
+    return null;
+  }
+}
+
+async function logout(sid: string): Promise<void> {
+  const params = new URLSearchParams({
+    api:     'SYNO.API.Auth',
+    version: '6',
+    method:  'logout',
+    session: 'NerdAlert',
+    _sid:    sid,
+  });
+  try {
+    await dsmRequest(`/webapi/entry.cgi?${params.toString()}`);
+  } catch {
+    /* best-effort — do not affect return value */
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Storage info — single load_info call
+// ---------------------------------------------------------------------------
+
+interface VolumeInfo {
+  id:        string;
+  status:    string;       // normal | degraded | crashed | read_only | warning
+  raidType:  string;       // shr | shr_2 | raid_5 | raid_6 | raid_1 | basic | jbod | raid_0 | raid_10
+  diskCount: number;
+  usedPct:   number;
+}
+
+interface DiskInfo {
+  id:          string;
+  smartStatus: string;     // normal | warning | critical | failing | unknown
+}
+
+interface LoadInfoResult {
+  volumes: VolumeInfo[];
+  disks:   DiskInfo[];
+}
+
+async function fetchLoadInfo(sid: string): Promise<LoadInfoResult> {
+  const params = new URLSearchParams({
+    api:     'SYNO.Storage.CGI.Storage',
+    version: '1',
+    method:  'load_info',
+    _sid:    sid,
+  });
+  const { status, body } = await dsmRequest(`/webapi/entry.cgi?${params.toString()}`);
+  if (status !== 200) {
+    throw new Error(`load_info http ${status}: ${body.slice(0, 120)}`);
+  }
+  const json = JSON.parse(body);
+  if (!json.success) {
+    throw new Error(
+      `${dsmErrorMessage(json.error?.code, 'api')} body=${body.slice(0, 120)}`
+    );
+  }
+
+  const data = json.data || {};
+  const rawVolumes = data.volumes || [];
+  const rawDisks   = data.disks || [];
+  // Pool array key varies across DSM minor versions: storagePools (camelCase),
+  // storage_pools (snake_case), or just pools. Try in order.
+  const rawPools   = data.storagePools || data.storage_pools || data.pools || [];
+
+  // One-shot diagnostic on first successful poll. Helps verify the parser
+  // assumptions match what this DSM version actually returns. Won't repeat
+  // — process restart resets the flag.
+  if (!loggedShape) {
+    loggedShape = true;
+    const keys = Object.keys(data);
+    console.log(
+      `[synology] load_info ok — data keys: [${keys.join(', ')}]; ` +
+      `volumes=${rawVolumes.length}, disks=${rawDisks.length}, pools=${rawPools.length}`
+    );
+  }
+
+  // Build pool lookup by every plausible key (id, pool_path).
+  const poolByKey = new Map<string, any>();
+  for (const p of rawPools) {
+    if (p.id)        poolByKey.set(String(p.id), p);
+    if (p.pool_path) poolByKey.set(String(p.pool_path), p);
+  }
+
+  // Single-pool homelab fallback — when there's exactly one pool, every
+  // volume belongs to it whether the link field is named one thing or
+  // another. Multi-pool systems where a volume doesn't match cleanly will
+  // show 'unknown' raid type, which is operator-visible (not silent).
+  const onlyPool = rawPools.length === 1 ? rawPools[0] : null;
+
+  const volumes: VolumeInfo[] = rawVolumes.map((v: any): VolumeInfo => {
+    const total = parseInt(v.size?.total ?? '0', 10);
+    const used  = parseInt(v.size?.used  ?? '0', 10);
+    const usedPct = total > 0 ? Math.round((used / total) * 100) : 0;
+
+    // Try several plausible volume→pool reference fields.
+    const matched =
+      poolByKey.get(String(v.pool_path)) ||
+      poolByKey.get(String(v.container?.pool_path)) ||
+      poolByKey.get(String(v.parent)) ||
+      poolByKey.get(String(v.parent_id)) ||
+      onlyPool;
+
+    const raidType = (
+      matched?.raid_type ??
+      matched?.device_type ??
+      v.raid_type ??
+      'unknown'
+    ).toString();
+
+    const diskCount = parseInt(
+      (
+        matched?.num_disk ??
+        matched?.disks?.length ??
+        v.disk_count ??
+        0
+      ).toString(),
+      10
+    );
+
+    return {
+      id:        v.id || v.vol_path || 'unknown',
+      status:    (v.status || 'unknown').toString().toLowerCase(),
+      raidType:  raidType.toLowerCase(),
+      diskCount,
+      usedPct,
+    };
+  });
+
+  const disks: DiskInfo[] = rawDisks.map((d: any): DiskInfo => ({
+    id:          (d.id || d.device || d.disk_id || 'unknown').toString(),
+    smartStatus: (d.smart_status || d.status || 'unknown').toString().toLowerCase(),
+  }));
+
+  return { volumes, disks };
+}
+
+// ---------------------------------------------------------------------------
+// Tile shape — Option A (state first, numbers second)
+// ---------------------------------------------------------------------------
+
+const RAID_DISPLAY: Record<string, string> = {
+  shr:                      'SHR',
+  shr_2:                    'SHR-2',
+  shr_without_disk_protect: 'SHR',     // single-drive SHR pool — DSM's term for "no parity yet"
+  basic:                    'Basic',
+  single:                   'Basic',   // DSM occasionally reports basic volumes as 'single'
+  jbod:                     'JBOD',
+  raid_0:                   'RAID 0',
+  raid_1:                   'RAID 1',
+  raid_5:                   'RAID 5',
+  raid_6:                   'RAID 6',
+  raid_10:                  'RAID 10',
+};
+
+function formatArrayLabel(v: VolumeInfo): string {
+  const label = RAID_DISPLAY[v.raidType] || v.raidType.toUpperCase();
+  // Surface degraded / crashed states inline so the redundancy picture is legible at a glance.
+  if (v.status === 'crashed')  return `${label} (crashed)`;
+  if (v.status === 'degraded') return `${label} (degraded)`;
+  const drives = v.diskCount === 1 ? '1 drive' : `${v.diskCount} drives`;
+  return `${label} (${drives})`;
+}
+
+// Pick the worst volume — degraded/crashed first, then highest used%.
+function pickWorstVolume(volumes: VolumeInfo[]): VolumeInfo | undefined {
+  if (volumes.length === 0) return undefined;
+  const score = (v: VolumeInfo): number => {
+    if (v.status === 'crashed')  return 3;
+    if (v.status === 'degraded') return 2;
+    if (v.usedPct > 90)          return 1;
+    return 0;
+  };
+  return [...volumes].sort((a, b) => {
+    const sd = score(b) - score(a);
+    return sd !== 0 ? sd : b.usedPct - a.usedPct;
+  })[0];
+}
+
+// ---------------------------------------------------------------------------
+// Public: getSynologyWallState — the wall poll
+// ---------------------------------------------------------------------------
+
 export async function getSynologyWallState(): Promise<DirectClientResult | null> {
-  // Lazy-load credential on first call. The cache-refresh hook in
-  // security-routes.ts also calls initSynologyCredential() directly
-  // when /setup writes a new value, so a freshly-set credential is
-  // available without a server restart.
-  if (cachedPassword === null) {
+  // Lazy-init on first call (matches ntopng.ts / zeek.ts pattern). The
+  // /setup refresh hook in security-routes.ts re-runs init when the
+  // password is added at runtime, so credentials added after boot still
+  // light the tile up without a server restart.
+  if (!initTried) {
     await initSynologyCredential();
   }
 
-  // No URL configured → never poll. Lets the tile exist in source
-  // without surfacing on dev machines that don't have a NAS to talk to.
-  if (!SYNOLOGY_URL) return null;
+  if (!parsedConfig || !cachedPassword) return null;
 
-  // No credential configured → NO SIGNAL. Operator hasn't run /setup
-  // yet; the tile renders dark with no error.
-  if (!cachedPassword) return null;
+  const sid = await authenticate();
+  if (!sid) return null;
 
-  // STUB — implementation deferred. The wiring below this line is
-  // the next session's work:
-  //
-  //   const sid = await authenticate();
-  //   if (!sid) return null;
-  //   try {
-  //     const [volumesRes, disksRes] = await Promise.allSettled([
-  //       fetchVolumes(sid),
-  //       fetchDisks(sid),
-  //     ]);
-  //     // …compose DirectClientResult per Option A…
-  //   } finally {
-  //     await logout(sid);
-  //   }
-  return null;
+  try {
+    let volumes: VolumeInfo[] = [];
+    let disks: DiskInfo[] = [];
+
+    try {
+      const result = await fetchLoadInfo(sid);
+      volumes = result.volumes;
+      disks   = result.disks;
+    } catch (err) {
+      console.log('[synology] load_info failed:', (err as Error).message);
+      return null;
+    }
+
+    if (volumes.length === 0 && disks.length === 0) return null;
+
+    const worst = pickWorstVolume(volumes);
+    const smartWarn = disks.filter(
+      (d) => d.smartStatus !== 'normal' && d.smartStatus !== 'unknown'
+    ).length;
+
+    // §19 status thresholds
+    let status: 'ok' | 'warn' | 'err' = 'ok';
+    if (worst) {
+      if (worst.status === 'crashed' || worst.status === 'degraded') {
+        status = 'err';
+      } else if (worst.usedPct > 90) {
+        status = 'warn';
+      }
+    }
+    if (smartWarn > 0) {
+      // Single-drive escalation rule — no parity, a SMART warning is actionable.
+      const singleDrive = !!worst && worst.diskCount <= 1;
+      if (singleDrive) status = 'err';
+      else if (status !== 'err') status = 'warn';
+    }
+
+    return {
+      metrics: {
+        primaryLabel:   'ARRAY',
+        primaryValue:   worst ? formatArrayLabel(worst) : '—',
+        secondaryLabel: 'USED',
+        secondaryValue: worst ? `${worst.usedPct}%` : '—',
+        computed:       `${smartWarn} SMART`,
+      },
+      status,
+    };
+  } finally {
+    await logout(sid);
+  }
 }
