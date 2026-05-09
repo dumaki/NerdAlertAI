@@ -51,7 +51,7 @@ export const cronManagerTool: NerdAlertTool = {
     properties: {
       action: {
         type: 'string',
-        enum: ['create', 'list', 'delete', 'pause', 'resume', 'status', 'logs'],
+        enum: ['create', 'list', 'delete', 'pause', 'resume', 'status', 'logs', 'recent_failures'],
         description: 'The operation to perform.'
       },
       name: {
@@ -274,8 +274,68 @@ export const cronManagerTool: NerdAlertTool = {
         return ok(`📜 Run log for "${job.name}" (last ${runs.length}):\n\n${lines.join('\n\n')}`);
       }
 
+      // ── recent_failures ────────────────────────────
+      //
+      // Aggregates recent FAILED runs across all scheduled jobs. Built
+      // for the intent-prefetch cron group: "what's the most recent
+      // failure?" doesn't tell us a job_id, and walking jobs one-by-one
+      // through the model would burn iterations. This action does the
+      // walk server-side and returns a flat, time-sorted list.
+      //
+      // No-failure case returns a clean affirmative so the narrating
+      // model has something coherent to say ("everything's running
+      // clean") rather than improvising.
+      case 'recent_failures': {
+        const limit = (params.limit as number) ?? 10;
+        const jobs = getAllJobs();
+
+        if (jobs.length === 0) {
+          return ok('No scheduled jobs exist yet — nothing to fail.');
+        }
+
+        // Walk every job's recent run history, collect failures.
+        // 10 runs per job is plenty — missed runs older than that are
+        // unlikely to still be relevant for "what failed recently".
+        const allFailures: Array<{ job: any; run: any }> = [];
+        for (const job of jobs) {
+          const runs = getRecentRuns(job.id, 10);
+          for (const r of runs) {
+            if (r.status === 'failure') {
+              allFailures.push({ job, run: r });
+            }
+          }
+        }
+
+        if (allFailures.length === 0) {
+          return ok(
+            `✅ No recent failures across any of the ${jobs.length} scheduled job(s). ` +
+            `Everything is running clean.`
+          );
+        }
+
+        // Most recent first.
+        allFailures.sort((a, b) =>
+          new Date(b.run.fired_at).getTime() - new Date(a.run.fired_at).getTime()
+        );
+        const recent = allFailures.slice(0, limit);
+
+        const lines = recent.map(({ job, run }, i) => {
+          const t = new Date(run.fired_at).toLocaleString('en-US', { timeZone: job.timezone });
+          const dur = run.duration_ms ? ` · ${run.duration_ms}ms` : '';
+          const errExcerpt = (run.error ?? 'unknown error')
+            .split('\n').slice(0, 5).join('\n     ');
+          return `${i + 1}. ❌ ${job.name} (${job.id})\n   Fired: ${t}${dur}\n   Error: ${errExcerpt}`;
+        });
+
+        return ok(
+          `📛 Recent failures across all scheduled jobs ` +
+          `(showing ${recent.length} of ${allFailures.length} total):\n\n` +
+          lines.join('\n\n')
+        );
+      }
+
       default:
-        return err(`Unknown action: "${action}". Valid actions: create, list, delete, pause, resume, status, logs.`);
+        return err(`Unknown action: "${action}". Valid actions: create, list, delete, pause, resume, status, logs, recent_failures.`);
     }
   }
 };

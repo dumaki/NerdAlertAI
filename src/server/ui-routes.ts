@@ -28,6 +28,8 @@ import { getAvailableTools, toAnthropicFormat, toOpenAIFormat } from '../tools/r
 import {
   getLLMConfig,
   setActiveModel,
+  streamOllama,
+  streamOpenRouter,
   type ORMessage,
 } from '../core/llm-client';
 import {
@@ -315,6 +317,109 @@ async function handlePseudoToolStream(
   void dedupSources(sourceSink);
 }
 
+// ── Single-turn narration handler — NEW for v0.5.13.1 ─────────
+//
+// Runs when intent-prefetch produced narratable data. Skips the
+// tool adapter entirely and just streams text from the model with
+// the enriched system prompt (which already contains the LIVE
+// SYSTEM DATA block from buildInjectedPrompt).
+//
+// Why this exists: when prefetch fires AND we route through the
+// pseudo-tool adapter, the model sees two contradictory instruction
+// blocks in the system prompt:
+//
+//   buildToolSystemBlock:   "You MUST call a tool. Do not invent
+//                            answers. Do not narrate from memory.
+//                            Guessing is a failure mode."
+//
+//   buildInjectedPrompt:    "Begin your response immediately... Report
+//                            ONLY the values shown above. Do NOT
+//                            generate JSON, code blocks, or tool-call
+//                            syntax of any kind. Do NOT invent
+//                            additional tool calls."
+//
+// Mistral 3.2 freezes on the conflict and finishes the turn without
+// tool calls AND without useful text — the empty-bubble + missing
+// source-rail symptom on weather/web/datetime queries while Gmail
+// squeaks through on data verbosity alone. Cron failure queries work
+// because cron isn't in the intent map → no prefetch → no conflict.
+//
+// This handler also emits synthetic tool_result events for each
+// successful prefetch so the source-rail cards get the actual content
+// and citation chips populated, rather than staying on the
+// "Data injected into response." placeholder forever.
+//
+// This matches the documented prefetch-narration single-turn pattern
+// and is what the OpenRouter free-tier path was originally designed
+// to do before the pseudo-tool adapter came in.
+async function handleNarrationStream(
+  res:             Response,
+  enrichedPrompt:  string,
+  initialMessages: Anthropic.MessageParam[],
+  prefetchSources: Source[],
+  prefetchResults: PrefetchResult[],
+  transport:       'openrouter' | 'ollama',
+): Promise<void> {
+
+  const llm = getLLMConfig();
+  const bareModel = llm.model.replace(/^ollama\//, '');
+
+  // Convert Anthropic MessageParam history → ORMessage. Same shape
+  // dance as the other handlers — text-only history, tool calls
+  // from prior turns are stripped (we're not running a tool loop).
+  const orMessages: ORMessage[] = initialMessages.map((m) => ({
+    role: m.role as 'user' | 'assistant',
+    content: typeof m.content === 'string'
+      ? m.content
+      : (m.content as Array<{ type: string; text?: string }>)
+          .filter((b) => b.type === 'text' && b.text)
+          .map((b) => b.text!)
+          .join(''),
+  }));
+
+  // Emit tool_start + tool_result for each available prefetched tool so
+  // the frontend renders ONE collapsible card per tool with the actual
+  // content inside. The chat/stream handler skips its tool_prefetch
+  // emit when narration runs (see hasNarratablePrefetch gate above) so
+  // these are the only tool-card events that fire on this path.
+  //
+  // tool_start creates a thinking spinner inside #streaming-bubble;
+  // tool_result then finds that element by id and replaces it with
+  // the data card. Both fire before tokens stream, so the spinner is
+  // usually too brief to register visually — but that's accurate:
+  // prefetch already finished server-side. The card lands populated,
+  // no placeholder.
+  for (const r of prefetchResults) {
+    if (!r.available) continue;
+    const id = `prefetch_${r.toolName}`;
+    sseEvent(res, 'tool_start',  { id, name: r.toolName });
+    sseEvent(res, 'tool_result', { id, name: r.toolName, output: r.data });
+  }
+
+  let fullText = '';
+
+  try {
+    const stream = transport === 'ollama'
+      ? streamOllama(orMessages, enrichedPrompt, bareModel)
+      : streamOpenRouter(orMessages, enrichedPrompt, llm.model);
+
+    for await (const chunk of stream) {
+      fullText += chunk;
+      sseEvent(res, 'token', { text: chunk });
+    }
+
+    sseEvent(res, 'done', {
+      text:    fullText,
+      sources: dedupSources(prefetchSources),
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    sseEvent(res, 'error', { message });
+  } finally {
+    res.end();
+  }
+}
+
 // ── Cron SSE broadcast (unchanged) ───────────────────────────
 const cronClients = new Set<Response>();
 
@@ -418,10 +523,10 @@ export function mountUIRoutes(app: Express): void {
 
       let enrichedPrompt = systemPrompt;
       const prefetchSources: Source[] = [];
+      let prefetchResults: PrefetchResult[] = [];
 
       if (needsPrefetch) {
         const detectedGroups = detectIntent(safeMessage);
-        let prefetchResults: PrefetchResult[] = [];
 
         if (detectedGroups.length > 0) {
           const historyTurns: HistoryTurn[] = conversationHistory
@@ -446,29 +551,56 @@ export function mountUIRoutes(app: Express): void {
               prefetchSources.push(...r.sources);
             }
           }
-
-          if (prefetchResults.length > 0) {
-            sseEvent(res, 'tool_prefetch', {
-              tools: prefetchResults.map(r => ({
-                name:      r.toolName,
-                group:     r.groupName,
-                available: r.available,
-              })),
-              showEmailApproval: prefetchResults.some(r => r.groupName === 'gmail' && r.available),
-            });
-          }
         }
       }
 
       // ── Route to the right adapter ────────────────────────
-      if (llm.provider === 'ollama') {
-        await handleOllamaStream(res, enrichedPrompt, messages, prefetchSources, trustLevel);
-      } else if (llm.provider === 'openrouter') {
-        await handlePseudoToolStream(res, enrichedPrompt, messages, prefetchSources, trustLevel);
-      } else {
-        // Anthropic
+      const hasNarratablePrefetch = prefetchResults.some(r => r.available);
+
+      // Emit the tool_prefetch SSE event ONLY for paths that won't
+      // narrate. Narration emits tool_start + tool_result inside
+      // handleNarrationStream so the rail card shows actual content
+      // instead of the "Data injected into response." placeholder.
+      // Without this gate, both event families fire and the user sees
+      // two cards per tool (one empty in #prefetch-blocks, one
+      // populated in #streaming-bubble).
+      if (prefetchResults.length > 0 && !hasNarratablePrefetch) {
+        sseEvent(res, 'tool_prefetch', {
+          tools: prefetchResults.map(r => ({
+            name:      r.toolName,
+            group:     r.groupName,
+            available: r.available,
+          })),
+          showEmailApproval: prefetchResults.some(r => r.groupName === 'gmail' && r.available),
+        });
+      }
+
+      // Decision tree:
+      //   1. Anthropic              → ReAct loop (its own tool calling, no prefetch)
+      //   2. Ollama/OR + prefetch   → single-turn narration (skips the tool
+      //                                protocol that contradicts the prefetch's
+      //                                "narrate, don't call tools" instructions —
+      //                                see handleNarrationStream comment)
+      //   3. Ollama (no prefetch)   → native OpenAI tool_calls (with pseudo
+      //                                fallback if the model isn't tool-flagged)
+      //   4. OpenRouter (no prefetch) → pseudo-tool XML protocol
+      if (llm.provider === 'anthropic') {
         const tools = toAnthropicFormat(getAvailableTools()) as Anthropic.Tool[];
         await handleAnthropicStream(res, systemPrompt, messages, tools, trustLevel);
+      } else if (hasNarratablePrefetch) {
+        await handleNarrationStream(
+          res,
+          enrichedPrompt,
+          messages,
+          prefetchSources,
+          prefetchResults,
+          llm.provider,
+        );
+      } else if (llm.provider === 'ollama') {
+        await handleOllamaStream(res, enrichedPrompt, messages, prefetchSources, trustLevel);
+      } else {
+        // OpenRouter, no prefetch matched
+        await handlePseudoToolStream(res, enrichedPrompt, messages, prefetchSources, trustLevel);
       }
 
       const saveable = [

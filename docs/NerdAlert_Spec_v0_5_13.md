@@ -29,7 +29,7 @@ Project Specification • v0.5.13
 | v0.5.10 | May 2026 | File-extraction dispatcher (PDF, DOCX, XLSX, CSV, TXT, MD, EPUB). Per-format extractors registered by extension. Polite refusal for legacy/binary formats. |
 | v0.5.11 | May 2026 | Legacy .ppt joins .doc/.fdr in the modern-format short-circuit. Intent-prefetch keyword sync. clipPrefetchForFreeTier() replaces oversized prefetch with stronger-model directive. Pattern 13 (free-tier narration cap). MOBI/AZW/AZW3 polite refusal. |
 | v0.5.12 | May 2026 | Provider-neutral AgentEvent layer. Pseudo-tool adapter for non-tool models via XML `<tool_call>` blocks. Permission broker as single chokepoint for tool execution. SSE bridge translates AgentEvents to existing wire events; Anthropic SSE output byte-identical. |
-| **v0.5.13** | **May 2026** | **Multi-provider tool loop landed. OpenAI-native adapter (full streaming `tool_calls` delta accumulator) for any OpenAI-compatible provider. Auto-fallback: when provider rejects `tools` parameter (Ollama Modelfile capability flag), `ToolCapabilityError` propagates from adapter to route handler, model added to in-memory `noNativeToolSupport` cache, request retried through pseudo-tool adapter on the same response stream. Pseudo-tool v4: JSON depth counter handles Mistral's native `[TOOL_CALLS][{...}]` format with implicit close, plus 200-byte preamble tolerance for leaked template tokens like `tool_call<SPECIAL_32>`. First multi-turn ReAct loop on a non-Anthropic model in NerdAlertAI history — Mistral 3.2 chained four `cron_manager` calls to discover job IDs, recover from a tool error, and produce a real summary with real timestamps and no confabulation.** |
+| **v0.5.13** | **May 2026** | **Multi-provider tool loop landed. OpenAI-native adapter (full streaming `tool_calls` delta accumulator) for any OpenAI-compatible provider. Auto-fallback: when provider rejects `tools` parameter (Ollama Modelfile capability flag), `ToolCapabilityError` propagates from adapter to route handler, model added to in-memory `noNativeToolSupport` cache, request retried through pseudo-tool adapter on the same response stream. Pseudo-tool v4: JSON depth counter handles Mistral's native `[TOOL_CALLS][{...}]` format with implicit close, plus 200-byte preamble tolerance for leaked template tokens like `tool_call<SPECIAL_32>`. First multi-turn ReAct loop on a non-Anthropic model in NerdAlertAI history — Mistral 3.2 chained four `cron_manager` calls to discover job IDs, recover from a tool error, and produce a real summary with real timestamps and no confabulation. Prefetch-narration single-turn path (`handleNarrationStream`) resolves the system-prompt contradiction between the pseudo-tool protocol ("you MUST call a tool") and `buildInjectedPrompt` ("data is here, narrate it") that froze Mistral 3.2 on weather/web/datetime/gmail queries; skips the tool adapter when prefetch produced narratable data and emits `tool_start` + `tool_result` per tool for single populated rail cards. New `cron` intent group with `cron_manager.recent_failures` action covers cross-job failure queries server-side (no `job_id` needed). `'today'` removed from datetime keywords (false-positive on "X today?" suffix).** |
 
 # **1–10. Unchanged from v0.5.11**
 
@@ -181,6 +181,81 @@ This replaces the v0.5.x string-matching approval pattern (where the UI sent `"g
 - Does not implement BYOK (Bring Your Own Key) for OpenAI / Mistral cloud / Groq / etc. That's v0.7 (see `v0_7_milestone_block.md`). The transport infrastructure is in place; what's missing is the `/setup` Models tab and per-provider config schema.
 - Does not enforce `max_trust_level` per-model. The `BrokerContext.maxModelTrustLevel` field is honored by the broker but no model config sets it yet. v0.7 BYOK lands the wiring.
 
+# **11.6 The Prefetch-Narration Path (NEW in v0.5.13)**
+
+| **DESIGN RULE** |
+| --- |
+| When intent-prefetch produces narratable data for a non-Anthropic provider, skip the tool adapter entirely and stream a single-turn narration. The tool adapter's system-prompt protocol ("you MUST call a tool, do not invent answers") directly contradicts `buildInjectedPrompt`'s instructions ("data is here, narrate it, do NOT generate tool-call syntax"). Small open-weights models freeze on the contradiction. The narration path resolves it by removing one side of the conflict. |
+
+## **The contradiction it resolves**
+
+Before v0.5.13's narration path, every non-Anthropic request with prefetched data went through the pseudo-tool adapter (or OpenAI-native, falling back to pseudo). The system prompt the model received looked like:
+
+```
+TOOL CALL PROTOCOL — READ BEFORE RESPONDING
+  You have access to real tools that connect to live systems.
+  For ANY question about real, current, or specific data —
+  you MUST call a tool. Do not invent answers. Do not narrate
+  from memory. Guessing is a failure mode.
+  ...
+  AVAILABLE TOOLS: (43 tools listed with parameter synopses)
+
+--- LIVE SYSTEM DATA (pre-fetched) ---
+[WEATHER]
+  Right now in CHICAGO, ILLINOIS it's 75°...
+---
+  The above data was retrieved before this conversation turn.
+  Begin your response immediately in the agent's voice with
+  the actual answer. Do NOT generate JSON, code blocks, or
+  tool-call syntax of any kind. Do NOT invent additional tool
+  calls.
+```
+
+Mistral Small 3.2 24B reads both blocks and freezes — finishes the turn with no tool calls AND no useful text. The `[pseudo:confabulation_risk]` warning fires. Gmail squeaks through because its prefetch payload is verbose enough that "narrate this" wins on volume; the terser weather/datetime/web payloads aren't enough to overcome the protocol's emphasis. The cron failure query (no prefetch group matched it pre-v0.5.13) hit the same wall — Mistral refused with "I don't have access to the tools needed to check that."
+
+## **The resolution**
+
+The route handler at `POST /chat/stream` now routes prefetch-satisfied queries to `handleNarrationStream` instead of the tool adapters:
+
+| **Provider** | **Prefetch produced data?** | **Path** |
+| --- | --- | --- |
+| `anthropic/*` | (n/a — no prefetch) | `runAnthropicAdapter` (ReAct loop) |
+| `ollama/*` or `openrouter/*` | yes | `handleNarrationStream` (single-turn narration) |
+| `ollama/*` | no (or all tools failed) | `runOpenAIAdapter` → pseudo-tool fallback |
+| `openrouter/*` | no | `runPseudoToolAdapter` |
+
+`handleNarrationStream` does three things:
+
+1. Emits `tool_start` then `tool_result` SSE events for each available prefetched tool. The frontend's `tool_result` handler finds the thinking element by id and replaces it with a populated card — single card per tool with real content, no "Data injected into response." placeholder.
+2. Streams text from the model directly through `streamOllama` or `streamOpenRouter` with the enriched system prompt (personality + `buildInjectedPrompt(narratable)`). No tool protocol layered on top, no tool list, no tag scanner. The model sees the data and narrates it.
+3. Emits `done` with deduped sources from `prefetchSources`, populating the bottom Sources panel.
+
+The `tool_prefetch` SSE event is gated to fire only when prefetch ran but produced no narratable data (all tools failed), since that path still uses the tool adapters and benefits from the placeholder cards. The two SSE event families never both fire in one response, so the previously-doubled card rendering is structurally impossible now.
+
+## **The cron case study**
+
+The "What's the most recent failure in any of my cron jobs and what was the error?" query is the canonical example of why this path matters. Pre-v0.5.13:
+
+- No `cron` intent group existed, so no prefetch fired.
+- Query routed to the pseudo-tool adapter.
+- Mistral was given 43 tool definitions and a long protocol prompt.
+- Mistral refused: "I'm sorry, but I don't have access to the tools needed to check the most recent failure in your cron jobs."
+
+Resolution required two pieces:
+
+1. **`cron_manager.recent_failures` action.** Aggregates failed runs across all scheduled jobs server-side, returns a flat time-sorted list with job names, fired timestamps, durations, and truncated error excerpts. No `job_id` needed — the prefetch path can't know one. No-failure case returns a clean affirmative ("No recent failures across any of the N scheduled jobs. Everything is running clean.") so the narrating model has something coherent to say rather than improvising.
+2. **`cron` intent group.** Keywords kept narrow (`cron`, `cron job`, `scheduled job`, `recurring task`, `scheduler`) to avoid false-positives on broader "task" / "job" / "schedule" vocabulary. ParamExtractor switches the action based on query flavor: failure-flavored queries (`failure`, `failed`, `error`, `crashed`, `didn't run`) route to `recent_failures` with limit 10; everything else falls through to the default `list` action.
+
+With both pieces in place, the query now matches the cron group, prefetch runs `recent_failures`, and Mistral narrates: "The SOC Hourly Summary job failed this morning three times due to an undici fetch error in our node code..."
+
+Write actions on cron jobs (create/delete/pause/resume) are NOT served by prefetch — those need agent-mediated calls so the user can confirm. On Mistral today this means "create a cron job for X" gets a job listing instead, which is a livable trade-off until v0.7's full tool loop replaces this whole architecture.
+
+## **Trade-offs**
+
+- **No mid-stream tool calls.** The narration path is single-turn. If the user's query implies follow-up actions ("list my inbox AND delete the promos"), the model only narrates the inbox half. v0.7's BYOK tool loop fixes this properly.
+- **Spinner is brief.** `tool_start` and `tool_result` fire back-to-back before any tokens stream, so the spinner is usually too quick to see. The populated card is the indicator that work happened. If a tester reports the card appearing AFTER the prose rather than alongside, that's a frontend ordering question (the `tool-thinking` element is `appendChild`'d to `#streaming-bubble` after `streaming-text`) — the data itself is correct.
+- **Confabulation guard is no longer needed for prefetched queries.** They never reach the pseudo-tool adapter, so `[pseudo:confabulation_risk]` only fires on non-prefetch queries (cron with old keywords, niche topics). The follow-up to plumb `prefetchCovered: boolean` through `PseudoAdapterParams` is now moot — prefetched queries don't go through pseudo at all.
+
 # **12+. Unchanged from v0.5.11**
 
 UI commands (§12), deployment model (§13), branch strategy, and all subsequent sections are unchanged.
@@ -196,6 +271,9 @@ The following rows are added to the §10 Module Status table:
 | **OpenAI-Native Tool Loop** | **✅ Complete (v0.5.13)** | N/A | Streaming `tool_calls` delta accumulator. Used today by Ollama (when capability allows) and reserved for v0.7 BYOK Mistral cloud / OpenAI / Groq / etc. |
 | **Auto-Fallback (Ollama)** | **✅ Complete (v0.5.13)** | N/A | `ToolCapabilityError` propagates to route handler. Per-model `noNativeToolSupport` cache. Same-response stream retry through pseudo-tool. |
 | **Mistral [TOOL_CALLS] Parser** | **✅ Complete (v0.5.13)** | N/A | JSON depth counter (string-aware) for implicit-close native format. 200-byte preamble tolerance for leaked template tokens. |
+| **Prefetch-Narration Path** | **✅ Complete (v0.5.13)** | N/A | `handleNarrationStream` for non-Anthropic providers when prefetch produced narratable data. Skips tool adapter, emits `tool_start`+`tool_result` per tool for single populated rail cards, streams narration with enriched prompt. Resolves the protocol/prefetch contradiction. |
+| **`cron` Intent Group** | **✅ Complete (v0.5.13)** | L1 | Keywords: cron, scheduled job, recurring task, scheduler. ParamExtractor routes failure-flavored queries to `recent_failures`, defaults to `list`. Read-only — write actions still need agent-mediated calls. |
+| **`cron_manager.recent_failures`** | **✅ Complete (v0.5.13)** | L1 | Aggregates failed runs across all scheduled jobs server-side. No `job_id` needed. Clean affirmative on no-failures case. Built specifically for the prefetch path — the model can't know a `job_id` without first calling `list`. |
 
 # **Patterns added in v0.5.13**
 
@@ -217,6 +295,10 @@ Streaming token formats vary per model. Mistral's native `[TOOL_CALLS][{...}]` h
 
 Models trained with chat templates sometimes leak reserved tokens (`<SPECIAL_32>`, `<|tool_call|>`, etc.) when the deployment's template config doesn't consume them. Don't fight this with per-token recognition logic — accept arbitrary preamble between an open marker and the structural data start, with a sanity byte limit (200 bytes proved sufficient for Mistral 3.2 in our testing). If the budget is exceeded, bail to text — the model probably wasn't actually emitting a tool call.
 
+### **Pattern 18 — Prefetch-narration as contradiction resolver**
+
+When two system-prompt blocks give contradictory instructions to a small open-weights model, the model freezes — not because either instruction is wrong but because choosing between them isn't a capability the 24B parameter range reliably has. The fix is structural: don't put both blocks in the same prompt. If prefetch produced data, the model's job is narration; route to a code path that doesn't include the tool protocol. If prefetch produced nothing, the model's job is tool calling; the tool protocol is appropriate. The route handler decides based on `prefetchResults.some(r => r.available)` — a single boolean that's already computed for other reasons. Don't try to soften the contradiction with phrasing tweaks or examples; remove one side of it.
+
 # **Key learnings from v0.5.12 / v0.5.13**
 
 Added to the running learnings list in the project knowledge:
@@ -226,10 +308,13 @@ Added to the running learnings list in the project knowledge:
 - **Mistral 3.2 native format leaks template tokens through Ollama.** The model is tool-capable; the Ollama tag isn't flagged. Auto-fallback handles it transparently. A Modelfile fix on the Ollama side would let it use the native path automatically without code changes.
 - **First multi-turn ReAct on a non-Anthropic local model.** Mistral chained four `cron_manager` calls — discovery, error recovery, narrowed query, second narrowed query — to produce a real summary with real timestamps. Validates the entire layer end-to-end on the hardest path.
 - **Diagnostic logs as triangulation tools.** `[openai-native:iter]`, `[capability]`, `[capability-cache]`, `[pseudo:iter]`, `[pseudo:confabulation_risk]` each tell you exactly which stage handled a given request. Worth keeping behind a `DEBUG_AGENT_EVENTS` env flag in production rather than removing entirely.
+- **System-prompt contradictions freeze small models.** Mistral 3.2 24B with the pseudo-tool protocol ("MUST call a tool") layered on top of `buildInjectedPrompt` ("data is here, narrate it") finished turns with neither tool calls nor useful text. Gmail squeaked through on data verbosity alone; weather/web/datetime/cron didn't. The fix wasn't better phrasing — it was structural separation of the narration path from the tool-loop path. If your model needs to decide between two contradictory instructions, the 24B parameter range can't reliably do that; route around the choice.
+- **Single-turn narration matches Mistral's native strength.** Open-weights models in this size class are reliable narrators of structured data and unreliable tool callers when the tool count is high. Lean into the strength: prefetch the data, hand the model just the narration job. Tool-loop paths are reserved for queries prefetch can't satisfy.
+- **Frontend rendering pathways are independent.** `tool_prefetch` lands in `#prefetch-blocks`; `tool_start`/`tool_result` lands in `#streaming-bubble`. Emitting both produces two cards per tool because the frontend treats them as distinct entries. The fix is a backend gate: pick one event family per response based on which path is active. Avoided a frontend change.
 
 # **Known follow-ups (deferred)**
 
-- **Prefetch-aware confab warning.** Currently `[pseudo:confabulation_risk]` fires on prefetched queries (weather false-positive). Pass `prefetchCovered: boolean` through `PseudoAdapterParams`; suppress warning when set.
+- **Prefetch-aware confab warning.** ~~Currently `[pseudo:confabulation_risk]` fires on prefetched queries (weather false-positive). Pass `prefetchCovered: boolean` through `PseudoAdapterParams`; suppress warning when set.~~ **Resolved by §11.6 Prefetch-Narration Path** — prefetched queries no longer reach the pseudo-tool adapter at all. The warning still fires on legitimate non-prefetch queries that the model refused, which is the original intent.
 - **UI listener for new SSE events.** `approval_request` / `approval_resolved` are emitted but the existing free-text approval cards still work, so the UI hasn't been wired for them. Small slice when ready.
 - **Diagnostic log gate.** Wrap `[openai-native:iter]` etc. in `if (process.env.DEBUG_AGENT_EVENTS)` for production cleanliness.
 - **`max_trust_level` per-model wiring.** Broker honors the field; v0.7 BYOK lands the config path.

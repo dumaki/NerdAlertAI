@@ -97,7 +97,15 @@ interface IntentGroup {
 
 const INTENT_MAP: Record<string, IntentGroup> = {
   datetime: {
-    keywords: ['time', 'date', 'what day', 'what time', 'current time', 'today', 'clock'],
+    // 'today' was removed in v0.5.13.1 — it was firing on phrases
+    // like "what's the weather today" and pulling get_datetime into
+    // the prefetch alongside weather, producing a redundant
+    // GET_DATETIME card the model usually didn't narrate. Datetime
+    // queries still match via 'time', 'date', 'what day', 'what time',
+    // 'current time', and 'clock'. If "what's today's date" stops
+    // resolving for a tester, add it back — but the cost on every
+    // "X today" query is high.
+    keywords: ['time', 'date', 'what day', 'what time', 'current time', 'clock'],
     tools:    ['get_datetime'],
   },
 
@@ -123,6 +131,54 @@ const INTENT_MAP: Record<string, IntentGroup> = {
       'optiplex',
     ],
     tools: ['host_metrics'],
+  },
+
+  // ── Scheduled jobs / cron ───────────────────────────────
+  // Owns queries about scheduled job state and run history. Without
+  // this group, queries like "what's the most recent cron failure?"
+  // routed through the pseudo-tool adapter and Mistral 24B refused to
+  // emit a tool_call block (43 tools + long protocol prompt overwhelms
+  // it). Prefetching the answer server-side via cron_manager + the
+  // recent_failures action gives the model real data to narrate, same
+  // pattern as weather/datetime/web/gmail.
+  //
+  // The paramExtractor picks the right action based on whether the
+  // query is asking about FAILURES specifically vs. job state in
+  // general:
+  //   - "what failed", "recent error", "job crashed" → recent_failures
+  //     (aggregates failed runs across all jobs, no job_id needed)
+  //   - "list my jobs", "what cron jobs do I have"          → list
+  //   - bare "cron"                                         → list
+  //
+  // Keywords are kept narrow ("cron", "cron job", "scheduled job",
+  // "recurring job/task") to avoid stealing queries from the broader
+  // "task" / "job" / "schedule" vocabulary that other contexts use.
+  //
+  // WRITE actions (create/delete/pause/resume) are NOT served by
+  // prefetch — those need agent-mediated calls so the user can
+  // confirm. On Mistral today this means "create a cron job for X"
+  // will get a job listing instead, which is a livable trade-off
+  // until v0.7's full tool loop replaces this whole architecture.
+  cron: {
+    keywords: [
+      'cron', 'cron job', 'cron jobs',
+      'scheduled job', 'scheduled jobs',
+      'scheduled task', 'scheduled tasks',
+      'recurring job', 'recurring task',
+      'scheduler',
+    ],
+    tools: ['cron_manager'],
+    defaultParams: { action: 'list' },
+    paramExtractor: (msg: string) => {
+      const lower = msg.toLowerCase();
+      // Failure-flavored queries get the cross-job aggregate action.
+      // Word-boundary regex so 'fail' doesn't fire on 'failsafe' etc.
+      if (/\b(failure|failures|failed|error|errors|broken|crashed|didn'?t run|did not run)\b/.test(lower)) {
+        return { action: 'recent_failures', limit: 10 };
+      }
+      // Otherwise fall through to defaultParams (action=list).
+      return undefined;
+    },
   },
 
   pihole: {
