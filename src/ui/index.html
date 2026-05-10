@@ -517,6 +517,159 @@
     }
 
     /* ==========================================================
+       TOPBAR DROPDOWNS — v0.5.16 Phase 2a
+       ==========================================================
+       Two identity/context selectors between the logo and the
+       status indicator. Personality on the left (who you're
+       talking to), model on the right (what's answering).
+
+       Trigger button has the existing nav-btn aesthetic plus a
+       chevron and a wider label area. Menu opens below on
+       click and closes on outside-click or after selection.
+       Z-index 200 sits above the topbar (100) but below the
+       onboarding overlay (10000).
+       ========================================================== */
+
+    .topbar-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: 8px;
+    }
+
+    .topbar-dropdown {
+      position: relative;
+    }
+
+    .topbar-dropdown-trigger {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 10px 5px 12px;
+      min-width: 130px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text);
+      background: transparent;
+      border: 1px solid var(--border-mid);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      border-radius: 1px;
+    }
+
+    .topbar-dropdown-trigger:hover,
+    .topbar-dropdown.open .topbar-dropdown-trigger {
+      color: var(--cyan);
+      border-color: var(--cyan-mid);
+      background: var(--cyan-dim);
+      text-shadow: 0 0 6px var(--cyan);
+    }
+
+    .topbar-dropdown-trigger .dropdown-label {
+      flex: 1;
+      text-align: left;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 180px;
+    }
+
+    .topbar-dropdown-trigger .dropdown-chev {
+      font-size: 8px;
+      color: var(--text-dim);
+      transition: transform var(--transition-fast);
+    }
+
+    .topbar-dropdown.open .topbar-dropdown-trigger .dropdown-chev {
+      transform: rotate(180deg);
+      color: var(--cyan);
+    }
+
+    .topbar-dropdown-menu {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      min-width: 240px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--cyan-mid);
+      border-radius: 1px;
+      padding: 4px;
+      display: none;
+      z-index: 200;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6),
+                  0 0 12px var(--cyan-glow);
+    }
+
+    .topbar-dropdown.open .topbar-dropdown-menu {
+      display: block;
+    }
+
+    .topbar-dropdown-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      font-family: var(--font-mono);
+      cursor: pointer;
+      border-radius: 1px;
+      transition: background var(--transition-fast);
+    }
+
+    .topbar-dropdown-item:hover {
+      background: var(--cyan-dim);
+    }
+
+    .topbar-dropdown-item.active {
+      background: var(--cyan-dim);
+    }
+
+    .topbar-dropdown-item .item-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .topbar-dropdown-item-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .topbar-dropdown-item-name {
+      font-family: var(--font-display);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      color: var(--text);
+    }
+
+    .topbar-dropdown-item-sub {
+      font-size: 9px;
+      color: var(--text-dim);
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Active + hover bump the subtitle one step brighter so the
+       selected option is clearly readable. Non-active items stay
+       at --text-dim so the hierarchy (name dominant, subtitle
+       supporting) is preserved. */
+    .topbar-dropdown-item:hover .topbar-dropdown-item-sub,
+    .topbar-dropdown-item.active .topbar-dropdown-item-sub {
+      color: var(--text);
+    }
+
+    .topbar-dropdown-item-check {
+      font-size: 10px;
+      color: var(--cyan);
+      flex-shrink: 0;
+    }
+
+    /* ==========================================================
        SIDEBAR
        ========================================================== */
 
@@ -2227,15 +2380,28 @@
     <span class="logo">NERDALERT</span>
     <span class="logo-sub">/// AGENT INTERFACE</span>
 
-    <nav class="topbar-nav">
-      <button class="nav-btn active" id="nav-chat"  onclick="switchView('chat', this)">CHAT</button>
-      <button class="nav-btn"        id="nav-email" onclick="switchView('email', this)">
-        EMAIL <span class="dot" id="email-dot" style="display:none"></span>
-      </button>
-      <button class="nav-btn"        id="nav-soc"   onclick="switchView('soc', this)">
-        SOC <span class="dot alert" id="soc-dot" style="display:none"></span>
-      </button>
-    </nav>
+    <!-- v0.5.16 Phase 2a: identity + context dropdowns.
+         Personality and model selectors live here as the
+         "what's active right now" indicators. The old
+         CHAT / EMAIL / SOC nav-btn row was removed; those
+         affordances move to the left-rail module dock in 2b. -->
+    <div class="topbar-controls">
+      <div class="topbar-dropdown" id="personality-dropdown">
+        <button class="topbar-dropdown-trigger" id="personality-trigger" onclick="toggleTopbarDropdown('personality', event)">
+          <span class="dropdown-label" id="personality-label">SHERMAN</span>
+          <span class="dropdown-chev">▾</span>
+        </button>
+        <div class="topbar-dropdown-menu" id="personality-menu"></div>
+      </div>
+
+      <div class="topbar-dropdown" id="model-dropdown">
+        <button class="topbar-dropdown-trigger" id="model-trigger" onclick="toggleTopbarDropdown('model', event)">
+          <span class="dropdown-label" id="model-label">CLAUDE SONNET 4.6</span>
+          <span class="dropdown-chev">▾</span>
+        </button>
+        <div class="topbar-dropdown-menu" id="model-menu"></div>
+      </div>
+    </div>
 
     <div class="topbar-status">
       <div class="status-indicator">
@@ -2575,6 +2741,17 @@
       setTimeout(() => overlay.remove(), 500);
     }
 
+    // v0.5.16 Phase 2a: refresh the top-bar dropdowns so the
+    // personality label flips to the just-selected agent and
+    // the checkmark in the menu lands on the right row. The
+    // initial setupTopbarDropdowns() call at DOMContentLoaded
+    // ran before the user picked, so its labels were either
+    // "SELECT AGENT" (first boot) or the previously-saved
+    // agent (returning visit) — either way we need a refresh
+    // after a fresh pick.
+    syncTopbarLabels();
+    renderPersonalityMenu();
+
     const greeting = isCustom
       ? "I don't have a preset personality yet — tell me what you're looking for. Give me a name, a vibe, a voice. We'll build it together."
       : `Hey — I'm ${character.name}. Tell me a little about yourself. What would you like me to call you? What should I know before we get started? Or if you'd prefer, we can skip the formalities and just get into it.`;
@@ -2746,6 +2923,7 @@
     checkOnboarding();
     cronInit();
     hostMetricsInit();
+    setupTopbarDropdowns();
 
     // Set trust level pips
     for (let i = 1; i <= 5; i++) {
@@ -2857,6 +3035,171 @@
 
 
   // ============================================================
+  // TOPBAR DROPDOWNS — v0.5.16 Phase 2a
+  // ============================================================
+  // Personality + model selectors live in the top bar so the
+  // active context is always one click away. Click-outside
+  // closes any open menu; clicking another trigger swaps which
+  // one is open. Selection routes through the same accent /
+  // localStorage / server-config plumbing the Settings panel
+  // uses, so all the side effects (accent color, label
+  // updates, /api/config/model roundtrip) work unchanged.
+  // ============================================================
+
+  // Friendly model labels for the top-bar dropdown. Mirrors
+  // the <select> in the Settings panel; both will collapse
+  // into one source of truth in a later phase if a third
+  // consumer shows up.
+  const MODEL_OPTIONS = [
+    {
+      id:    'anthropic/claude-sonnet-4-6',
+      label: 'CLAUDE SONNET 4.6',
+      sub:   'Full ReAct loop',
+    },
+    {
+      id:    'ollama/mistral-small3.2',
+      label: 'MISTRAL SMALL 3.2',
+      sub:   'Local · prefetch + narration',
+    },
+    {
+      id:    'google/gemma-4-26b-a4b-it:free',
+      label: 'GEMMA 4 26B A4B',
+      sub:   'Free tier · vision',
+    },
+  ];
+
+  function setupTopbarDropdowns() {
+    renderPersonalityMenu();
+    renderModelMenu();
+    syncTopbarLabels();
+
+    // Close any open dropdown when clicking outside. The
+    // dropdown's own click handlers stopPropagation before
+    // this fires, so menu clicks don't accidentally close
+    // the menu they're inside of.
+    document.addEventListener('click', (e) => {
+      document.querySelectorAll('.topbar-dropdown.open').forEach(dd => {
+        if (!dd.contains(e.target)) dd.classList.remove('open');
+      });
+    });
+  }
+
+  function toggleTopbarDropdown(which, event) {
+    if (event) event.stopPropagation();
+    const target = document.getElementById(`${which}-dropdown`);
+    if (!target) return;
+    const wasOpen = target.classList.contains('open');
+    // Close everything first so opening one always closes the
+    // other — no two menus visible at once.
+    document.querySelectorAll('.topbar-dropdown').forEach(dd => dd.classList.remove('open'));
+    if (!wasOpen) target.classList.add('open');
+  }
+
+  function renderPersonalityMenu() {
+    const menu = document.getElementById('personality-menu');
+    if (!menu) return;
+    const currentId = localStorage.getItem('nerdalert_agent');
+
+    menu.innerHTML = CHARACTERS.map(char => {
+      const isActive = char.id === currentId;
+      return `
+        <div class="topbar-dropdown-item ${isActive ? 'active' : ''}"
+             onclick="topbarSelectPersonality('${char.id}')">
+          <div class="item-dot" style="background:${char.accent};box-shadow:0 0 6px ${char.accentGlow}"></div>
+          <div class="topbar-dropdown-item-info">
+            <div class="topbar-dropdown-item-name" style="color:${char.accent}">${char.name.toUpperCase()}</div>
+            <div class="topbar-dropdown-item-sub">${char.title}</div>
+          </div>
+          ${isActive ? '<span class="topbar-dropdown-item-check">✓</span>' : ''}
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderModelMenu() {
+    const menu = document.getElementById('model-menu');
+    if (!menu) return;
+
+    menu.innerHTML = MODEL_OPTIONS.map(m => {
+      const isActive = m.id === currentModel;
+      return `
+        <div class="topbar-dropdown-item ${isActive ? 'active' : ''}"
+             onclick="topbarSelectModel('${m.id}')">
+          <div class="topbar-dropdown-item-info">
+            <div class="topbar-dropdown-item-name">${m.label}</div>
+            <div class="topbar-dropdown-item-sub">${m.sub}</div>
+          </div>
+          ${isActive ? '<span class="topbar-dropdown-item-check">✓</span>' : ''}
+        </div>
+      `;
+    }).join('');
+  }
+
+  function topbarSelectPersonality(id) {
+    // Close the dropdown immediately for snappy UX. Subsequent
+    // re-render below leaves it closed; the next click reopens.
+    document.getElementById('personality-dropdown')?.classList.remove('open');
+
+    const character = CHARACTERS.find(c => c.id === id);
+    if (!character) return;
+
+    // Same side effects as the settings-panel switchAgent path,
+    // minus the openPanel('settings') call — from the top bar
+    // we stay in the current view rather than yanking the user
+    // into Settings on every personality switch.
+    localStorage.setItem('nerdalert_agent', character.id);
+    localStorage.setItem('nerdalert_accent', JSON.stringify({
+      accent:     character.accent,
+      accentGlow: character.accentGlow,
+      accentDim:  character.accentDim,
+      accentMid:  character.accentMid,
+    }));
+    applyAccentColor(character);
+    activeAgentName = character.name;
+
+    const agentNameEl  = document.getElementById('agent-name');
+    const agentTitleEl = document.getElementById('agent-title');
+    const statusTextEl = document.getElementById('status-text');
+    if (agentNameEl)  agentNameEl.textContent  = character.name.toUpperCase();
+    if (agentTitleEl) agentTitleEl.textContent = character.fullName + ' · ' + character.title;
+    if (statusTextEl) statusTextEl.textContent = `${character.name.toUpperCase()} ONLINE // LVL ${CFG.trustLevel}`;
+
+    syncTopbarLabels();
+    renderPersonalityMenu();
+  }
+
+  async function topbarSelectModel(id) {
+    document.getElementById('model-dropdown')?.classList.remove('open');
+
+    // Optimistic local update so the label flips before the
+    // server roundtrip lands. switchModel's flash element
+    // (in the Settings panel) reports failure if it happens,
+    // but the next renderModelMenu / syncTopbarLabels call
+    // will re-read currentModel and correct it. (currentModel
+    // is updated inside switchModel on success; if the server
+    // rejects, we leave the optimistic local change because
+    // re-reverting mid-stream is jarring — the flash + console
+    // surface the error.)
+    currentModel = id;
+    syncTopbarLabels();
+    renderModelMenu();
+    await switchModel(id);
+  }
+
+  function syncTopbarLabels() {
+    const pLabel = document.getElementById('personality-label');
+    const mLabel = document.getElementById('model-label');
+
+    const currentId = localStorage.getItem('nerdalert_agent');
+    const char = CHARACTERS.find(c => c.id === currentId);
+    if (pLabel) pLabel.textContent = char ? char.name.toUpperCase() : 'SELECT AGENT';
+
+    const model = MODEL_OPTIONS.find(m => m.id === currentModel);
+    if (mLabel) mLabel.textContent = model ? model.label : (currentModel || '').toUpperCase();
+  }
+
+
+  // ============================================================
   // VIEW SWITCHING
   // Switches between Chat (center only), Email (center + panel),
   // SOC (center + panel), and Memory (center + panel).
@@ -2924,9 +3267,9 @@
     closeSOCStream();
     document.getElementById('app').classList.remove('panel-open');
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById('nav-chat').classList.add('active');
+    document.getElementById('nav-chat')?.classList.add('active');
     document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
-    document.getElementById('sb-chat').classList.add('active');
+    document.getElementById('sb-chat')?.classList.add('active');
     currentView = 'chat';
   }
 
