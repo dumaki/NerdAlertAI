@@ -23,6 +23,7 @@ import type { Express, Request, Response } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 
 import { config }                                from '../config/loader';
+import { getServerAuthToken }                    from './auth';
 import { getPersonality }                        from '../personalities';
 import { getAvailableTools, toAnthropicFormat, toOpenAIFormat } from '../tools/registry';
 import {
@@ -441,7 +442,7 @@ export function mountUIRoutes(app: Express): void {
     let   html     = fs.readFileSync(htmlPath, 'utf8');
 
     const runtimeConfig = {
-      token:      process.env.SERVER_AUTH_TOKEN ?? '',
+      token:      getServerAuthToken() ?? '',
       agentName:  cfg.agent?.name              ?? 'Sherman',
       trustLevel: cfg.agent?.trust_level       ?? 1,
       port:       cfg.server?.port             ?? 3773,
@@ -764,7 +765,7 @@ export function mountUIRoutes(app: Express): void {
   // ── GET /api/soc/wall — progressive monitor wall via SSE ──
   app.get('/api/soc/wall', async (req: Request, res: Response) => {
     const token = (req.headers.authorization?.replace('Bearer ', '') || req.query.token) as string;
-    if (token !== process.env.SERVER_AUTH_TOKEN) {
+    if (token !== getServerAuthToken()) {
       res.status(401).end();
       return;
     }
@@ -830,7 +831,7 @@ export function mountUIRoutes(app: Express): void {
   // ── GET /api/cron/stream ───────────────────────────────────
   app.get('/api/cron/stream', (req: Request, res: Response) => {
     const token = (req.headers.authorization?.replace('Bearer ', '') || req.query.token) as string;
-    if (token !== process.env.SERVER_AUTH_TOKEN) {
+    if (token !== getServerAuthToken()) {
       res.status(401).end();
       return;
     }

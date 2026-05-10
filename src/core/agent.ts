@@ -37,9 +37,6 @@ import {
 import { getPersonality } from '../personalities';
 import { getLLMConfig, callOpenRouter, callOllama, ORMessage } from './llm-client';
 
-// ── Resolve LLM config once at startup ───────────────────────
-const llm = getLLMConfig();
-
 // ---- THE SYSTEM PROMPT ----
 function buildSystemPrompt(): string {
   const personalityId = (config as any).agent?.personality ?? 'sherman';
@@ -91,6 +88,15 @@ export async function chat(
   message: string,
   history: Message[] = []
 ): Promise<NerdAlertResponse> {
+
+  // Resolve LLM config inside the request, not at module load. The
+  // keychain-backed credential caches in llm-client are populated
+  // asynchronously during server startup (see initOpenRouterKey /
+  // initAnthropicKey in src/server/index.ts). If we captured `llm`
+  // at module-import time the caches would still be empty and every
+  // request would see null clients. Reading per-request is cheap —
+  // getLLMConfig() is a synchronous lookup of cached values.
+  const llm = getLLMConfig();
 
   const systemPrompt = buildSystemPrompt();
 

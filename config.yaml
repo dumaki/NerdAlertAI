@@ -32,6 +32,13 @@ server:
 # enabled: true/false controls whether the agent can see/use the tool at all
 # trust_level: minimum trust level required to call this tool
 tools:
+  memory:
+    enabled: true
+    trust_level: 1         # Read at L1; write actions live in the wrapper at L1
+                           # too (capture/supersede are not gated server-side
+                           # because the engine has supersede/decay for recovery).
+                           # Per-action gating is a v0.7 follow-up.
+
   weather:
     enabled: true
     trust_level: 1

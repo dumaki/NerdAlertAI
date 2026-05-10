@@ -289,12 +289,13 @@
 // ============================================================
 
 import Anthropic from '@anthropic-ai/sdk';
+import { getCredential } from '../security/credential-store';
 
 // ── Read config from environment ──────────────────────────────
 //
 // MODEL defaults to free Nemotron if not set.
-// This means a fresh install with just an OpenRouter key works
-// out of the box without touching .env beyond what setup.sh creates.
+// API keys (OpenRouter, Anthropic) live in the OS keychain via
+// /setup, NOT in .env — see the credential cache section below.
 
 let activeModel: string = process.env.MODEL ?? 'nvidia/llama-3.1-nemotron-70b-instruct:free';
 
@@ -303,9 +304,92 @@ export function setActiveModel(model: string): void {
   console.log(`[NerdAlert] Model switched to: ${model}`);
 }
 
-const OR_KEY  = process.env.OPENROUTER_API_KEY ?? '';
-const ANT_KEY = process.env.ANTHROPIC_API_KEY  ?? '';
 const OR_URL  = 'https://openrouter.ai/api/v1/chat/completions';
+
+// ── Credential cache (v0.5.13.x — keychain-backed) ───────────
+//
+// API keys are stored in the OS keychain (or chmod-600 file fallback
+// at ~/.nerdalert/secrets/) via /setup, NEVER in .env. We cache the
+// values once at boot and refresh when /setup writes a new one —
+// security-routes.ts calls initOpenRouterKey() / initAnthropicKey()
+// after a successful credential write so the running process picks
+// up the new value without a restart.
+//
+// Pattern mirrors src/server/soc-clients/wazuh.ts and
+// src/gmail/config.ts. Reading the keychain on every API call would
+// add IPC latency to the chat hot path; caching keeps it free.
+//
+// `cachedAnthropicClient` is rebuilt by initAnthropicKey whenever the
+// key changes, so getLLMConfig() can stay synchronous — it just hands
+// back the cached client. Old clients are GC'd once no caller holds a
+// reference. There is no separate `cachedAnthropicKey` field because
+// the SDK client is the only thing any caller actually needs.
+
+let cachedOpenRouterKey:   string | null = null;
+let cachedAnthropicClient: Anthropic | null = null;
+
+/**
+ * Pull openrouter-key from the credential store and cache it.
+ * Call once at boot (from server/index.ts) and again after /setup
+ * writes a new value (from server/security-routes.ts).
+ *
+ * Returns true if a credential was found, false otherwise — in
+ * which case callOpenRouter / streamOpenRouter will throw a clear
+ * "key not configured" error to the caller, and the SSE bridge in
+ * ui-routes.ts surfaces it as an error event the user sees.
+ */
+export async function initOpenRouterKey(): Promise<boolean> {
+  try {
+    const value = await getCredential('openrouter-key');
+    cachedOpenRouterKey = value || null;
+    return Boolean(value);
+  } catch {
+    // Keychain read failed (rare — e.g. user denied keychain access).
+    cachedOpenRouterKey = null;
+    return false;
+  }
+}
+
+/**
+ * Pull anthropic-key from the credential store, cache the value,
+ * and rebuild the Anthropic SDK client. Call once at boot and
+ * again after /setup writes a new value.
+ *
+ * The SDK client is constructed eagerly here so getLLMConfig() can
+ * stay synchronous. When the user rotates the key via /setup, the
+ * security route calls this function again, which builds a fresh
+ * client bound to the new key and replaces the cached reference.
+ * Subsequent getLLMConfig() calls return the new client.
+ */
+export async function initAnthropicKey(): Promise<boolean> {
+  try {
+    const value = await getCredential('anthropic-key');
+    if (value) {
+      cachedAnthropicClient = new Anthropic({ apiKey: value });
+      return true;
+    }
+    cachedAnthropicClient = null;
+    return false;
+  } catch {
+    cachedAnthropicClient = null;
+    return false;
+  }
+}
+
+/**
+ * Lazy resolver for the OpenRouter key. If the cache is empty,
+ * attempt one keychain read; if that still fails, return null.
+ *
+ * Used inside callOpenRouter / streamOpenRouter so a missed boot
+ * init doesn't permanently break the request path — the next
+ * request will trigger the read instead. Mirrors the lazy fallback
+ * inside getWazuhWallState() in src/server/soc-clients/wazuh.ts.
+ */
+async function resolveOpenRouterKey(): Promise<string | null> {
+  if (cachedOpenRouterKey) return cachedOpenRouterKey;
+  await initOpenRouterKey();
+  return cachedOpenRouterKey;
+}
 
 // ── Determine provider from model string ──────────────────────
 //
@@ -349,16 +433,17 @@ export function getLLMConfig(): LLMConfig {
   const modelString = resolveModelString(activeModel, provider);
 
   if (provider === 'anthropic') {
-    if (!ANT_KEY) {
+    if (!cachedAnthropicClient) {
       console.warn(
-        '[NerdAlert] MODEL is set to Anthropic but ANTHROPIC_API_KEY is missing in .env.\n' +
-        '            Set ANTHROPIC_API_KEY or switch MODEL to an OpenRouter model.'
+        '[NerdAlert] MODEL is set to Anthropic but anthropic-key is not configured.\n' +
+        '            Open http://localhost:3773/setup and add your Anthropic API key,\n' +
+        '            or switch MODEL to ollama/* or an OpenRouter model.'
       );
     }
     return {
       provider,
       model:           modelString,
-      anthropicClient: new Anthropic({ apiKey: ANT_KEY }),
+      anthropicClient: cachedAnthropicClient,
     };
   }
 
@@ -377,10 +462,11 @@ export function getLLMConfig(): LLMConfig {
   }
 
   // OpenRouter (default)
-  if (!OR_KEY) {
+  if (!cachedOpenRouterKey) {
     console.warn(
-      '[NerdAlert] OPENROUTER_API_KEY is missing in .env.\n' +
-      '            Get a free key at https://openrouter.ai and add it to .env.'
+      '[NerdAlert] openrouter-key is not configured in the keychain.\n' +
+      '            Open http://localhost:3773/setup and add your OpenRouter API key.\n' +
+      '            (Get a free key at https://openrouter.ai if you don\'t have one.)'
     );
   }
   return {
@@ -427,6 +513,19 @@ export async function callOpenRouter(
   model: string
 ): Promise<string> {
 
+  // Pull the OpenRouter key from the cache (or attempt one keychain
+  // read if the boot init missed). Throwing here surfaces a clear
+  // "key not configured" path back to agent.ts → the chat handler
+  // → the SSE error event the user sees, instead of the opaque 401
+  // we'd otherwise get from OpenRouter on an empty Bearer token.
+  const orKey = await resolveOpenRouterKey();
+  if (!orKey) {
+    throw new Error(
+      'OpenRouter key is not configured. Open http://localhost:3773/setup ' +
+      'and add your openrouter-key, or switch MODEL to ollama/* in .env.'
+    );
+  }
+
   // Prepend system prompt as the first message.
   // OpenRouter expects system messages in the messages array,
   // not as a separate parameter like Anthropic does.
@@ -439,7 +538,7 @@ export async function callOpenRouter(
     method:  'POST',
     headers: {
       'Content-Type':  'application/json',
-      'Authorization': `Bearer ${OR_KEY}`,
+      'Authorization': `Bearer ${orKey}`,
       'HTTP-Referer':  'https://nerdalert.local', // OpenRouter asks for a referrer
       'X-Title':       'NerdAlert',               // shows up in OpenRouter dashboard
     },
@@ -479,6 +578,18 @@ export async function* streamOpenRouter(
   model: string
 ): AsyncGenerator<string> {
 
+  // Same lazy-resolve pattern as callOpenRouter — see comments there.
+  // Throwing inside an async generator surfaces as a rejection on the
+  // first .next() call; the consumer in ui-routes.ts catches it and
+  // emits an 'error' SSE event so the user sees the missing-key text.
+  const orKey = await resolveOpenRouterKey();
+  if (!orKey) {
+    throw new Error(
+      'OpenRouter key is not configured. Open http://localhost:3773/setup ' +
+      'and add your openrouter-key, or switch MODEL to ollama/* in .env.'
+    );
+  }
+
   const fullMessages: ORMessage[] = [
     { role: 'system', content: systemPrompt },
     ...messages,
@@ -488,7 +599,7 @@ export async function* streamOpenRouter(
     method:  'POST',
     headers: {
       'Content-Type':  'application/json',
-      'Authorization': `Bearer ${OR_KEY}`,
+      'Authorization': `Bearer ${orKey}`,
       'HTTP-Referer':  'https://nerdalert.local',
       'X-Title':       'NerdAlert',
     },

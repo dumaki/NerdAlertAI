@@ -19,7 +19,94 @@
 // ============================================================
 
 import { Request, Response, NextFunction } from 'express';
-import { config, SERVER_AUTH_TOKEN } from '../config/loader';
+import * as crypto from 'crypto';
+import { config } from '../config/loader';
+import { getCredential, setCredential } from '../security/credential-store';
+
+// ── Server auth token cache (v0.5.13.x — keychain-backed) ──────────
+//
+// The bearer token that gates every authenticated route lives in
+// the OS keychain (or chmod-600 file fallback at ~/.nerdalert/secrets/),
+// NEVER in .env. We cache the value once at boot via initServerAuthToken()
+// and refresh on /setup writes via the security-routes hook.
+//
+// Pattern mirrors src/core/llm-client.ts and src/server/soc-clients/wazuh.ts.
+//
+// Unlike the LLM keys (user-supplied), the server auth token is auto-
+// generated on first boot if neither keychain nor .env has one. This
+// removes the chicken-and-egg problem where you'd need a token to use
+// /setup but couldn't generate one without running setup.sh first.
+//
+// Migration support: if a legacy SERVER_AUTH_TOKEN exists in process.env
+// (typically written by an older setup.sh into .env), it gets migrated
+// to the credential store on first boot. The .env line then becomes
+// inert and can be safely removed by the user.
+
+let cachedServerAuthToken: string | null = null;
+
+/**
+ * Read the cached server auth token. Returns null if init hasn't run
+ * yet (which shouldn't happen — index.ts awaits initServerAuthToken
+ * before app.listen).
+ *
+ * Used by ui-routes.ts to inject the token into the HTML page at GET /
+ * and to validate the token on the auth-exempt SSE routes (cron stream,
+ * SOC wall) which check it from the query string.
+ */
+export function getServerAuthToken(): string | null {
+  return cachedServerAuthToken;
+}
+
+/**
+ * Pull server-auth-token from the credential store. If absent, migrate
+ * a legacy .env value into the credential store; if neither, generate
+ * a fresh 32-character hex token and write it to the credential store.
+ *
+ * Awaited from server/index.ts BEFORE app.listen() so the auth middleware
+ * is guaranteed to have a populated cache when the first request arrives.
+ *
+ * Returns the cached token. Throws only if generation+write both fail,
+ * which would indicate a broken credential backend — in that case the
+ * server should refuse to start rather than run with no auth.
+ */
+export async function initServerAuthToken(): Promise<string> {
+  // 1. Try the credential store first — the normal post-migration case.
+  try {
+    const stored = await getCredential('server-auth-token');
+    if (stored) {
+      cachedServerAuthToken = stored;
+      return stored;
+    }
+  } catch {
+    // Keychain read failed (rare). Fall through to legacy/generate.
+  }
+
+  // 2. Legacy migration: if SERVER_AUTH_TOKEN is in process.env (older
+  //    setup.sh wrote it to .env), copy it into the credential store
+  //    so the user's existing browser sessions keep working with the
+  //    same token. They can delete the .env line at their leisure.
+  const legacy = process.env.SERVER_AUTH_TOKEN;
+  if (legacy) {
+    try {
+      await setCredential('server-auth-token', legacy);
+      console.log('[NerdAlert] Migrated SERVER_AUTH_TOKEN from .env to credential store — the .env line can now be safely removed');
+      cachedServerAuthToken = legacy;
+      return legacy;
+    } catch (err) {
+      // setCredential failed — fall through to generation, but warn.
+      console.warn('[NerdAlert] Could not migrate legacy SERVER_AUTH_TOKEN to credential store:', err);
+    }
+  }
+
+  // 3. Auto-generate. 16 bytes → 32 hex chars, plenty for a local-only
+  //    bearer token. crypto.randomBytes is the cryptographically-secure
+  //    PRNG; do not substitute Math.random here.
+  const fresh = crypto.randomBytes(16).toString('hex');
+  await setCredential('server-auth-token', fresh);
+  console.log('[NerdAlert] First boot — server-auth-token auto-generated and stored in credential store. The browser UI picks it up automatically at GET /.');
+  cachedServerAuthToken = fresh;
+  return fresh;
+}
 
 // ---- MIDDLEWARE TYPE ----
 // TypeScript concept — type aliases for functions:
@@ -58,11 +145,22 @@ function noneStrategy(): MiddlewareFn {
 function tokenStrategy(): MiddlewareFn {
   return (req: Request, res: Response, next: NextFunction) => {
 
-    // If no token is configured in .env, warn and pass through
-    // This prevents a hard lock-out if someone forgets to set it
-    if (!SERVER_AUTH_TOKEN) {
-      console.warn('[NerdAlert] WARNING: SERVER_AUTH_TOKEN not set. Running without auth.');
-      next();
+    // The cached token is populated by initServerAuthToken() in
+    // server/index.ts before app.listen() is called — so by the time
+    // a request reaches this middleware the cache is guaranteed to
+    // hold a value (or initServerAuthToken would have thrown and
+    // crashed startup, never getting here).
+    const expected = cachedServerAuthToken;
+
+    // Defense-in-depth: if somehow the cache is empty (e.g. a future
+    // refactor calls getAuthMiddleware before init runs), fail closed
+    // with a 503 rather than passing through unauthenticated. Better
+    // to be visibly broken than silently insecure.
+    if (!expected) {
+      console.error('[NerdAlert] tokenStrategy: cachedServerAuthToken is null — initServerAuthToken did not run before request handling. Failing closed.');
+      res.status(503).json({
+        error: 'Server auth token not initialized',
+      });
       return;
     }
 
@@ -71,7 +169,7 @@ function tokenStrategy(): MiddlewareFn {
     const authHeader = req.headers['authorization'];
     const token = authHeader?.replace('Bearer ', '').trim();
 
-    if (!token || token !== SERVER_AUTH_TOKEN) {
+    if (!token || token !== expected) {
       res.status(401).json({
         error: 'Unauthorized',
         hint: 'Include your token as: Authorization: Bearer <your_token>'

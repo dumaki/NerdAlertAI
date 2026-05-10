@@ -95,6 +95,50 @@ interface IntentGroup {
   paramExtractor?: (message: string, history?: HistoryTurn[]) => Record<string, unknown> | undefined;
 }
 
+// ── pickSubjectForCapture ────────────────────────────
+//
+// Picks a memory subject bucket for a captured imperative. The full
+// subject vocabulary is open-ended — the engine accepts whatever
+// string the caller passes — but routing captured content into
+// recognizable buckets makes later recall and consolidation work
+// without manual reorganization.
+//
+// The heuristics are intentionally narrow: they only fire on first-
+// person statements with strong signal ("I live in", "I prefer",
+// "my anniversary"). Anything else lands in 'notes', a coarse
+// catch-all that gets recategorized later by either the operator
+// or the future memory-consolidation pass.
+//
+// Adding new buckets here is cheap; over-classifying is the risk.
+// If a capture content reads ambiguously, prefer 'notes'.
+
+function pickSubjectForCapture(content: string): string {
+  const lower = content.toLowerCase();
+
+  // Location — "I live in" / "I'm from" / "I moved to"
+  if (/\b(i\s+live\s+in|i'?m\s+from|i\s+moved\s+to|my\s+(home|hometown|address|city|state)\s+is)\b/.test(lower)) {
+    return 'user.location';
+  }
+
+  // Identity — "my name is" / "I am a/an/the X" / "I work at/as/for"
+  if (/\b(my\s+name\s+is|i\s+am\s+(a|an|the)\s+|i\s+work\s+(at|as|for)|i\s+go\s+by)\b/.test(lower)) {
+    return 'user.identity';
+  }
+
+  // Preferences — likes, dislikes, prefers, favorites
+  if (/\b(i\s+(like|love|prefer|enjoy|hate|dislike|don'?t\s+like|can'?t\s+stand)|my\s+favorite)\b/.test(lower)) {
+    return 'user.preferences';
+  }
+
+  // Schedule — birthdays, anniversaries, deadlines, appointments
+  if (/\b(my\s+(birthday|anniversary|wedding)|due\s+date|deadline|appointment)\b/.test(lower)) {
+    return 'user.schedule';
+  }
+
+  // Default catch-all. Coarse but recoverable via supersede.
+  return 'notes';
+}
+
 const INTENT_MAP: Record<string, IntentGroup> = {
   datetime: {
     // 'today' was removed in v0.5.13.1 — it was firing on phrases
@@ -248,6 +292,112 @@ const INTENT_MAP: Record<string, IntentGroup> = {
     queryParam:    'query',  // user message injected as the search query
   },
 
+  // ── Memory engine (read/write) ──────────────────────────
+  // Brings persistent memory access to the prefetch path. Without
+  // this group, memory is only callable from the tool-loop adapters
+  // (Anthropic native, Ollama OpenAI-native, OpenRouter pseudo-tool)
+  // and only when no OTHER prefetch group fires — narration eats the
+  // turn whenever weather/web/cron/etc. matches first. The result
+  // before this group existed was that "what's the weather and
+  // remember I prefer Celsius" lost the memory write entirely.
+  //
+  // Mistral and Nemotron both struggle to discover the memory tool
+  // under the 43+ tool-list overload that buildToolSystemBlock emits,
+  // so even on the no-prefetch path the tool loop was unreliable for
+  // memory. Same failure mode that motivated adding the cron group
+  // in v0.5.13.1 — model freezes on which tool to use, finishes the
+  // turn empty.
+  //
+  // KEYWORD COLLISION RULES
+  // ─────────────────────────────────────────────────────────
+  // 'remember' is the primary trigger. Avoid generic 'know'
+  // because 'do you know X' would steal queries from web. Avoid
+  // 'note' alone — it collides with Apple Notes phrasings users
+  // might point at later. 'note that' is anchored enough.
+  //
+  // PARAMETER EXTRACTION
+  // ─────────────────────────────────────────────────────────
+  // The extractor decides which memory action runs:
+  //
+  //   - Imperative capture ("remember that X", "note that X",
+  //     "save this: X", "store this: X") → action=capture
+  //     The matched clause becomes content. Subject is picked
+  //     from a small heuristic table; default is 'notes'.
+  //
+  //   - Topic-scoped recall ("what do you (remember|know)
+  //     about X", "do you remember X") → action=search,
+  //     query=X.
+  //
+  //   - Open-ended recall ("what do you remember", "what do
+  //     you know about me", bare "memory") → action=context.
+  //
+  // Capture-on-prefetch is a real side effect: the engine
+  // commits the record before the model says anything. That
+  // matches the existing pattern (weather is fetched before the
+  // model speaks; gmail list runs before the model speaks). It
+  // also matches the user's stated expectation: "remember that
+  // X" is an imperative, not a question. We do not auto-capture
+  // free-form statements ("I work at Anthropic") — those still
+  // need the tool loop or an Anthropic ReAct turn to surface as
+  // memorable. False-positive cost on imperatives is low; the
+  // memory engine has supersede/decay to recover from bad bucket
+  // assignments.
+  memory: {
+    keywords: [
+      // Capture imperatives — anchored phrases only
+      'remember that', 'remember this', 'please remember',
+      'note that', 'save this', 'store this',
+      // Recall — explicit memory-verb queries
+      'do you remember', 'what do you remember',
+      'what do you know about me', 'do you know about me',
+      // Bare topic words — fire on dedicated memory queries
+      'your memory', 'memory engine', 'in memory',
+    ],
+    tools: ['memory'],
+    defaultParams: { action: 'context', limit: 8 },
+    paramExtractor: (msg: string) => {
+      // ── Capture imperatives ──────────────────────────────
+      // "remember that I prefer dark roast" → capture
+      // "note that the cron job runs at 3am"  → capture
+      // "save this: project deadline is June 12" → capture
+      const captureRe = /^(?:please\s+)?(?:remember|note|save|store)\s+(?:that|this:?)\s+(.+?)[.!?]*\s*$/i;
+      const captureMatch = msg.match(captureRe);
+      if (captureMatch) {
+        const content = captureMatch[1].trim();
+        return {
+          action:     'capture',
+          subject:    pickSubjectForCapture(content),
+          content,
+          confidence: 0.9,
+          source:     'user_statement',
+        };
+      }
+
+      // ── Topic-scoped recall ──────────────────────────────
+      // "what do you remember about the SOC wall?" → search SOC wall
+      // "do you know about the cron jobs?"          → search cron jobs
+      // The capture clause above takes priority — "remember that X"
+      // never reaches here because the leading verb anchors capture.
+      const aboutRe = /(?:remember|know)\s+about\s+(.+?)[?.!\s]*$/i;
+      const aboutMatch = msg.match(aboutRe);
+      if (aboutMatch) {
+        const query = aboutMatch[1].trim();
+        // Strip trailing 'me' which means "about me" → context, not search
+        if (query.toLowerCase() !== 'me') {
+          return { action: 'search', query, limit: 8 };
+        }
+      }
+
+      // ── Open-ended recall ────────────────────────────────
+      // "what do you remember" / "what do you know about me" /
+      // bare "your memory" → fall through to defaultParams
+      // (action=context, limit=8). sessionContext() handles the
+      // empty-query case by returning the most recently-accessed
+      // high-confidence records.
+      return undefined;
+    },
+  },
+
   // ── Project / file reading ─────────────────────────────
   // Triggers on file-extension probes (".pdf", ".txt", etc.), explicit
   // verbs ("read "), file references ("the document"), and upload
@@ -297,6 +447,24 @@ const INTENT_MAP: Record<string, IntentGroup> = {
       'my project', 'my projects',
       'what files', 'what documents', 'what docs', 'what projects',
       'show me my files', 'list my files',
+      // Natural third-person phrasing — what testers actually say when
+      // asking about files without claiming ownership. Added in
+      // v0.5.13.2 after Mistral was observed hallucinating file names
+      // on "list files in the project folder" because the possessive-
+      // anchored keywords above ('my files', 'list my files') didn't
+      // fire and Mistral chose to make up an answer rather than call
+      // the project tool. With these in place, prefetch lands real
+      // data in the system prompt and Mistral narrates the actual
+      // listing. Same shape of failure that cron and memory had
+      // before getting their own prefetch groups.
+      //
+      // 'project inbox' overlaps with the gmail group's 'inbox'
+      // keyword — both groups fire, then the project-vs-gmail
+      // demotion in detectIntent drops gmail when file-scope
+      // vocabulary is also present.
+      'list files', 'files in',
+      'project folder', 'project inbox',
+      'in the project',
     ],
     tools:         ['project'],
     defaultParams: { action: 'list' },
@@ -373,7 +541,7 @@ function escapeForRegex(s: string): string {
 
 export function detectIntent(message: string): string[] {
   const lower = message.toLowerCase();
-  const matched = Object.entries(INTENT_MAP)
+  let matched = Object.entries(INTENT_MAP)
     .filter(([groupName, group]) => {
       if (groupName === 'datetime') {
         // Word-boundary regex — 'time' matches 'what time' but not
@@ -385,6 +553,57 @@ export function detectIntent(message: string): string[] {
       return group.keywords.some(k => lower.includes(k));
     })
     .map(([groupName]) => groupName);
+
+  // ── web is the generic fallback ───────────────────────────────
+  // The web group's keywords ('what is', 'who is', 'find', 'look up')
+  // are deliberately broad so casual factual queries that don't hit a
+  // specific tool still get DDG search. The cost is that those same
+  // substrings collide with every specific group: "what is the weather
+  // today" matches weather AND web. The specific tool's data is what
+  // the user wants; web's generic search results are noise that the
+  // model has to ignore, and on the narration path they render as a
+  // redundant second card.
+  //
+  // Rule: if web matched AND any other group also matched, web loses.
+  // Web only fires when nothing more specific claimed the turn. This
+  // preserves casual phrasing for actual web-search intent ("what is
+  // a CVE", "find the latest on RFC 9000") while keeping specific-
+  // tool queries clean.
+  //
+  // Generalizable to any future "generic fallback" group by adding it
+  // to the demote list, but web is the only case today.
+  if (matched.includes('web') && matched.length > 1) {
+    const kept = matched.filter(g => g !== 'web');
+    console.log(`[NerdAlert] Intent demoted web (more specific match): ${kept.join(', ')}`);
+    matched = kept;
+  }
+
+  // ── project beats gmail when file-scope vocabulary is present ────
+  // The gmail group's 'inbox' keyword catches both 'files in the
+  // project inbox' (file intent) and 'what's in my inbox' (mail
+  // intent). With v0.5.13.2's project broadening, the first phrasing
+  // also matches the project group via 'project inbox' / 'files in'.
+  // Both groups fire, both prefetch, and the user sees a redundant
+  // GMAIL card alongside the file listing.
+  //
+  // The disambiguator is whether the message contains file-scope
+  // vocabulary (file/files/doc/docs/folder/pdf/attachment). When it
+  // does, project's intent dominates and gmail loses.
+  //
+  // Note this is structurally distinct from the web demotion above:
+  // web is the universal generic fallback, so it ALWAYS loses to any
+  // specific group. project and gmail are both specific groups, so
+  // demotion needs message-level context to be safe. "Did I get any
+  // emails about my project" still fires both groups (no file vocab
+  // in the message) and renders both cards, which is the intended
+  // behaviour when intent is genuinely ambiguous.
+  if (matched.includes('project') && matched.includes('gmail')) {
+    if (/\b(files?|docs?|folder|pdf|attachments?)\b/i.test(message)) {
+      const kept = matched.filter(g => g !== 'gmail');
+      console.log(`[NerdAlert] Intent demoted gmail (file-scope vocabulary present): ${kept.join(', ')}`);
+      matched = kept;
+    }
+  }
 
   if (matched.length > 0) {
     console.log(`[NerdAlert] Intent detected: ${matched.join(', ')}`);

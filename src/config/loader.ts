@@ -1,7 +1,7 @@
 // ============================================================
 // config/loader.ts
 // ============================================================
-// Loads secrets from .env and settings from config.yaml.
+// Loads non-secret settings from .env and config.yaml.
 // Everything else in the app imports from here — nothing
 // reads .env or config.yaml directly.
 //
@@ -10,11 +10,13 @@
 //   yaml to JSON, or add a secrets manager), we change ONE file.
 //   Every other file keeps working unchanged.
 //
-// What changed from the original:
-//   ANTHROPIC_API_KEY is no longer unconditionally required.
-//   It's only required when MODEL=anthropic/... is set.
-//   This allows fresh installs using OpenRouter to boot cleanly
-//   without needing a placeholder value in .env.
+// What changed in v0.5.13.x:
+//   ANTHROPIC_API_KEY, OPENROUTER_API_KEY, OPENCLAW_TOKEN, and
+//   SERVER_AUTH_TOKEN are no longer read from .env here. They live
+//   in the OS keychain (or chmod-600 file fallback) via /setup.
+//   See src/security/credential-store.ts for the storage layer.
+//   .env is now reserved for non-secret config: ports, URLs,
+//   usernames, MODEL string, and similar.
 // ============================================================
 
 import * as dotenv from 'dotenv';
@@ -33,6 +35,10 @@ const rawConfig  = yaml.load(fs.readFileSync(configPath, 'utf8')) as AgentConfig
 // Retrieves a value from process.env.
 // If required=true and the value is missing, throws immediately.
 // A hard crash at startup is better than a mysterious failure later.
+//
+// Kept exported for any non-secret env var that still wants the
+// "hard crash if missing" semantic. Don't use this for secrets —
+// secrets go through credential-store.ts.
 export function getSecret(key: string, required: boolean = false): string | undefined {
   const value = process.env[key];
   if (!value && required) {
@@ -44,26 +50,10 @@ export function getSecret(key: string, required: boolean = false): string | unde
   return value;
 }
 
-// ---- DETERMINE PROVIDER FROM MODEL ENV VAR ----
-// Read MODEL here so we can make the ANTHROPIC_API_KEY requirement
-// conditional. If MODEL starts with "anthropic/" we need the key.
-// Everything else routes to OpenRouter and doesn't need it.
-const MODEL = process.env.MODEL ?? 'nvidia/nemotron-3-super-120b-a12b:free';
-const isAnthropicModel = MODEL.startsWith('anthropic/');
-
 // ---- EXPORTS ----
 export const config: AgentConfig = rawConfig;
-
-// ANTHROPIC_API_KEY — only required when using an Anthropic model.
-// When using OpenRouter (the default for fresh installs), this can
-// be absent from .env entirely without causing a startup crash.
-export const ANTHROPIC_API_KEY = isAnthropicModel
-  ? (getSecret('ANTHROPIC_API_KEY', true) as string)
-  : (getSecret('ANTHROPIC_API_KEY', false) ?? '');
 
 export const SERVER_PORT = parseInt(
   process.env.SERVER_PORT ?? String(rawConfig.server.port),
   10
 );
-
-export const SERVER_AUTH_TOKEN = getSecret('SERVER_AUTH_TOKEN', false);

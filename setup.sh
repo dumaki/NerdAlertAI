@@ -1,23 +1,25 @@
 #!/usr/bin/env bash
 # ============================================================
-# NerdAlert — First-Time Setup Script
+# NerdAlert — First-Time Setup Script (macOS)
 # ============================================================
 # Run this once on a fresh machine to get NerdAlert running.
 #
 # What this script does:
-#   1. Checks for Homebrew (Mac) and offers install instructions
-#   2. Checks for Node.js 18+ and offers install instructions
-#   3. Installs npm packages
-#   4. Generates a unique auth token for your instance
-#   5. Creates your .env file with that token
-#   6. Prompts for your OpenRouter API key (free tier)
-#   7. Detects your shell and adds the nerd-start / nerd aliases
-#   8. Prints a summary of what was set up
+#   1. Checks for Homebrew and Node.js 18+
+#   2. Installs npm packages
+#   3. Probes the OS keychain so we know which credential backend
+#      will be used
+#   4. Writes a minimal .env (non-secret config only)
+#   5. Sets up the nerd-start / nerd-open shell aliases
 #
-# What this script does NOT do:
-#   - Install Homebrew or Node.js automatically (instructions provided)
-#   - Gmail setup (run: npm run setup:gmail after this)
-#   - Modify anything outside this project folder and your shell rc file
+# What this script does NOT do (intentional):
+#   - It does NOT generate or write any secrets to .env. The
+#     server bearer token is auto-generated on first boot. API
+#     keys (OpenRouter, Anthropic, OpenClaw) are entered via the
+#     /setup panel in your browser, where they go straight to
+#     the OS keychain — never to .env, never to the model, never
+#     to the logs.
+#   - Gmail setup (run: npm run setup:gmail after this).
 #
 # Usage:
 #   bash setup.sh
@@ -53,14 +55,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
 
 # ============================================================
-# STEP 1 — Check for Homebrew (Mac only)
+# STEP 1 — Check Homebrew (Mac only)
 # ============================================================
 print_header
 
 echo -e "${BOLD}Step 1 — Checking dependencies${RESET}"
 echo ""
 
-# Only check for Homebrew on Mac — Linux doesn't need it
 if [[ "$OSTYPE" == "darwin"* ]]; then
   if ! command -v brew &>/dev/null; then
     fail "Homebrew is not installed."
@@ -82,7 +83,7 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
 fi
 
 # ============================================================
-# STEP 2 — Check for Node.js
+# STEP 2 — Check Node.js
 # ============================================================
 if ! command -v node &>/dev/null; then
   fail "Node.js is not installed."
@@ -145,7 +146,14 @@ npm install --silent
 ok "Packages installed"
 
 # ============================================================
-# STEP 4 — Test credential store
+# STEP 4 — Probe credential store backend
+# ============================================================
+# We probe keytar here so the user knows up front which backend
+# their credentials will land in. The actual writes happen later,
+# via /setup in the browser. The probe is identical to what
+# src/security/credential-store.ts does at first use — running it
+# during setup is a friendlier UX than discovering at first
+# credential write.
 # ============================================================
 echo ""
 echo -e "${BOLD}Step 3 — Testing credential store${RESET}"
@@ -216,48 +224,17 @@ else
 fi
 
 # ============================================================
-# STEP 5 — Generate auth token
+# STEP 5 — Write .env (non-secrets only)
+# ============================================================
+# The .env file holds NON-SECRET configuration only:
+# port numbers, MODEL string, OLLAMA_HOST URL, and similar.
+#
+# Secrets (server bearer token, API keys, gateway tokens) live
+# in the OS keychain via /setup. The server auto-generates the
+# bearer token on first boot if no keychain entry exists.
 # ============================================================
 echo ""
-echo -e "${BOLD}Step 4 — Generating your auth token${RESET}"
-echo ""
-
-if command -v openssl &>/dev/null; then
-  AUTH_TOKEN=$(openssl rand -hex 16)
-else
-  AUTH_TOKEN=$(cat /dev/urandom | LC_ALL=C tr -dc 'a-f0-9' | head -c 32)
-fi
-
-ok "Token generated: ${CYAN}${AUTH_TOKEN}${RESET}"
-info "This is saved to .env and to ~/.nerdalert/token.txt"
-
-# ============================================================
-# STEP 6 — OpenRouter API key
-# ============================================================
-echo ""
-echo -e "${BOLD}Step 5 — OpenRouter API key${RESET}"
-echo ""
-echo "  NerdAlert uses OpenRouter to access AI models for free."
-echo ""
-echo -e "  Get your free key at: ${CYAN}https://openrouter.ai${RESET}"
-echo "  Sign up → Dashboard → Keys → Create key"
-echo ""
-echo -n "  Paste your OpenRouter API key (or press Enter to skip for now): "
-read -r OPENROUTER_KEY
-echo ""
-
-if [ -z "$OPENROUTER_KEY" ]; then
-  OPENROUTER_KEY="YOUR_OPENROUTER_KEY_HERE"
-  warn "Skipped — you'll need to add your OpenRouter key to .env before NerdAlert will respond."
-else
-  ok "OpenRouter key saved"
-fi
-
-# ============================================================
-# STEP 7 — Write .env
-# ============================================================
-echo ""
-echo -e "${BOLD}Step 6 — Creating .env${RESET}"
+echo -e "${BOLD}Step 4 — Creating .env (non-secret config)${RESET}"
 echo ""
 
 ENV_FILE="$PROJECT_ROOT/.env"
@@ -273,47 +250,54 @@ cat > "$ENV_FILE" <<EOF
 # ============================================================
 # Generated by setup.sh on $(date)
 #
-# DO NOT commit this file to git.
-# It is listed in .gitignore.
+# This file holds NON-SECRET configuration only.
+# Secrets live in the OS keychain — open http://localhost:3773/setup
+# in your browser after starting the server.
+#
+# DO NOT commit this file to git (it is listed in .gitignore).
 # ============================================================
 
 # --- SERVER ---
 SERVER_PORT=3773
-SERVER_AUTH_TOKEN=${AUTH_TOKEN}
 
 # --- MODEL ---
-# Default: free Nemotron model via OpenRouter
-# To switch to Claude: set MODEL=anthropic/claude-sonnet-4-6
-# and set ANTHROPIC_API_KEY to your real key below
-OPENROUTER_API_KEY=${OPENROUTER_KEY}
-MODEL=nvidia/nemotron-3-super-120b-a12b:free
+# Default: free Nemotron via OpenRouter. Add your OpenRouter key via /setup.
+# To switch to local Ollama: MODEL=ollama/<your-model>  +  set OLLAMA_HOST below
+# To switch to Claude:       MODEL=anthropic/claude-sonnet-4-6  +  add anthropic-key via /setup
+MODEL=nvidia/llama-3.1-nemotron-70b-instruct:free
 
-# --- ANTHROPIC (optional — only needed if switching to Claude) ---
-# Remove the # below and add your key to use Claude instead of OpenRouter
-ANTHROPIC_API_KEY=not-used
+# --- OLLAMA (only if running a local model) ---
+# OLLAMA_HOST=http://192.168.10.100:11434
 
 # --- GMAIL (optional — run: npm run setup:gmail) ---
 # GMAIL_CONFIG_PATH=~/.nerdalert/secrets/email-gmail.json
 # GOOGLE_CALENDAR_SECRET_PATH=~/.nerdalert/secrets/google-calendar.json
 
-# --- SOC (self-hosted hardware only — not for general use) ---
-# OPENCLAW_URL=
-# OPENCLAW_TOKEN=
-# PIHOLE_API_KEY=
+# --- SOC (self-hosted hardware only) ---
+# OPENCLAW_URL=http://your-openclaw-host:18789
+# WAZUH_INDEXER_HOST=http://your-wazuh-host:9200
+# WAZUH_INDEXER_USER=admin
+# WAZUH_INDEXER_INSECURE=1
+# CROWDSEC_LAPI_URL=http://your-crowdsec-host:8080
+# CROWDSEC_MACHINE_ID=nerdalert-readonly
+# LOKI_URL=http://your-loki-host:3100
+# INFLUXDB_URL=http://your-influxdb-host:8086
+# INFLUXDB_TELEMETRY_BUCKET=optiplex-metrics
+# PFSENSE_URL=http://192.168.1.1
+# NTOPNG_URL=http://your-ntopng-host:3000
+# NTOPNG_USERNAME=admin
+# SYNOLOGY_URL=http://your-synology-host:5000
+# SYNOLOGY_USERNAME=youruser
 EOF
 
 ok ".env created at $ENV_FILE"
-
-mkdir -p "$HOME/.nerdalert"
-echo "$AUTH_TOKEN" > "$HOME/.nerdalert/token.txt"
-chmod 600 "$HOME/.nerdalert/token.txt"
-ok "Token backed up to ~/.nerdalert/token.txt"
+info "(no secrets — those go through /setup)"
 
 # ============================================================
-# STEP 8 — Shell aliases
+# STEP 6 — Shell aliases
 # ============================================================
 echo ""
-echo -e "${BOLD}Step 7 — Setting up shell aliases${RESET}"
+echo -e "${BOLD}Step 5 — Setting up shell aliases${RESET}"
 echo ""
 
 SHELL_RC=""
@@ -350,12 +334,12 @@ else
 alias nerd-start="cd $PROJECT_ROOT && npm run dev"
 alias nerd="cd $PROJECT_ROOT && npx ts-node scripts/chat.ts"
 alias nerd-open="open http://localhost:3773"
+alias nerd-setup="open http://localhost:3773/api/setup/panel"
 # ─────────────────────────────────────────────────────────────
 EOF
   ok "Aliases added to $SHELL_RC"
 fi
 
-# Always explicitly tell the user to source — don't rely on auto-source working
 echo ""
 echo -e "  ${YELLOW}Important:${RESET} Run this now to activate your aliases:"
 echo -e "  ${CYAN}source $SHELL_RC${RESET}"
@@ -366,29 +350,24 @@ echo ""
 # ============================================================
 echo ""
 echo -e "${CYAN}${BOLD}============================================================${RESET}"
-echo -e "${CYAN}${BOLD}  You're ready.${RESET}"
+echo -e "${CYAN}${BOLD}  Setup complete.${RESET}"
 echo -e "${CYAN}${BOLD}============================================================${RESET}"
 echo ""
-echo -e "  ${BOLD}Your auth token:${RESET}"
-echo -e "  ${CYAN}${AUTH_TOKEN}${RESET}"
-echo -e "  ${GRAY}(Also saved to ~/.nerdalert/token.txt)${RESET}"
-echo ""
-echo -e "  ${BOLD}Step 1 — Load your aliases (do this first):${RESET}"
+echo -e "  ${BOLD}Step 1 — Load your aliases:${RESET}"
 echo -e "  ${CYAN}source $SHELL_RC${RESET}"
 echo ""
 echo -e "  ${BOLD}Step 2 — Start NerdAlert:${RESET}"
-echo -e "  ${YELLOW}nerd-start${RESET}    ${GRAY}← starts the server${RESET}"
+echo -e "  ${YELLOW}nerd-start${RESET}    ${GRAY}← starts the server (auto-generates a bearer token on first run)${RESET}"
 echo ""
-echo -e "  ${BOLD}Step 3 — Open the UI:${RESET}"
+echo -e "  ${BOLD}Step 3 — Open the credential setup panel:${RESET}"
+echo -e "  ${YELLOW}nerd-setup${RESET}    ${GRAY}← opens http://localhost:3773/api/setup/panel${RESET}"
+echo ""
+echo -e "  Add your ${BOLD}OpenRouter${RESET} key (free at https://openrouter.ai) to start chatting."
+echo -e "  Optional: add ${BOLD}Anthropic${RESET} or ${BOLD}OpenClaw${RESET} keys if you want those providers."
+echo ""
+echo -e "  ${BOLD}Step 4 — Open the chat UI:${RESET}"
 echo -e "  ${YELLOW}nerd-open${RESET}     ${GRAY}← opens http://localhost:3773 in your browser${RESET}"
 echo ""
-
-if [ "$OPENROUTER_KEY" = "YOUR_OPENROUTER_KEY_HERE" ]; then
-  echo -e "  ${YELLOW}!  Reminder:${RESET} Add your OpenRouter key to .env before starting"
-  echo -e "  ${GRAY}   Get one free at https://openrouter.ai${RESET}"
-  echo ""
-fi
-
 echo -e "  ${BOLD}Optional — set up Gmail:${RESET}"
 echo -e "  ${GRAY}npm run setup:gmail${RESET}"
 echo ""
