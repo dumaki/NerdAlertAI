@@ -2488,7 +2488,7 @@
   let pendingApprovals   = [];
   let approvalShownThisSession = new Set();
   let activeAgentName    = CFG.agentName ?? 'Sherman';
-  let currentModel       = CFG.model     ?? 'nvidia/nemotron-3-super-120b-a12b:free';
+  let currentModel       = CFG.model     ?? 'nvidia/nemotron-nano-12b-v2-vl:free';
 
   // ── Vision input state ───────────────────────────────────
   // Pending image attachments waiting to ride out with the next
@@ -3145,7 +3145,7 @@
       <select class="settings-model-select" id="model-select" onchange="switchModel(this.value)">
         <option value="anthropic/claude-sonnet-4-6">Claude Sonnet 4.6 (Full ReAct)</option>
         <option value="ollama/mistral-small3.2">Mistral Small 3.2 24B (Local)</option>
-        <option value="nvidia/nemotron-3-super-120b-a12b:free">Nemotron 120B (Free tier)</option>
+        <option value="nvidia/nemotron-nano-12b-v2-vl:free">Nemotron Nano 12B VL (Free tier, vision)</option>
       </select>
       <div class="settings-model-note">Anthropic = tool loop + SOC. Local/Free = single-turn with prefetch.</div>
       <div class="settings-model-flash" id="model-flash"></div>

@@ -634,6 +634,21 @@ export async function callOpenRouter(
       model,
       messages:   fullMessages,
       max_tokens: 1024,
+      // Reasoning OFF on every OpenRouter request. Our models in
+      // the dropdown (Nemotron Super, Nano 12B v2 VL) treat
+      // reasoning as opt-in, not default — so this is harmless
+      // for them and saves the latency cost of generating
+      // reasoning tokens we'd discard anyway (our pseudo-tool
+      // adapter reads only `delta.content`).
+      //
+      // HISTORICAL NOTE: we briefly tried Nemotron 3 Nano Omni
+      // Reasoning here — a model whose operating mode IS
+      // reasoning. Flipping this toggle in either direction on
+      // that model produced either babbling (OFF) or empty
+      // content (ON). We replaced the model rather than the
+      // toggle; see model-capabilities.ts for the full writeup.
+      // https://openrouter.ai/docs/use-cases/reasoning-tokens
+      reasoning:  { enabled: false },
     }),
   });
 
@@ -696,6 +711,11 @@ export async function* streamOpenRouter(
       messages:   fullMessages,
       max_tokens: 1024,
       stream:     true,   // enables SSE streaming from OpenRouter
+      // Reasoning OFF — see callOpenRouter for the rationale and
+      // history. Short version: our OR models treat reasoning as
+      // opt-in; disabling here is a no-op for them and avoids
+      // generating tokens our parser ignores.
+      reasoning:  { enabled: false },
     }),
   });
 

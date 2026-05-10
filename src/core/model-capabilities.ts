@@ -122,17 +122,36 @@ const BUILTIN_CAPABILITIES: Record<string, ModelCapabilities> = {
 
 
   // ── OpenRouter ───────────────────────────────────────────
-  // Nemotron 3 Super 120B is text-only by design — it's the
-  // agentic/reasoning model in NVIDIA's family. The vision
-  // sibling is Nemotron 3 Nano Omni (a separate 30B model that
-  // does text+image+audio+video). Don't confuse the two — they
-  // share branding but not capabilities.
+  // Nemotron Nano 12B v2 VL is NVIDIA's chat-first multimodal
+  // model — 12B dense (not MoE), text + multi-image in, text
+  // out. Trained on NVIDIA-curated synthetic datasets optimized
+  // for OCR, chart reasoning, and document intelligence. Strong
+  // benchmarks on OCRBench v2, MMMU, MathVista, AI2D, ChartQA,
+  // DocVQA, and Video-MME.
   //
-  // Adding Nano Omni or other vision-capable OpenRouter models
-  // (Qwen2.5-VL, Pixtral cloud, Gemini multimodal) is a one-
-  // line addition here when a BYOK key for them lands.
+  // WHY THIS ONE OVER NANO OMNI REASONING
+  // ─────────────────────────────────────────────────────
+  // We tried `nemotron-3-nano-omni-30b-a3b-reasoning:free`
+  // first because it shared more architectural lineage with
+  // the Nemotron 3 Super 120B model that previously occupied
+  // this slot. It didn't work for our prefetch+narration flow:
+  //   - Reasoning OFF: model babbled, looped ("I think I need
+  //     to answer:" repeating to fill the buffer)
+  //   - Reasoning ON: sparse/blank `content`, all useful output
+  //     routed to the `reasoning` field which our pseudo-tool
+  //     adapter doesn't read. Personality was ignored.
+  //
+  // Diagnosis: that model is a perception sub-agent variant.
+  // It's optimized to output reasoning tokens and treats the
+  // assistant turn as a terse summary. Doesn't play with a
+  // character-driven narration pipeline.
+  //
+  // Nano 12B v2 VL is the chat-first sibling. Reasoning is
+  // opt-in (not default), so `content` gets the model's full
+  // attention. Same family lineage, similar OCR/document
+  // strengths, smaller footprint for the free-tier rate limits.
 
-  'nvidia/nemotron-3-super-120b-a12b:free': { vision: false },
+  'nvidia/nemotron-nano-12b-v2-vl:free': { vision: true  },
 };
 
 
