@@ -210,8 +210,36 @@ export function toOpenAIFormat(tools: NerdAlertTool[]): OpenAITool[] {
   }));
 }
 
+// findTool — UNFILTERED registry lookup.
+//
+// Returns a tool from ALL_TOOLS by name regardless of whether it's
+// enabled in config.yaml or callable at the current trust level.
+// This is intentional: the permission-broker uses a two-step pattern
+// where it calls findTool() to get the tool reference, then
+// independently re-checks enabled + trust via getAvailableTools().
+// Distinguishing "tool doesn't exist" from "tool is disabled" needs
+// findTool to ignore the gate.
+//
+// Any code OUTSIDE the broker that needs a tool reference and is NOT
+// going to immediately re-check the gate should use findEnabledTool()
+// instead. Calling .execute() on a tool returned by findTool() bypasses
+// the chokepoint and is a P3/P6 violation.
+
 export function findTool(name: string): NerdAlertTool | undefined {
   return ALL_TOOLS.find(tool => tool.name === name);
+}
+
+// findEnabledTool — gated registry lookup.
+//
+// Same shape as findTool but only returns the tool if it is enabled in
+// config.yaml AND callable at the current trust level (i.e. it appears
+// in getAvailableTools()). Use this from any caller outside the broker
+// that wants a tool reference for inspection or display purposes.
+// Returns undefined for both "doesn't exist" and "exists but disabled";
+// pair with findTool() if the caller needs to differentiate.
+
+export function findEnabledTool(name: string): NerdAlertTool | undefined {
+  return getAvailableTools().find(tool => tool.name === name);
 }
 
 export function logAvailableTools(): void {

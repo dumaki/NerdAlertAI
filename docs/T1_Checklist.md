@@ -18,8 +18,8 @@ Last updated: 2026-05-09 (post v0.5.13.5)\
 - [x] Spec doc drafted (NerdAlert_Spec_v0_5_13_5.md \'97 save after Claude restart)\
 \
 ## \uc0\u55357 \u56615  Architectural drift (T1 \'97 must fix)\
-- [ ] **`agent.ts` not using `permission-broker`** \'97 `/api/cron/action` uses inline trust check; `/chat/stream` uses broker. Drift between paths. (Tonight, new session)\
-- [ ] **`findTool()` ignores `enabled`** \'97 `registry.ts` returns ANY tool from ALL_TOOLS regardless of config. Broker re-checks but agent.ts only checks trust.\
+- [x] **`agent.ts` not using `permission-broker`** \'97 actually `intent-prefetch.ts`; agent.ts already used broker. Fixed in v0.5.14 by routing prefetch through `executeTool()`.\
+- [x] **`findTool()` ignores `enabled`** \'97 fixed in v0.5.14 by adding `findEnabledTool()` for non-broker callers; help-tool migrated. `findTool()` keeps unfiltered semantic for broker's two-step pattern, with explicit doc warning.\
 - [x] **`config.yaml` SOC keys are dead** \'97 fixed in v0.5.14 via `tool_groups:` prefix-matching. All 9 SOC services now configurable.\
 \
 ## \uc0\u55357 \u57056  Build / quality (T1)\

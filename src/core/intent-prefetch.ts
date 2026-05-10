@@ -51,8 +51,8 @@
 //   requiresNarration(results)    → boolean          false if all failed
 // ============================================================
 
-import { getAvailableTools } from '../tools/registry';
 import { Source }            from '../types/response.types';
+import { executeTool, type BrokerContext } from './permission-broker';
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -618,11 +618,11 @@ export function detectIntent(message: string): string[] {
 // Never throws — failures get available: false.
 
 export async function prefetchTools(
-  groupNames: string[],
-  userQuery?: string,
-  history?: HistoryTurn[],
+  groupNames:    string[],
+  brokerContext: BrokerContext,
+  userQuery?:    string,
+  history?:      HistoryTurn[],
 ): Promise<PrefetchResult[]> {
-  const allTools = getAvailableTools();
   const results: PrefetchResult[] = [];
 
   // Collect tool names from matched groups, deduplicate
@@ -635,56 +635,58 @@ export async function prefetchTools(
     const groupName = Object.entries(INTENT_MAP)
       .find(([, g]) => g.tools.includes(toolName))?.[0] ?? toolName;
 
-    const tool = allTools.find(t => t.name === toolName);
-
-    if (!tool) {
-      // Not registered — disabled in config.yaml or not yet built
-      results.push({
-        toolName,
-        groupName,
-        data:      'Unavailable (not configured)',
-        available: false,
-      });
-      continue;
+    // Build params for this tool from its group config:
+    //   1. defaultParams baseline
+    //   2. user message injected as queryParam (if this group has one)
+    //   3. paramExtractor result merged on top (extractor wins)
+    // Same precedence as before — only the execution path changed.
+    const groupConfig = Object.values(INTENT_MAP)
+      .find(g => g.tools.includes(toolName));
+    const params: Record<string, unknown> = { ...(groupConfig?.defaultParams ?? {}) };
+    if (groupConfig?.queryParam && userQuery) {
+      params[groupConfig.queryParam] = userQuery;
+    }
+    if (groupConfig?.paramExtractor && userQuery) {
+      const extracted = groupConfig.paramExtractor(userQuery, history);
+      if (extracted) Object.assign(params, extracted);
     }
 
-    try {
-      // Get default params for this tool from its group config, then
-      // inject the user message if this group has a queryParam field,
-      // then run the extractor (if any) and merge those last so it
-      // can override action / fixed defaults based on the message.
-      const groupConfig = Object.values(INTENT_MAP)
-        .find(g => g.tools.includes(toolName));
-      const params: Record<string, unknown> = { ...(groupConfig?.defaultParams ?? {}) };
-      if (groupConfig?.queryParam && userQuery) {
-        params[groupConfig.queryParam] = userQuery;
-      }
-      if (groupConfig?.paramExtractor && userQuery) {
-        const extracted = groupConfig.paramExtractor(userQuery, history);
-        if (extracted) Object.assign(params, extracted);
-      }
-      const response = await tool.execute(params);
-      const data = typeof response.content === 'string'
-        ? response.content
-        : JSON.stringify(response.content, null, 2);
+    // Route through the broker — same chokepoint the tool-loop adapters
+    // use. Broker handles findTool, the trust + enabled gate, execute,
+    // and error normalization. Returns BrokerResult with error: true
+    // when the gate denies or the tool throws; we map that to
+    // available: false so the prefetch card stays hidden and
+    // buildInjectedPrompt skips it.
+    //
+    // The id is informational — the SSE bridge in handleNarrationStream
+    // uses its own ids when emitting tool_start/tool_result events.
+    const result = await executeTool(
+      {
+        id:   `prefetch_${toolName}`,
+        name: toolName,
+        args: params,
+      },
+      brokerContext,
+    );
 
-      // Treat empty string as unavailable — no point narrating nothing
-      results.push({
-        toolName,
-        groupName,
-        data:      data || 'No data returned',
-        available: data.length > 0,
-        sources:   response.metadata?.sources,
-      });
-
-    } catch (err: unknown) {
+    if (result.error) {
       results.push({
         toolName,
         groupName,
         data:      'Unavailable',
         available: false,
       });
+      continue;
     }
+
+    // Treat empty string as unavailable — no point narrating nothing.
+    results.push({
+      toolName,
+      groupName,
+      data:      result.output || 'No data returned',
+      available: result.output.length > 0,
+      sources:   result.sources,
+    });
   }
 
   console.log(`[NerdAlert] Prefetch results: ${results.map(r => `${r.toolName}=${r.available ? 'ok' : 'unavailable'}`).join(', ')}`);

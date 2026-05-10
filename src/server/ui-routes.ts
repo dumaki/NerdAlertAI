@@ -542,7 +542,12 @@ export function mountUIRoutes(app: Express): void {
             }))
             .filter(t => t.text.length > 0);
 
-          prefetchResults = await prefetchTools(detectedGroups, safeMessage, historyTurns);
+          prefetchResults = await prefetchTools(
+            detectedGroups,
+            { userTrustLevel: trustLevel, modelLabel: llm.model },
+            safeMessage,
+            historyTurns,
+          );
 
           const narratable = clipPrefetchForFreeTier(prefetchResults);
           enrichedPrompt = systemPrompt + buildInjectedPrompt(narratable);

@@ -19,12 +19,12 @@
 //   can also answer help questions mid-conversation if needed.
 //
 // Registry reads:
-//   getAvailableTools() — filtered by trust level + config.yaml
-//   ALL_TOOLS (via findTool) — for detail lookups by name
+//   getAvailableTools() / findEnabledTool — filtered by trust + enabled
+//   findTool — fallback to detect "exists but disabled" for friendlier errors
 // ============================================================
 
 import { NerdAlertTool, NerdAlertResponse } from '../../types/response.types'
-import { getAvailableTools, findTool }       from '../registry'
+import { getAvailableTools, findTool, findEnabledTool } from '../registry'
 
 // ── Category grouping ─────────────────────────────────────────
 // Maps tool names to display groups. Anything not listed here
@@ -186,8 +186,27 @@ Triggered by /help (list) or /help <toolname> (detail).`,
         }
       }
 
-      const tool = findTool(toolName)
+      // Two-step lookup: findEnabledTool first, then fall back to
+      // the unfiltered findTool to differentiate "doesn't exist" from
+      // "exists but disabled". /help is read-only and never executes
+      // a tool, so showing detail of a disabled tool is a UX choice,
+      // not a security one — and the user benefit of "this tool exists
+      // but you'd need to enable it" outweighs the consistency loss.
+      let tool = findEnabledTool(toolName)
+
       if (!tool) {
+        const disabled = findTool(toolName)
+        if (disabled) {
+          return {
+            type:    'text',
+            content:
+              `"${toolName}" exists but is not currently enabled.\n` +
+              `Trust level required: L${disabled.trustLevel}\n` +
+              `Enable it via config.yaml (tool_groups or tools section) ` +
+              `and ensure agent.trust_level is at least L${disabled.trustLevel}.`,
+            metadata: { title: `Help: ${toolName} (disabled)`, sources: [] },
+          }
+        }
         const available = getAvailableTools().map(t => t.name).join(', ')
         return {
           type:    'text',

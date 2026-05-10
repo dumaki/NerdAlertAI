@@ -8,16 +8,78 @@ in OS keychain, `.env` self-check on boot)
 ## What this version is
 
 The first T1-backlog burndown after the credential-store migration arc.
-One commit lands: tool-policy resolution gets a real spine so the
-"modules can be disabled by the user" principle (P6) finally holds for
-the SOC tools.
+Two commits land together, both under the "least-privilege tightening /
+broker enforcement" theme.
 
-Specifically: closes T1 backlog item #3 — `config.yaml` SOC keys
-(`soc_wazuh`, `soc_pihole`, `soc_grafana`) never matched any registered
-tool name, so the `enabled:` flag did nothing for any of the 36 SOC
-tools. They were silently L1-enabled regardless of config.
+- **First commit (config layer)** — `tool_groups:` prefix-matching in
+  `config.yaml` so the user can disable an entire SOC service in one
+  line. Closes T1 #3.
+- **Second commit (broker enforcement)** — `intent-prefetch.ts` now
+  routes through the same `executeTool()` chokepoint as the tool-loop
+  adapters, and `findTool()` gets a sibling `findEnabledTool()` for any
+  caller outside the broker that needs a gated lookup. Closes T1 #1
+  and #2.
 
-## What changed
+T1 #1 turned out to be different from what the audit memory captured.
+The bypass wasn't in `agent.ts` — that path already routes through
+`executeTool` for both the chat handler and cron runner via
+`agent.chat()`. The actual duplication was in `intent-prefetch.ts`,
+which was calling `tool.execute()` directly with its own enabled-only
+gate. Today's behaviour was safe (the gate was still being applied,
+just not via the broker), but the duplication meant the broker's
+future additions — v0.7's `maxModelTrustLevel`, source aggregation,
+standardised error formatting — wouldn't propagate to the prefetch
+path without remembering to keep the two in sync.
+
+## What changed — broker enforcement (T1 #1, #2)
+
+### `src/core/intent-prefetch.ts`
+
+`prefetchTools()` previously ran tools via direct `tool.execute()`
+calls after filtering against `getAvailableTools()`. The gate was
+honoured but duplicated. Now:
+
+- New required parameter: `brokerContext: BrokerContext` (second
+  positional arg). The single caller in `ui-routes.ts:/chat/stream`
+  builds it from the same `trustLevel` + `llm.model` it was already
+  capturing.
+- The lookup-and-execute block becomes one `executeTool()` call. The
+  broker handles `findTool`, the trust + enabled gate, execution, and
+  error normalisation.
+- A `BrokerResult` with `error: true` (gate denied or tool threw) maps
+  to `available: false`, which keeps the prefetch card hidden and lets
+  `buildInjectedPrompt` skip it — same UX as before.
+- Sources come back via `result.sources`, no manual extraction needed.
+- The `getAvailableTools` import is dropped (no longer referenced
+  here — the broker calls it internally).
+
+### `src/tools/registry.ts`
+
+New helper `findEnabledTool(name)` returns a tool only if it's enabled
+in `config.yaml` and callable at the current trust level. Equivalent
+to `getAvailableTools().find(t => t.name === name)`, named for symmetry
+with `findTool`.
+
+`findTool()` keeps its unfiltered semantic but gains a doc comment
+stating loudly that calling `.execute()` on its result bypasses the
+chokepoint and is a P3/P6 violation. The broker depends on the
+unfiltered behaviour for its two-step pattern (find → re-check), so
+removing it isn't an option.
+
+### `src/tools/builtin/help-tool.ts`
+
+`/help <toolname>` now does a two-step lookup:
+
+1. `findEnabledTool(toolName)` — happy path, shows full detail.
+2. On miss, `findTool(toolName)` to differentiate "doesn't exist" from
+   "exists but disabled" and respond accordingly.
+
+A disabled-tool query now returns a friendlier message with the
+required trust level and a `config.yaml` hint, instead of full docs
+for a tool the user can't actually call. `/help` (list) is unchanged —
+still `getAvailableTools()`-only.
+
+## What changed — tool_groups (T1 #3)
 
 ### `config.yaml` — new `tool_groups:` section
 
@@ -119,8 +181,8 @@ lookups against `config.tools[name]`.
 
 | # | Item | State |
 |---|---|---|
-| 1 | `agent.ts` cron path bypasses `permission-broker` | Open |
-| 2 | `findTool()` doesn't filter by `enabled` | Open |
+| 1 | `agent.ts` cron path bypasses `permission-broker` | **Done (v0.5.14)** — was actually `intent-prefetch.ts`; agent.ts already routed through broker |
+| 2 | `findTool()` doesn't filter by `enabled` | **Done (v0.5.14)** — added `findEnabledTool()`, help-tool migrated |
 | 3 | `config.yaml` SOC keys mismatch tool names | **Done (v0.5.14)** |
 | 4 | Memory writes at L1, should be L2 | Deferred to v0.7 |
 | 5 | `dist/src/ui/index.html` ENOENT on Optiplex | Open |
