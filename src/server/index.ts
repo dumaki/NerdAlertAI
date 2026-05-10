@@ -44,8 +44,14 @@ process.on('unhandledRejection', (reason: unknown) => {
 
 const app = express();
 
-// Parse incoming JSON request bodies automatically
-app.use(express.json());
+// Parse incoming JSON request bodies automatically.
+// `limit` is raised above the Express default (100kb) so vision
+// requests with base64-encoded images can fit. Server-side image
+// validation caps each image at 5MB raw; 5MB x ~4/3 base64
+// inflation x up to 5 images per message + envelope overhead
+// fits comfortably under 40MB, with 10mb being the practical
+// cap for a typical 1-2 image request from the chat UI.
+app.use(express.json({ limit: '40mb' }));
 app.use('/assets', express.static(path.resolve(__dirname, '..', 'ui', 'assets')));
 
 // ---- APPLY AUTH STRATEGY ----

@@ -297,6 +297,35 @@ async function handleAnthropicStream(
     return;
   }
 
+  // ── Diagnostic: log message shape for vision-related debugging ──
+  // Strips the bulky base64 payload but keeps the structural
+  // fingerprint so we can verify image content blocks survive the
+  // route→adapter→SDK chain. Logged only when at least one user
+  // turn carries non-string content (i.e. images present) so the
+  // text-only hot path stays quiet.
+  const hasImageContent = initialMessages.some(
+    (m) => typeof m.content !== 'string',
+  );
+  if (hasImageContent) {
+    const summary = initialMessages.map((m) => {
+      if (typeof m.content === 'string') {
+        return { role: m.role, content: `string(${m.content.length})` };
+      }
+      const blocks = (m.content as Array<any>).map((b) => {
+        if (b?.type === 'text') return { type: 'text', text_len: (b.text ?? '').length };
+        if (b?.type === 'image') return {
+          type:       'image',
+          source:     b.source?.type,
+          media_type: b.source?.media_type,
+          data_len:   (b.source?.data ?? '').length,
+        };
+        return { type: b?.type ?? 'unknown' };
+      });
+      return { role: m.role, blocks };
+    });
+    console.log(`[vision-debug] Anthropic call messages:`, JSON.stringify(summary, null, 2));
+  }
+
   const sourceSink: Source[] = [];
 
   const emit = buildSSEBridge(res, {

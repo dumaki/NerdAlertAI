@@ -1013,6 +1013,75 @@
       color: var(--red);
     }
 
+    /* Image-chip variant. Replaces the 📎 text icon with a 18×18
+       thumbnail of the image itself (drawn from a data: URL, no
+       network round-trip), and uses the cyan colorway for the
+       border so users can tell at a glance which chips are bound
+       for the model (image-chip, with picture) versus the project
+       inbox (default chip, with paperclip). */
+    .upload-chip.image-chip .upload-chip-icon {
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      border-radius: 2px;
+      border: 1px solid var(--cyan-mid);
+    }
+    .upload-chip.image-chip .upload-chip-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    /* Vision-required card — appears inline in chat when the user
+       attaches an image to a non-vision-capable model. The button
+       switches model and auto-resends with images intact. After the
+       click resolves, the card grays out as a record of the
+       redirection. */
+    .vision-required-card {
+      margin: 4px 0;
+      padding: 12px 14px;
+      background: var(--cyan-dim);
+      border: 1px solid var(--cyan-mid);
+      border-left: 2px solid var(--cyan);
+      border-radius: 2px;
+      font-size: 11px;
+      color: var(--cyan);
+      line-height: 1.5;
+    }
+    .vision-required-card .vision-required-msg {
+      margin-bottom: 10px;
+    }
+    .vision-switch-btn {
+      padding: 6px 12px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--cyan);
+      background: transparent;
+      border: 1px solid var(--cyan);
+      cursor: pointer;
+      border-radius: 1px;
+      transition: all var(--transition-fast);
+    }
+    .vision-switch-btn:hover:not(:disabled) {
+      background: var(--cyan-glow);
+      text-shadow: 0 0 6px var(--cyan);
+    }
+    .vision-switch-btn:disabled {
+      opacity: 0.5;
+      cursor: wait;
+    }
+    .vision-required-card.resolved {
+      opacity: 0.4;
+      pointer-events: none;
+    }
+
     /* ==========================================================
        SIDE PANEL — slides in from the right
        Controlled by .app.panel-open on the grid container
@@ -2421,6 +2490,22 @@
   let activeAgentName    = CFG.agentName ?? 'Sherman';
   let currentModel       = CFG.model     ?? 'nvidia/nemotron-3-super-120b-a12b:free';
 
+  // ── Vision input state ───────────────────────────────────
+  // Pending image attachments waiting to ride out with the next
+  // user message. Populated by setupUpload (paste, drag, paperclip)
+  // and drained by sendMessage's `done` handler. Survives a
+  // `vision_required` SSE event so the user can click the switch-
+  // model card and have the same images auto-resent under the new
+  // model. Image attachment is locked while isStreaming is true so
+  // an in-flight request's `done` handler can't sweep up an image
+  // a user pasted in the gap between turns.
+  let pendingImages = [];   // [{mediaType, data, name, chipEl}]
+  const MAX_IMAGES_PER_MESSAGE = 5;
+  const VISION_IMAGE_MIMES = new Set([
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp',
+  ]);
+  const VISION_MAX_BYTES = 5 * 1024 * 1024;   // matches server cap
+
   // ============================================================
   // ONBOARDING
   // ============================================================
@@ -3011,6 +3096,7 @@
   function clearConversation() {
   conversationHistory = [];
   approvalShownThisSession.clear();
+  clearPendingImages();
   const container = document.getElementById('chat-messages');
   container.innerHTML = `
     <div class="empty-state" id="empty-state">
@@ -3313,7 +3399,15 @@
       e.preventDefault();
       dragDepth = 0;
       inputBar.classList.remove('drag-active');
-      for (const file of e.dataTransfer.files) uploadFile(file);
+      // Branch by MIME — images go to the vision queue (sent inline
+      // with the next message), other files go to the inbox uploader.
+      // Image queueing is locked during streaming so a paste in the
+      // gap between turns can't be swept up by the in-flight `done`.
+      for (const file of e.dataTransfer.files) {
+        if (isStreaming) continue;
+        if (isVisionImage(file)) queueImage(file);
+        else                     uploadFile(file);
+      }
     });
 
     // Stop the browser's default "open this file as a tab" when a drop
@@ -3327,10 +3421,33 @@
       });
     });
 
-    // Paperclip handler — mirrors the drop path through uploadFile()
+    // Paperclip handler — same MIME branch as the drop handler.
     fileInput.addEventListener('change', () => {
-      for (const file of fileInput.files) uploadFile(file);
+      for (const file of fileInput.files) {
+        if (isStreaming) continue;
+        if (isVisionImage(file)) queueImage(file);
+        else                     uploadFile(file);
+      }
       fileInput.value = '';   // allow same file again immediately
+    });
+
+    // Clipboard paste — picks up screenshots and copied images
+    // pasted into the chat input. Non-image clipboard content is
+    // left alone so normal text paste still works (no preventDefault
+    // unless we're actually handling images).
+    chatInput.addEventListener('paste', async (ev) => {
+      if (isStreaming) return;
+      if (!ev.clipboardData || !ev.clipboardData.items) return;
+      const items = Array.from(ev.clipboardData.items);
+      const imageItems = items.filter(
+        (it) => it.kind === 'file' && VISION_IMAGE_MIMES.has(it.type),
+      );
+      if (imageItems.length === 0) return;
+      ev.preventDefault();
+      for (const item of imageItems) {
+        const file = item.getAsFile();
+        if (file) await queueImage(file);
+      }
     });
 
     function hasFiles(e) {
@@ -3438,6 +3555,131 @@
         chatInput.focus();
       });
     }
+
+    // ── Vision helpers (image-bound chips) ─────────────────────
+    //
+    // Image-bound chips are visually distinct from inbox-bound
+    // chips: they show a 18×18 thumbnail (via data: URL) instead
+    // of the 📎 icon, and they don't get the "click to fill
+    // `read <path>`" behavior since the bytes ride inline with
+    // the next message rather than living in the project inbox.
+
+    function isVisionImage(file) {
+      return !!(file && file.type && VISION_IMAGE_MIMES.has(file.type));
+    }
+
+    function fileToBase64(file) {
+      // FileReader.readAsDataURL produces "data:image/png;base64,XXXX".
+      // We only want the XXXX part — the server's wire format carries
+      // mediaType separately, not as a data: URL prefix.
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(reader.error || new Error('FileReader failed'));
+        reader.onload  = () => {
+          const result = String(reader.result || '');
+          const comma  = result.indexOf(',');
+          resolve(comma >= 0 ? result.slice(comma + 1) : result);
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function queueImage(file) {
+      if (!file || !file.type) return;
+
+      // Caps and MIME guard — server enforces these too; doing it
+      // here gives the user immediate feedback and saves a
+      // round-trip when something obviously won't fit.
+      if (pendingImages.length >= MAX_IMAGES_PER_MESSAGE) {
+        addChip({
+          name:    file.name || 'image',
+          error:   true,
+          message: `max ${MAX_IMAGES_PER_MESSAGE} images per message`,
+        });
+        return;
+      }
+      if (file.size > VISION_MAX_BYTES) {
+        const mb = (file.size / 1024 / 1024).toFixed(1);
+        addChip({
+          name:    file.name || 'image',
+          error:   true,
+          message: `${mb}MB exceeds ${VISION_MAX_BYTES / 1024 / 1024}MB cap`,
+        });
+        return;
+      }
+      if (!isVisionImage(file)) {
+        addChip({
+          name:    file.name || 'image',
+          error:   true,
+          message: 'unsupported image type',
+        });
+        return;
+      }
+
+      // Optimistic chip while we read the file. Looks like an
+      // inbox-bound upload (◐ spinner + 📎-shaped icon area) until
+      // base64 is ready, then morphs into an image-chip with the
+      // thumbnail. Visual transition reads as "loaded" rather than
+      // "changed".
+      const displayName = file.name || 'pasted image';
+      const chip = addChip({ name: displayName, uploading: true });
+
+      try {
+        const base64       = await fileToBase64(file);
+        const thumbnailUrl = `data:${file.type};base64,${base64}`;
+
+        pendingImages.push({
+          mediaType: file.type,
+          data:      base64,
+          name:      displayName,
+          chipEl:    chip,
+        });
+
+        finalizeImageChip(chip, displayName, thumbnailUrl);
+      } catch (err) {
+        markChipError(chip, displayName, (err && err.message) || 'failed to read');
+      }
+    }
+
+    function finalizeImageChip(chip, name, thumbnailUrl) {
+      chip.classList.remove('uploading');
+      chip.classList.add('image-chip');
+
+      const icon = chip.querySelector('.upload-chip-icon');
+      if (icon) {
+        icon.textContent = '';
+        const img = document.createElement('img');
+        img.src = thumbnailUrl;
+        img.alt = '';
+        icon.appendChild(img);
+      }
+
+      const nameEl = chip.querySelector('.upload-chip-name');
+      if (nameEl) nameEl.textContent = name;
+
+      const hintEl = chip.querySelector('.upload-chip-hint');
+      if (hintEl) hintEl.textContent = '';
+
+      chip.title = `Image attachment: ${name}`;
+
+      // Replace the existing ✕ click handler with one that ALSO
+      // pulls the image out of pendingImages. addChip() wires a
+      // simple chip.remove() on ✕ — for image chips we need that
+      // plus the array splice so a dismissed chip doesn't keep
+      // riding out on the next send.
+      const x = chip.querySelector('.upload-chip-x');
+      if (x) {
+        const fresh = x.cloneNode(true);
+        x.replaceWith(fresh);
+        fresh.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const idx = pendingImages.findIndex((p) => p.chipEl === chip);
+          if (idx >= 0) pendingImages.splice(idx, 1);
+          chip.remove();
+          if (tray.children.length === 0) tray.classList.remove('has-chips');
+        });
+      }
+    }
   })();
 
 
@@ -3454,7 +3696,8 @@
     }
   }
 
-  async function sendMessage(prefill) {
+  async function sendMessage(prefill, opts = {}) {
+    const { skipUserMessageRender = false } = opts;
     const input = document.getElementById('chat-input');
     const btn   = document.getElementById('send-button');
 
@@ -3496,9 +3739,21 @@
     btn.disabled  = false;
     btn.onclick   = stopStreaming;
 
-    appendUserMessage(text);
+    if (!skipUserMessageRender) {
+      appendUserMessage(text);
+    }
 
     const agentDiv = appendAgentMessage();
+
+    // Snapshot images for THIS request only. The wire format strips
+    // chipEl and any other client-only metadata. Cleared in the
+    // `done` handler after a successful send; left intact on
+    // vision_required and on errors so the user can retry without
+    // re-attaching.
+    const imagesForThisSend = pendingImages.map((img) => ({
+      mediaType: img.mediaType,
+      data:      img.data,
+    }));
 
     let fullText = '';
     let buffer   = '';
@@ -3517,6 +3772,7 @@
           conversationHistory: conversationHistory,
           agentId:             localStorage.getItem('nerdalert_agent') ?? 'sherman',
           agentName:           activeAgentName,
+          images:              imagesForThisSend.length > 0 ? imagesForThisSend : undefined,
         }),
       });
 
@@ -3645,7 +3901,26 @@
 
             saveSessionToServer();
 
+            // Vision: drain pendingImages now that the message has
+            // shipped successfully. Skipped on `error` and
+            // `vision_required` so the user can retry or switch
+            // models without re-attaching.
+            clearPendingImages();
+
             parseForApprovals(parsed.text || fullText);
+          }
+
+          else if (eventType === 'vision_required') {
+            // Active model can't see images. Replace the empty
+            // agent bubble with a switch-card; clicking it switches
+            // model and auto-resends with images intact.
+            hideThinking();
+            if (agentDiv) agentDiv.remove();
+            renderVisionRequiredCard(
+              parsed.suggestedModel,
+              parsed.message,
+              text,
+            );
           }
 
           else if (eventType === 'error') {
@@ -3681,6 +3956,87 @@
     btn.onclick     = () => sendMessage();
     btn.disabled    = false;
     input.focus();
+  }
+
+
+  // ============================================================
+  // VISION INPUT HELPERS
+  // ============================================================
+  //
+  // clearPendingImages() drains the queue and yanks the chips from
+  // the upload tray. Called by sendMessage's `done` handler after
+  // a successful send and by clearConversation() on /clear.
+  //
+  // renderVisionRequiredCard() handles the SSE vision_required
+  // event by inserting an inline switch-card in the chat. The
+  // button switches model via the existing /api/config/model
+  // route, then re-enters sendMessage with skipUserMessageRender:true
+  // so the user's already-rendered message doesn't render twice.
+
+  function clearPendingImages() {
+    for (const img of pendingImages) {
+      if (img.chipEl && img.chipEl.parentNode) {
+        img.chipEl.remove();
+      }
+    }
+    pendingImages = [];
+    const tray = document.getElementById('upload-tray');
+    if (tray && tray.children.length === 0) {
+      tray.classList.remove('has-chips');
+    }
+  }
+
+  // Friendly labels for switch-card button text. Falls back to
+  // the raw model string if a label isn't defined here — the
+  // architecture is meant to outgrow this lookup as more models
+  // join, so it stays a small, additive thing rather than a
+  // central registry.
+  const FRIENDLY_MODEL_LABELS = {
+    'anthropic/claude-sonnet-4-6': 'Claude',
+    'ollama/mistral-small3.2':     'Mistral',
+  };
+
+  function renderVisionRequiredCard(suggestedModel, message, originalText) {
+    clearEmptyState();
+    const container = document.getElementById('chat-messages');
+    const friendly  = FRIENDLY_MODEL_LABELS[suggestedModel] || suggestedModel;
+
+    const div = document.createElement('div');
+    div.className = 'message agent';
+    div.innerHTML = `
+      <div class="message-label">${activeAgentName.toUpperCase()} // ${timestamp()}</div>
+      <div class="message-bubble">
+        <div class="vision-required-card">
+          <div class="vision-required-msg">${escapeHTML(message || "This model can't see images.")}</div>
+          <button class="vision-switch-btn">SWITCH TO ${escapeHTML(String(friendly).toUpperCase())} &amp; RESEND</button>
+        </div>
+      </div>
+    `;
+    container.appendChild(div);
+    scrollToBottom();
+
+    const card = div.querySelector('.vision-required-card');
+    const btn  = div.querySelector('.vision-switch-btn');
+    if (!btn || !card) return;
+
+    btn.addEventListener('click', async () => {
+      btn.disabled    = true;
+      btn.textContent = 'SWITCHING…';
+      try {
+        await switchModel(suggestedModel);
+      } catch (err) {
+        console.error('[Vision] switchModel failed:', err);
+        btn.disabled    = false;
+        btn.textContent = `SWITCH TO ${String(friendly).toUpperCase()} & RESEND`;
+        return;
+      }
+      card.classList.add('resolved');
+      // Auto-resend with the same text and (still-intact) images.
+      // skipUserMessageRender prevents a duplicate "YOU" bubble —
+      // the original user message is already on screen above this
+      // card from the first attempt.
+      sendMessage(originalText, { skipUserMessageRender: true });
+    });
   }
 
 
