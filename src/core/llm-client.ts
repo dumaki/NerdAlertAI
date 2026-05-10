@@ -304,6 +304,22 @@ export function setActiveModel(model: string): void {
   console.log(`[NerdAlert] Model switched to: ${model}`);
 }
 
+/**
+ * Returns the FULL prefixed model string currently active
+ * (e.g. "anthropic/claude-sonnet-4-6", not just "claude-sonnet-4-6").
+ *
+ * `getLLMConfig().model` returns the bare downstream string with
+ * the provider prefix stripped — useful for the SDK call but
+ * useless as a key into the capability map (which keys on the
+ * full prefixed string the user picks in Settings).
+ *
+ * Use this getter when you need to ask "what did the user select?"
+ * rather than "what string do I pass to the SDK?".
+ */
+export function getActiveModel(): string {
+  return activeModel;
+}
+
 const OR_URL  = 'https://openrouter.ai/api/v1/chat/completions';
 
 // ── Credential cache (v0.5.13.x — keychain-backed) ───────────
@@ -528,14 +544,34 @@ export function getLLMConfig(): LLMConfig {
   };
 }
 
-// ── OpenRouter / Ollama message types ────────────────────────
+// ── OpenRouter / Ollama message types ─────────────────────────
 //
 // Both use OpenAI-compatible message format.
-// Content is always a string at this level. Tools are handled separately.
+//
+// `content` is usually a plain string — system prompts, assistant
+// turns, and most user messages. The OpenAI Chat Completions wire
+// format also accepts an array of content parts on user turns when
+// the message carries non-text input (image_url today; audio in
+// the near future). The union type below mirrors that flexibility:
+// existing call sites that build text-only messages keep working
+// unchanged because `string` is still part of the union.
+//
+// Image-bearing user turns get built in server/ui-routes.ts when
+// the active model is vision-capable; the same content array is
+// then forwarded through streamOllama() and runOpenAIAdapter()
+// to the OpenAI-compat /v1 endpoint, which interprets it natively.
+// The pseudo-tool adapter only ever sees text-only content because
+// the capability gate blocks images on every provider that lands
+// on it (text-only OpenRouter free tier).
+
+/** A single content part on a user turn. Mirrors OpenAI's wire format. */
+export type OpenAIContentPart =
+  | { type: 'text';      text: string }
+  | { type: 'image_url'; image_url: { url: string } };
 
 export interface ORMessage {
   role:    'system' | 'user' | 'assistant';
-  content: string;
+  content: string | OpenAIContentPart[];
 }
 
 // ── callOpenRouter ────────────────────────────────────────────

@@ -78,7 +78,7 @@ import {
   type BrokerContext,
   executeTool,
 } from './permission-broker';
-import type { ORMessage } from './llm-client';
+import type { ORMessage, OpenAIContentPart } from './llm-client';
 import type { Source } from '../types/response.types';
 
 // ── Typed capability error ───────────────────────────────────
@@ -158,7 +158,7 @@ interface OpenAIToolCall {
 }
 
 type OpenAIMessage =
-  | { role: 'system' | 'developer' | 'user'; content: string }
+  | { role: 'system' | 'developer' | 'user'; content: string | OpenAIContentPart[] }
   | { role: 'assistant'; content: string; tool_calls?: OpenAIToolCall[] }
   | { role: 'tool'; tool_call_id: string; content: string };
 
@@ -352,12 +352,26 @@ export async function runOpenAIAdapter(
   const systemRole = transport.systemRole ?? 'system';
 
   // Convert ORMessage[] history → OpenAIMessage[] (the wider shape).
-  // History is text-only; tool_calls only appear in turns we add inside
-  // the loop below.
-  const initialAsOpenAI: OpenAIMessage[] = initialMessages.map((m) => ({
-    role: m.role,
-    content: m.content,
-  }));
+  // Branched by role because OpenAIMessage's assistant case is string-
+  // content-only (assistant turns from history never carry images),
+  // while user/system cases accept the broader array form when the
+  // current request includes vision input. The defensive empty-string
+  // fallback for an assistant turn that somehow arrived with array
+  // content shouldn't happen at runtime — the client only ever pushes
+  // string-content turns into conversationHistory — but it satisfies
+  // the type narrowing without an unsafe cast.
+  const initialAsOpenAI: OpenAIMessage[] = initialMessages.map((m) => {
+    if (m.role === 'assistant') {
+      return {
+        role:    'assistant' as const,
+        content: typeof m.content === 'string' ? m.content : '',
+      };
+    }
+    return {
+      role:    m.role,
+      content: m.content,
+    };
+  });
 
   const messages: OpenAIMessage[] = [
     { role: systemRole, content: systemPrompt },

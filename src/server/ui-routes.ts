@@ -28,10 +28,12 @@ import { getPersonality }                        from '../personalities';
 import { getAvailableTools, toAnthropicFormat, toOpenAIFormat } from '../tools/registry';
 import {
   getLLMConfig,
+  getActiveModel,
   setActiveModel,
   streamOllama,
   streamOpenRouter,
   type ORMessage,
+  type OpenAIContentPart,
 } from '../core/llm-client';
 import {
   detectIntent,
@@ -63,10 +65,206 @@ import {
   ToolCapabilityError,
 } from '../core/event-adapter-openai';
 import { buildSSEBridge, dedupSources } from './event-bridge';
+import {
+  getModelCapabilities,
+  suggestVisionCapableModel,
+} from '../core/model-capabilities';
+import type { ImageAttachment } from '../types/response.types';
 
 // ── Helper: write one SSE event (kept for non-stream endpoints) ──
 function sseEvent(res: Response, name: string, payload: Record<string, unknown>): void {
   res.write(`event: ${name}\ndata: ${JSON.stringify(payload)}\n\n`);
+}
+
+// ── Vision wire-through helpers ───────────────────────────
+//
+// Image input is a content-channel extension to the chat envelope
+// (not a tool, not a module — see model-capabilities.ts comment).
+// Everything specific to handling images on the server lives here:
+//   - validateImages: count/size/MIME guard at the request boundary
+//   - buildUserContent: assemble the current user turn in Anthropic
+//                       MessageParam shape (string when no images,
+//                       block array when images are present)
+//   - convertHistoryForOpenAI: Anthropic→OpenAI history converter
+//                              that PRESERVES image blocks (used on
+//                              the Ollama paths). Replaces the inline
+//                              text-only converter that lived in three
+//                              places before vision support landed.
+//
+// Risk-reduction: every code path branches cleanly on images.length === 0,
+// so requests with no image payload route byte-identically to the
+// pre-vision behavior.
+
+const MAX_IMAGES_PER_MESSAGE = 5;
+const MAX_IMAGE_BYTES        = 5 * 1024 * 1024;  // 5MB raw bytes, post-decode
+const ALLOWED_IMAGE_MIMES    = new Set<ImageAttachment['mediaType']>([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]);
+
+interface ImageValidationResult {
+  ok:       boolean;
+  error?:   string;
+  decoded?: ImageAttachment[];   // present when ok === true
+}
+
+/**
+ * Validate inbound images against per-message and per-image caps,
+ * the MIME allowlist, and base64 decodability. Returns either a
+ * validated array or the first error encountered (fail-fast — the
+ * user gets one specific complaint, matching the rest of the SSE
+ * error UX).
+ */
+function validateImages(raw: unknown): ImageValidationResult {
+  if (raw === undefined || raw === null) return { ok: true, decoded: [] };
+  if (!Array.isArray(raw)) {
+    return { ok: false, error: 'images must be an array' };
+  }
+  if (raw.length > MAX_IMAGES_PER_MESSAGE) {
+    return { ok: false, error: `Too many images — max ${MAX_IMAGES_PER_MESSAGE} per message.` };
+  }
+
+  const decoded: ImageAttachment[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const item = raw[i] as Partial<ImageAttachment>;
+    const label = `Image ${i + 1}`;
+
+    if (!item || typeof item !== 'object') {
+      return { ok: false, error: `${label}: not an object.` };
+    }
+    if (!item.mediaType || !ALLOWED_IMAGE_MIMES.has(item.mediaType as ImageAttachment['mediaType'])) {
+      const allowed = [...ALLOWED_IMAGE_MIMES].join(', ');
+      return { ok: false, error: `${label}: mediaType must be one of ${allowed}.` };
+    }
+    if (typeof item.data !== 'string' || item.data.length === 0) {
+      return { ok: false, error: `${label}: missing or empty base64 data.` };
+    }
+    // Sanity-check the base64 string length BEFORE decoding so a
+    // pathological multi-MB payload doesn't blow the buffer up
+    // unnecessarily. Base64 inflates ~4/3, so 2x the byte cap is
+    // a safe upper bound on the string length.
+    if (item.data.length > MAX_IMAGE_BYTES * 2) {
+      return { ok: false, error: `${label}: payload too large.` };
+    }
+    // Strict base64 syntax — Node's Buffer.from is lenient and will
+    // return garbage rather than throw on malformed input, so a
+    // wrong-length or non-alphabet-char payload would slip past us
+    // and fail at the model with a confusing vendor error. Catching
+    // it here gives the user a clear rejection before the request
+    // leaves the server. Standard alphabet only (A-Z, a-z, 0-9, +, /)
+    // with optional 1–2 trailing `=` padding chars; total length
+    // must be a multiple of 4.
+    if (
+      !/^[A-Za-z0-9+/]*={0,2}$/.test(item.data) ||
+      item.data.length % 4 !== 0
+    ) {
+      return {
+        ok: false,
+        error: `${label}: malformed base64 (length must be a multiple of 4, characters from the standard alphabet).`,
+      };
+    }
+    const bytes = Buffer.from(item.data, 'base64');
+    if (bytes.length === 0) {
+      return { ok: false, error: `${label}: invalid base64 data.` };
+    }
+    if (bytes.length > MAX_IMAGE_BYTES) {
+      const mb = (bytes.length / 1024 / 1024).toFixed(1);
+      return { ok: false, error: `${label}: ${mb}MB exceeds the ${MAX_IMAGE_BYTES / 1024 / 1024}MB per-image cap.` };
+    }
+    decoded.push({
+      mediaType: item.mediaType as ImageAttachment['mediaType'],
+      data:      item.data,
+    });
+  }
+
+  return { ok: true, decoded };
+}
+
+/**
+ * Build the current-turn user content in Anthropic MessageParam
+ * shape. When images is empty, returns a plain string (byte-identical
+ * to pre-vision behavior). When images are present, returns a content
+ * block array with the text first and image blocks after — the order
+ * Anthropic recommends for best vision results.
+ */
+function buildUserContent(
+  text:   string,
+  images: ImageAttachment[],
+): Anthropic.MessageParam['content'] {
+  if (images.length === 0) return text;
+  return [
+    { type: 'text', text },
+    ...images.map((img) => ({
+      type: 'image' as const,
+      source: {
+        type:       'base64' as const,
+        media_type: img.mediaType,
+        data:       img.data,
+      },
+    })),
+  ];
+}
+
+/**
+ * Convert Anthropic-format MessageParam[] to OpenAI-compatible
+ * ORMessage[]. Preserves text AND image blocks (the latter become
+ * OpenAI image_url parts). Tool-use / tool-result blocks from
+ * prior turns are dropped — the OpenAI adapter rebuilds tool
+ * turns from its own loop state.
+ *
+ * If a turn contains only text after conversion, returns a plain
+ * string for that turn (the wire format most OpenAI-compat
+ * endpoints prefer for purely text content). When image parts are
+ * present, returns a content array.
+ *
+ * This is the image-aware replacement for the inline converter
+ * that lived in three handlers before vision support landed. The
+ * pseudo-tool path keeps its own inline converter because images
+ * never reach it (capability gate blocks every text-only model
+ * that lands on pseudo-tool).
+ */
+function convertHistoryForOpenAI(messages: Anthropic.MessageParam[]): ORMessage[] {
+  return messages.map((m) => {
+    if (typeof m.content === 'string') {
+      return { role: m.role as 'user' | 'assistant', content: m.content };
+    }
+
+    const parts: OpenAIContentPart[] = [];
+    let hasImage = false;
+
+    for (const block of m.content as Array<{
+      type:    string;
+      text?:   string;
+      source?: { type: string; media_type?: string; data?: string };
+    }>) {
+      if (block.type === 'text' && typeof block.text === 'string') {
+        parts.push({ type: 'text', text: block.text });
+      } else if (
+        block.type === 'image' &&
+        block.source?.type === 'base64' &&
+        block.source.media_type &&
+        block.source.data
+      ) {
+        parts.push({
+          type: 'image_url',
+          image_url: {
+            url: `data:${block.source.media_type};base64,${block.source.data}`,
+          },
+        });
+        hasImage = true;
+      }
+      // tool_use / tool_result blocks: silently dropped
+    }
+
+    return {
+      role: m.role as 'user' | 'assistant',
+      content: hasImage
+        ? parts
+        : parts.map((p) => (p as { type: 'text'; text: string }).text).join(''),
+    };
+  });
 }
 
 // ── Per-model native-tool capability cache ──────────────────
@@ -170,19 +368,14 @@ async function handleOllamaStream(
     return handlePseudoToolStream(res, systemPrompt, initialMessages, prefetchSources, trustLevel, 'ollama');
   }
 
-  // Convert Anthropic MessageParam history → ORMessage. Tool-call
-  // history from previous turns won't survive the round-trip; the
-  // OpenAI adapter only needs text-only history (it builds its own
-  // tool_calls/tool turns inside the loop).
-  const orMessages: ORMessage[] = initialMessages.map((m) => ({
-    role: m.role as 'user' | 'assistant',
-    content: typeof m.content === 'string'
-      ? m.content
-      : (m.content as Array<{ type: string; text?: string }>)
-          .filter((b) => b.type === 'text' && b.text)
-          .map((b) => b.text!)
-          .join(''),
-  }));
+  // Convert Anthropic MessageParam history → ORMessage via the
+  // image-aware helper. On the Ollama path we preserve image blocks
+  // (turning them into OpenAI image_url parts) so vision-capable
+  // models like Mistral Small 3.2 actually receive what the user
+  // attached. Tool-use / tool-result blocks from prior turns are
+  // still dropped — the OpenAI adapter rebuilds tool turns from
+  // its own loop state.
+  const orMessages: ORMessage[] = convertHistoryForOpenAI(initialMessages);
 
   const sourceSink: Source[] = [...prefetchSources];
 
@@ -365,18 +558,14 @@ async function handleNarrationStream(
   const llm = getLLMConfig();
   const bareModel = llm.model.replace(/^ollama\//, '');
 
-  // Convert Anthropic MessageParam history → ORMessage. Same shape
-  // dance as the other handlers — text-only history, tool calls
-  // from prior turns are stripped (we're not running a tool loop).
-  const orMessages: ORMessage[] = initialMessages.map((m) => ({
-    role: m.role as 'user' | 'assistant',
-    content: typeof m.content === 'string'
-      ? m.content
-      : (m.content as Array<{ type: string; text?: string }>)
-          .filter((b) => b.type === 'text' && b.text)
-          .map((b) => b.text!)
-          .join(''),
-  }));
+  // Convert Anthropic MessageParam history → ORMessage via the
+  // image-aware helper. Same dance as handleOllamaStream — we
+  // preserve image blocks here too because narration on a vision-
+  // capable Ollama model (e.g. weather/datetime question with an
+  // attached screenshot) needs the image bytes to actually reach
+  // the model. OpenRouter narration never sees images because the
+  // capability gate blocks them at the request boundary.
+  const orMessages: ORMessage[] = convertHistoryForOpenAI(initialMessages);
 
   // Emit tool_start + tool_result for each available prefetched tool so
   // the frontend renders ONE collapsible card per tool with the actual
@@ -495,6 +684,41 @@ export function mountUIRoutes(app: Express): void {
 
     const safeMessage = scanResult.redacted;
 
+    // ── Vision wire-through ────────────────────────────
+    //
+    // Validate any attached images, then capability-gate against
+    // the active model. The gate runs AFTER the secret-scanner
+    // halt path so a halted message never wastes a base64 decode,
+    // and BEFORE adapter routing so a vision-incapable model
+    // produces a clear UI prompt instead of a confusing vendor
+    // 400 (or worse, a silently dropped attachment). Bypassed
+    // entirely when no images are attached — same wire as before.
+
+    const imageCheck = validateImages((req.body as any).images);
+    if (!imageCheck.ok) {
+      sseEvent(res, 'error', { message: `Image upload rejected: ${imageCheck.error}` });
+      res.end();
+      return;
+    }
+    const images = imageCheck.decoded ?? [];
+
+    if (images.length > 0) {
+      const fullModel = getActiveModel();
+      const caps      = getModelCapabilities(fullModel);
+      if (!caps.vision) {
+        const suggested = suggestVisionCapableModel();
+        sseEvent(res, 'vision_required', {
+          message:        `This model can't see images. Switch to a vision-capable model and try again.`,
+          currentModel:   fullModel,
+          suggestedModel: suggested,
+          imageCount:     images.length,
+        });
+        res.end();
+        return;
+      }
+      console.log(`[vision] ${images.length} image(s) attached on model=${fullModel}`);
+    }
+
     try {
       const agentId     = (req.body as any).agentId   ?? cfg.agent?.personality ?? 'sherman';
       const agentName   = (req.body as any).agentName  ?? cfg.agent?.name        ?? 'Sherman';
@@ -507,7 +731,7 @@ export function mountUIRoutes(app: Express): void {
 
       const messages: Anthropic.MessageParam[] = [
         ...conversationHistory,
-        { role: 'user', content: safeMessage },
+        { role: 'user', content: buildUserContent(safeMessage, images) },
       ];
 
       const trustLevel = cfg.agent?.trust_level ?? 1;
