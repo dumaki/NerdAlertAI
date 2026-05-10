@@ -47,9 +47,10 @@ import { scan } from './secret-scanner';
 // Treat additions to this list with suspicion — in most cases the
 // right move is to migrate the consumer code instead of adding a
 // new transitional entry.
-const KNOWN_TRANSITIONAL: Record<string, string> = {
-  TELEGRAM_BOT_TOKEN: 'pending src/telegram/ migration to credential-store',
-};
+//
+// Empty as of v0.5.13.5: TELEGRAM_BOT_TOKEN was the last entry,
+// migrated to credential-store via src/telegram/credential.ts.
+const KNOWN_TRANSITIONAL: Record<string, string> = {};
 
 // Env key NAMES that strongly imply the value is sensitive.
 // Catches plain-string tokens (like a 32-char hex SERVER_AUTH_TOKEN)

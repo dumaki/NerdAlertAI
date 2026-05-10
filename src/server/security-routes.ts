@@ -226,6 +226,20 @@ export function mountSecurityRoutes(app: Express): void {
         }
       }
 
+      // ── Telegram bot token ───────────────────────────────
+      // Refresh the cache in src/telegram/credential.ts so the
+      // poll loop picks up the new token on its next iteration.
+      // No restart needed; the next getUpdates call uses the
+      // refreshed apiBase().
+      if (name === 'telegram-bot-token') {
+        try {
+          const { initTelegramCredential } = require('../telegram/credential');
+          await initTelegramCredential();
+        } catch (e: any) {
+          console.warn('[security] telegram-bot-token cache refresh after credential write failed:', e?.message);
+        }
+      }
+
       // If the gmail password was just set, refresh the in-memory cache so the
       // next loadGmailConfig() picks it up. Without this, the user would have to
       // restart the server before email started using the new credential.

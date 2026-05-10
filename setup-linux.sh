@@ -12,28 +12,20 @@
 #   3. Probes credential-store backend (keytar vs file fallback)
 #   4. Writes a minimal .env with NON-SECRET config only
 #      (port, MODEL string, optional Telegram chat ID)
-#   5. Prompts for Telegram bot token + chat ID (transitional —
-#      see TODO note below)
+#   5. Prompts for the Telegram chat ID (not a secret — it's an
+#      identifier that locks the bot to one user)
 #   6. Prompts for model provider preference (writes MODEL=...)
 #   7. Installs systemd service so the bot starts on boot
 #   8. Builds TypeScript
 #   9. Starts the service
 #
-# What it does NOT do (as of the credential-store migration):
+# What it does NOT do (post credential-store migration):
 #   - It does NOT generate or write SERVER_AUTH_TOKEN. The
 #     server auto-generates this on first boot and stores it
 #     in the keychain (or chmod-600 file fallback).
-#   - It does NOT prompt for OpenRouter or Anthropic API keys.
-#     Add those via the /setup panel after starting the server.
-#   - It does NOT prompt for OPENCLAW_TOKEN. Add via /setup.
-#
-# TODO (next migration): Telegram bot token still lives in .env
-# because src/telegram/bot.ts and src/telegram/index.ts read
-# process.env.TELEGRAM_BOT_TOKEN directly. Once that code is
-# migrated to use getCredential('telegram-bot-token'), drop the
-# Telegram prompts here and route users to /setup for the token.
-# The /setup panel already has a slot for telegram-bot-token; it
-# just isn't read by the Telegram module yet.
+#   - It does NOT prompt for OpenRouter, Anthropic, OpenClaw,
+#     or Telegram bot tokens. Add those via /setup after starting
+#     the server. All four are stored in the OS keychain.
 # ============================================================
 
 set -e
@@ -160,15 +152,10 @@ else
 # MODEL=anthropic/claude-sonnet-4-6
 MODEL=nvidia/llama-3.1-nemotron-70b-instruct:free
 
-# Telegram chat ID (NOT a secret — it's an identifier).
-# The bot TOKEN goes in below; that one IS a secret and will
-# move to the credential store in a future migration.
+# Telegram chat ID (NOT a secret — it's an identifier that locks
+# the bot to one user). The bot TOKEN goes through /setup, not
+# this file.
 TELEGRAM_CHAT_ID=
-
-# TRANSITIONAL — Telegram bot token still reads from env.
-# Once src/telegram/bot.ts is migrated to credential-store, this
-# line goes away and the token moves to /setup.
-TELEGRAM_BOT_TOKEN=
 
 # OpenClaw gateway URL (the URL is config; the TOKEN goes in /setup)
 OPENCLAW_URL=
@@ -181,51 +168,32 @@ EOF
   echo "  ✓ .env created"
 fi
 
-# ── 5. Telegram setup (transitional) ──────────────────────────
-# The Telegram bot token still reads from process.env, so we
-# still need to write it to .env here. Drop this whole block
-# once src/telegram/bot.ts has been migrated to use
-# getCredential('telegram-bot-token').
+# ── 5. Telegram chat ID ───────────────────────────────────────
+# Chat ID stays in .env because it's not a secret — it's an
+# identifier that locks the bot to one user. The bot TOKEN is
+# entered via the /setup panel after the server starts.
 echo ""
-echo "→ Telegram setup (transitional — moving to /setup later)"
+echo "→ Telegram chat ID"
 echo ""
 
-EXISTING_TOKEN=$(grep "^TELEGRAM_BOT_TOKEN=" .env | cut -d= -f2)
-if [ -z "$EXISTING_TOKEN" ]; then
-  echo "  You need a Telegram bot token from @BotFather."
-  echo "  1. Open Telegram and message @BotFather"
-  echo "  2. Send /newbot and follow the prompts"
-  echo "  3. Copy the token it gives you"
-  echo ""
-  echo "  (Press Enter to skip — you can add it later via /setup once"
-  echo "   the Telegram module is migrated to credential-store.)"
-  echo ""
-  read -rp "  Paste your bot token (or skip): " BOT_TOKEN
-  if [ -n "$BOT_TOKEN" ]; then
-    sed -i "s|^TELEGRAM_BOT_TOKEN=.*|TELEGRAM_BOT_TOKEN=${BOT_TOKEN}|" .env
-    echo "  ✓ Bot token saved to .env"
-  else
-    echo "  ⚠ Skipped — Telegram alerts disabled until you add it"
-  fi
-else
-  echo "  ✓ Bot token already set"
-fi
-
-echo ""
 EXISTING_CHAT=$(grep "^TELEGRAM_CHAT_ID=" .env | cut -d= -f2)
 if [ -z "$EXISTING_CHAT" ]; then
+  echo "  The chat ID locks the bot to one user (you). The bot"
+  echo "  silently ignores messages from any other chat."
+  echo ""
   echo "  To get your chat ID:"
-  echo "  1. Start a conversation with your bot in Telegram"
-  echo "  2. Send any message to it"
+  echo "  1. Add your bot via /setup AFTER this script finishes:"
+  echo "     http://localhost:3773/api/setup/panel  →  telegram-bot-token"
+  echo "  2. Start a conversation with your bot in Telegram, send any message"
   echo "  3. Visit: https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates"
   echo "  4. Find 'chat':{'id': XXXXXXX} in the response"
   echo ""
-  read -rp "  Paste your chat ID (or skip): " CHAT_ID
+  read -rp "  Paste your chat ID (or skip and edit .env later): " CHAT_ID
   if [ -n "$CHAT_ID" ]; then
     sed -i "s|^TELEGRAM_CHAT_ID=.*|TELEGRAM_CHAT_ID=${CHAT_ID}|" .env
     echo "  ✓ Chat ID saved"
   else
-    echo "  ⚠ Skipped"
+    echo "  ⚠ Skipped — set TELEGRAM_CHAT_ID in .env before starting Telegram"
   fi
 else
   echo "  ✓ Chat ID already set"
@@ -318,9 +286,11 @@ echo ""
 echo "  Next steps:"
 echo "  1. Open http://localhost:3773/api/setup/panel in a browser"
 echo "     (or via the host that can reach this box)"
-echo "  2. Add your model API key (openrouter-key, anthropic-key)"
-echo "  3. Optional: add openclaw-token, wazuh-indexer-password,"
-echo "     and other SOC creds for the security tools"
+echo "  2. Add your credentials — all live in the OS keychain:"
+echo "        • telegram-bot-token  (required for Telegram bot)"
+echo "        • openrouter-key  or  anthropic-key  (whichever model you chose)"
+echo "        • openclaw-token  (if running OpenClaw + SOC tools)"
+echo "        • wazuh-indexer-password, crowdsec-* tokens, etc. as needed"
 echo ""
 echo "  The server bearer token was auto-generated on first boot"
 echo "  and stored in the credential store — the browser UI will"

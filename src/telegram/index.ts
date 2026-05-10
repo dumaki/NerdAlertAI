@@ -14,13 +14,23 @@
 
 import { startPolling, stopPolling } from './bot';
 import { startScheduler, stopScheduler } from './cron';
+import { initTelegramCredential, getTelegramBotToken } from './credential';
 
 export async function startTelegram(): Promise<void> {
-  const token  = process.env.TELEGRAM_BOT_TOKEN;
+  // Pull telegram-bot-token from the credential store first. If a
+  // legacy TELEGRAM_BOT_TOKEN is in process.env (older setup-linux.sh
+  // wrote it to .env), this also migrates the value into the
+  // credential store and logs a one-time migration notice.
+  const tokenLoaded = await initTelegramCredential();
+  if (tokenLoaded) {
+    console.log('[NerdAlert] Telegram bot token loaded from credential store');
+  }
+
+  const token  = getTelegramBotToken();
   const chatId = process.env.TELEGRAM_CHAT_ID;
 
   if (!token || !chatId) {
-    console.log('[Telegram] Disabled — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env to enable');
+    console.log('[Telegram] Disabled — add telegram-bot-token via http://localhost:3773/api/setup/panel and set TELEGRAM_CHAT_ID in .env to enable');
     return;
   }
 
