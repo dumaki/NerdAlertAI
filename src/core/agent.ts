@@ -31,11 +31,11 @@ import { NerdAlertResponse } from '../types/response.types';
 import {
   getAvailableTools,
   toAnthropicFormat,
-  findTool,
   logAvailableTools
 } from '../tools/registry';
 import { getPersonality } from '../personalities';
 import { getLLMConfig, callOpenRouter, callOllama, ORMessage } from './llm-client';
+import { executeTool, type BrokerContext } from './permission-broker';
 
 // ---- THE SYSTEM PROMPT ----
 function buildSystemPrompt(): string {
@@ -171,45 +171,44 @@ export async function chat(
 
       const toolResults: ToolResultBlock[] = [];
 
+      // Build the broker context once per turn — same shape as
+      // /chat/stream uses in handleAnthropicStream(). Per-tool
+      // trust + enabled-state checks now live behind one chokepoint
+      // (core/permission-broker.ts → executeTool). v0.7 BYOK will
+      // populate maxModelTrustLevel; until then it stays undefined,
+      // meaning "no model-level cap, only the user trust level applies."
+      const brokerContext: BrokerContext = {
+        userTrustLevel: config.agent.trust_level,
+        modelLabel:     llm.model,
+      };
+
       for (const toolCall of toolUseBlocks) {
         console.log(`[NerdAlert] Tool call: ${toolCall.name}`, toolCall.input);
 
-        const tool = findTool(toolCall.name);
+        // Route through the broker. It looks up the tool, enforces
+        // trust + enabled-state, executes, catches throws, and returns
+        // a stringified output ready to inject back as a tool_result.
+        // Errors are already formatted ("Error: ...") on the result.
+        const result = await executeTool(
+          {
+            id:   toolCall.id,
+            name: toolCall.name,
+            args: toolCall.input as Record<string, unknown>,
+          },
+          brokerContext,
+        );
 
-        if (!tool) {
-          toolResults.push({
-            type:        'tool_result',
-            tool_use_id: toolCall.id,
-            content:     `Error: Tool "${toolCall.name}" not found in registry.`,
-          });
-          continue;
-        }
-
-        if (tool.trustLevel > config.agent.trust_level) {
-          toolResults.push({
-            type:        'tool_result',
-            tool_use_id: toolCall.id,
-            content:     `Error: Trust level ${config.agent.trust_level} is insufficient to call "${toolCall.name}" (requires level ${tool.trustLevel}).`,
-          });
-          continue;
-        }
-
-        try {
-          const toolResponse = await tool.execute(toolCall.input as Record<string, unknown>);
+        if (result.error) {
+          console.error(`[NerdAlert] Tool error: ${toolCall.name} → ${result.output}`);
+        } else {
           console.log(`[NerdAlert] Tool result: ${toolCall.name} completed`);
-          toolResults.push({
-            type:        'tool_result',
-            tool_use_id: toolCall.id,
-            content:     toolResponse.content,
-          });
-        } catch (error) {
-          console.error(`[NerdAlert] Tool error: ${toolCall.name}`, error);
-          toolResults.push({
-            type:        'tool_result',
-            tool_use_id: toolCall.id,
-            content:     `Error running "${toolCall.name}": ${error instanceof Error ? error.message : 'Unknown error'}`,
-          });
         }
+
+        toolResults.push({
+          type:        'tool_result',
+          tool_use_id: toolCall.id,
+          content:     result.output,
+        });
       }
 
       messages.push({
