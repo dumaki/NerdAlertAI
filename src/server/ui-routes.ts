@@ -44,7 +44,19 @@ import {
   type HistoryTurn,
 } from '../core/intent-prefetch';
 import { getAllJobs, getRecentRuns } from '../cron';
-import { saveSession, restoreSession, clearSession } from './session-store';
+import {
+  saveSession,
+  restoreSession,
+  clearSession,
+  listSessions,
+  loadSession,
+  createSession,
+  deleteSession,
+  exportSessionMarkdown,
+  getTotalSessionsBytes,
+  SESSION_MESSAGE_SOFT_CAP,
+  SESSION_MESSAGE_HARD_CAP,
+} from './session-store';
 import { scan, buildHaltMessage } from '../security/secret-scanner';
 import {
   pollAllMonitors,
@@ -866,7 +878,13 @@ export function mountUIRoutes(app: Express): void {
         ...conversationHistory,
         { role: 'user' as const, content: message },
       ].filter(m => typeof m.content === 'string');
-      saveSession(agentId, saveable as any);
+      // v0.5.16: optional sessionId targets a specific session file.
+      // Omitted → server falls back to the active session for the agent
+      // (legacy single-session-per-agent UI behaviour), or creates one.
+      const sessionId = typeof (req.body as any).sessionId === 'string'
+        ? (req.body as any).sessionId
+        : undefined;
+      saveSession(agentId, saveable as any, sessionId);
 
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -892,27 +910,133 @@ export function mountUIRoutes(app: Express): void {
   });
 
   // ── Session persistence endpoints ──────────────────────────
+  //
+  // Legacy single-session-per-agent endpoints. v0.5.16 added explicit
+  // multi-session support — see /api/sessions/* below for the new
+  // shape. These endpoints continue to work for any caller that hasn't
+  // been updated; they resolve against the active session for the agent.
   app.get('/api/session/restore', (req: Request, res: Response) => {
-    const agentId = (req.query.agentId as string) ?? 'sherman';
-    const messages = restoreSession(agentId);
-    console.log(`[Session] Restored ${messages.length} messages for agent "${agentId}"`);
+    const agentId   = (req.query.agentId   as string) ?? 'sherman';
+    const sessionId = req.query.sessionId   as string | undefined;
+
+    // If the caller asked for a specific session, load that. Otherwise
+    // fall back to the active session for the agent (legacy behaviour).
+    let messages;
+    if (sessionId) {
+      const session = loadSession(sessionId);
+      messages = session?.messages ?? [];
+    } else {
+      messages = restoreSession(agentId);
+    }
+    console.log(
+      `[Session] Restored ${messages.length} messages for agent "${agentId}"` +
+      (sessionId ? ` (session ${sessionId})` : ' (active session)')
+    );
     res.json({ ok: true, messages });
   });
 
   app.post('/api/session/save', (req: Request, res: Response) => {
-    const { agentId, messages } = req.body as { agentId: string; messages: any[] };
+    const { agentId, messages, sessionId } = req.body as {
+      agentId:    string;
+      messages:   any[];
+      sessionId?: string;
+    };
     if (!agentId || !Array.isArray(messages)) {
       res.json({ ok: false, error: 'agentId and messages required' });
       return;
     }
-    saveSession(agentId, messages);
-    res.json({ ok: true, saved: messages.length });
+    const summary = saveSession(agentId, messages, sessionId);
+    res.json({ ok: true, saved: messages.length, session: summary });
   });
 
   app.post('/api/session/clear', (req: Request, res: Response) => {
     const { agentId } = req.body as { agentId: string };
     clearSession(agentId ?? 'sherman');
-    console.log(`[Session] Cleared session for agent "${agentId}"`);
+    console.log(`[Session] Cleared active session for agent "${agentId}"`);
+    res.json({ ok: true });
+  });
+
+  // ── Multi-session endpoints (v0.5.16) ──────────────────────
+  //
+  // GET    /api/sessions                — list all sessions, newest first
+  //                                       Optional ?agentId=<id> filter.
+  //                                       Includes totalBytes + caps for
+  //                                       the storage badge / soft-cap nudge.
+  // GET    /api/sessions/:id            — full session payload
+  // POST   /api/sessions/new            — create a new empty session
+  //                                       Body: { agentId }
+  // DELETE /api/sessions/:id            — remove a session
+  // GET    /api/sessions/:id/export     — markdown export
+  //                                       ?format=md (only format for now)
+  //
+  // Order matters: /api/sessions/:id/export must be registered BEFORE
+  // /api/sessions/:id so Express's route matcher hits the longer pattern
+  // first. (We declare them in that order below.)
+
+  app.get('/api/sessions', (req: Request, res: Response) => {
+    const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : undefined;
+    const sessions = listSessions(agentId ? { agentId } : undefined);
+    res.json({
+      ok: true,
+      sessions,
+      totalBytes: getTotalSessionsBytes(),
+      caps: {
+        soft: SESSION_MESSAGE_SOFT_CAP,
+        hard: SESSION_MESSAGE_HARD_CAP,
+      },
+    });
+  });
+
+  app.post('/api/sessions/new', (req: Request, res: Response) => {
+    const agentId = (req.body as any)?.agentId;
+    if (!agentId || typeof agentId !== 'string') {
+      res.status(400).json({ ok: false, error: 'agentId required' });
+      return;
+    }
+    const session = createSession(agentId);
+    res.json({ ok: true, session });
+  });
+
+  app.get('/api/sessions/:id/export', (req: Request, res: Response) => {
+    const id     = String(req.params.id);
+    const format = ((req.query.format as string) ?? 'md').toLowerCase();
+    if (format !== 'md') {
+      res.status(400).json({
+        ok: false,
+        error: `Unsupported export format "${format}". Only "md" is supported in v0.5.16.`,
+      });
+      return;
+    }
+    const md = exportSessionMarkdown(id);
+    if (md === null) {
+      res.status(404).json({ ok: false, error: 'Session not found' });
+      return;
+    }
+    res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="session-${id}.md"`
+    );
+    res.send(md);
+  });
+
+  app.get('/api/sessions/:id', (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const session = loadSession(id);
+    if (!session) {
+      res.status(404).json({ ok: false, error: 'Session not found' });
+      return;
+    }
+    res.json({ ok: true, session });
+  });
+
+  app.delete('/api/sessions/:id', (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const ok = deleteSession(id);
+    if (!ok) {
+      res.status(404).json({ ok: false, error: 'Session not found' });
+      return;
+    }
     res.json({ ok: true });
   });
 
