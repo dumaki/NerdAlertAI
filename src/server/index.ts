@@ -25,6 +25,7 @@ import { startCron, stopCron, setCronStatusEmitter } from '../cron';
 import { initGmailCredential } from '../gmail/config';
 import { initOpenRouterKey, initAnthropicKey } from '../core/llm-client';
 import { initOpenclawCredential } from '../tools/builtin/soc-client';
+import { logAvailableTools } from '../tools/registry';
 import { selfCheckEnv, logEnvSelfCheck } from '../security/env-self-check';
 
 // Catch unhandled promise rejections globally
@@ -168,6 +169,7 @@ app.listen(SERVER_PORT, () => {
   console.log(`  Trust  : Level ${config.agent.trust_level}`);
   console.log(`  Port   : ${SERVER_PORT}`);
   console.log(`  Auth   : ${authStrategy}${authStrategy === 'token' && !tokenLoaded ? ' (warning: no token loaded)' : ''}`);
+  logAvailableTools();
   console.log('');
   console.log(`  Ready at http://localhost:${SERVER_PORT}`);
   console.log('');
