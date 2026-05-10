@@ -25,7 +25,7 @@
 // is replaced by direct MCP calls or another gateway.
 // ============================================================
 
-import { getCredential } from '../../security/credential-store';
+import { getCredential, setCredential } from '../../security/credential-store';
 
 const OPENCLAW_URL   = process.env.OPENCLAW_URL   ?? 'http://100.86.173.63:18789';
 
@@ -54,19 +54,46 @@ let cachedOpenclawToken: string | null = null;
  * Call once at boot (from server/index.ts) and again after /setup
  * writes a new value (from server/security-routes.ts).
  *
+ * Legacy migration: if the keychain is empty but process.env has
+ * an OPENCLAW_TOKEN (because the user is upgrading from older
+ * code that read it from .env), copy it into the keychain on first
+ * boot and log a one-time migration notice. The .env line then
+ * becomes inert and can be safely removed.
+ *
  * Returns true if a credential was found, false otherwise — in
  * which case queryOpenClaw() returns a friendly error string
  * (it never throws; SOC tool errors are narrated by the agent).
  */
 export async function initOpenclawCredential(): Promise<boolean> {
+  // 1. Try the credential store first.
   try {
     const value = await getCredential('openclaw-token');
-    cachedOpenclawToken = value || null;
-    return Boolean(value);
+    if (value) {
+      cachedOpenclawToken = value;
+      return true;
+    }
   } catch {
-    cachedOpenclawToken = null;
-    return false;
+    // Fall through to legacy migration.
   }
+
+  // 2. Legacy migration: if OPENCLAW_TOKEN is in process.env
+  //    (older setup-linux.sh wrote it to .env), copy it into the
+  //    credential store so the upgrade is seamless.
+  const legacy = process.env.OPENCLAW_TOKEN;
+  if (legacy) {
+    try {
+      await setCredential('openclaw-token', legacy);
+      console.log('[NerdAlert] Migrated OPENCLAW_TOKEN from .env to credential store — the .env line can now be safely removed');
+      cachedOpenclawToken = legacy;
+      return true;
+    } catch (err) {
+      console.warn('[NerdAlert] Could not migrate legacy OPENCLAW_TOKEN to credential store:', err);
+    }
+  }
+
+  // 3. No credential available.
+  cachedOpenclawToken = null;
+  return false;
 }
 
 // ── queryOpenClaw ─────────────────────────────────────────────

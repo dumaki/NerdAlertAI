@@ -289,7 +289,7 @@
 // ============================================================
 
 import Anthropic from '@anthropic-ai/sdk';
-import { getCredential } from '../security/credential-store';
+import { getCredential, setCredential } from '../security/credential-store';
 
 // ── Read config from environment ──────────────────────────────
 //
@@ -333,27 +333,64 @@ let cachedAnthropicClient: Anthropic | null = null;
  * Call once at boot (from server/index.ts) and again after /setup
  * writes a new value (from server/security-routes.ts).
  *
+ * Legacy migration: if the keychain is empty but process.env has
+ * an OPENROUTER_API_KEY (because the user is upgrading from older
+ * code that read it from .env), copy it into the keychain on first
+ * boot and log a one-time migration notice. The .env line then
+ * becomes inert and can be safely removed.
+ *
  * Returns true if a credential was found, false otherwise — in
  * which case callOpenRouter / streamOpenRouter will throw a clear
  * "key not configured" error to the caller, and the SSE bridge in
  * ui-routes.ts surfaces it as an error event the user sees.
  */
 export async function initOpenRouterKey(): Promise<boolean> {
+  // 1. Try the credential store first — the normal post-migration case.
   try {
     const value = await getCredential('openrouter-key');
-    cachedOpenRouterKey = value || null;
-    return Boolean(value);
+    if (value) {
+      cachedOpenRouterKey = value;
+      return true;
+    }
   } catch {
     // Keychain read failed (rare — e.g. user denied keychain access).
-    cachedOpenRouterKey = null;
-    return false;
+    // Fall through to legacy migration.
   }
+
+  // 2. Legacy migration: if OPENROUTER_API_KEY is in process.env
+  //    (older setup.sh wrote it to .env), copy it into the credential
+  //    store so the upgrade is seamless. The user's existing .env
+  //    line stays in place but is now inert; the .env self-check at
+  //    boot will warn them to remove it.
+  const legacy = process.env.OPENROUTER_API_KEY;
+  if (legacy) {
+    try {
+      await setCredential('openrouter-key', legacy);
+      console.log('[NerdAlert] Migrated OPENROUTER_API_KEY from .env to credential store — the .env line can now be safely removed');
+      cachedOpenRouterKey = legacy;
+      return true;
+    } catch (err) {
+      // setCredential failed — fall through to "not found" but warn.
+      console.warn('[NerdAlert] Could not migrate legacy OPENROUTER_API_KEY to credential store:', err);
+    }
+  }
+
+  // 3. No credential available. Cache stays null; callers throw a
+  //    "key not configured" error pointing the user to /setup.
+  cachedOpenRouterKey = null;
+  return false;
 }
 
 /**
  * Pull anthropic-key from the credential store, cache the value,
  * and rebuild the Anthropic SDK client. Call once at boot and
  * again after /setup writes a new value.
+ *
+ * Legacy migration: if the keychain is empty but process.env has
+ * an ANTHROPIC_API_KEY (because the user is upgrading from older
+ * code that read it from .env), copy it into the keychain on first
+ * boot and log a one-time migration notice. The .env line then
+ * becomes inert and can be safely removed.
  *
  * The SDK client is constructed eagerly here so getLLMConfig() can
  * stay synchronous. When the user rotates the key via /setup, the
@@ -362,18 +399,33 @@ export async function initOpenRouterKey(): Promise<boolean> {
  * Subsequent getLLMConfig() calls return the new client.
  */
 export async function initAnthropicKey(): Promise<boolean> {
+  // 1. Try the credential store first.
   try {
     const value = await getCredential('anthropic-key');
     if (value) {
       cachedAnthropicClient = new Anthropic({ apiKey: value });
       return true;
     }
-    cachedAnthropicClient = null;
-    return false;
   } catch {
-    cachedAnthropicClient = null;
-    return false;
+    // Fall through to legacy migration.
   }
+
+  // 2. Legacy migration from .env if the user upgraded.
+  const legacy = process.env.ANTHROPIC_API_KEY;
+  if (legacy) {
+    try {
+      await setCredential('anthropic-key', legacy);
+      console.log('[NerdAlert] Migrated ANTHROPIC_API_KEY from .env to credential store — the .env line can now be safely removed');
+      cachedAnthropicClient = new Anthropic({ apiKey: legacy });
+      return true;
+    } catch (err) {
+      console.warn('[NerdAlert] Could not migrate legacy ANTHROPIC_API_KEY to credential store:', err);
+    }
+  }
+
+  // 3. No credential available.
+  cachedAnthropicClient = null;
+  return false;
 }
 
 /**
