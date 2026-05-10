@@ -23,8 +23,8 @@ Last updated: 2026-05-09 (post v0.5.13.5)\
 - [x] **`config.yaml` SOC keys are dead** \'97 fixed in v0.5.14 via `tool_groups:` prefix-matching. All 9 SOC services now configurable.\
 \
 ## \uc0\u55357 \u57056  Build / quality (T1)\
-- [ ] **`dist/src/ui/index.html` ENOENT on Optiplex** \'97 `tsc` doesn't copy non-`.ts` files. Fix: `"build": "tsc && cp -r src/ui dist/src/ui"` in `package.json`. Web UI broken in production until fixed.\
-- [ ] **Empty literal dir `src/\{types,core,tools,server,config\}/`** \'97 shell brace-expansion artifact, harmless but ugly. `rmdir`.\
+- [x] **`dist/src/ui/index.html` ENOENT on Optiplex** \'97 fixed in v0.5.14: `package.json` build script now runs `cp -r src/ui dist/src/` after `tsc`. Rebuild on Optiplex after pull.\
+- [x] **Empty literal dir `src/\{types,core,tools,server,config\}/`** \'97 cleared via `rmdir` from Mac before v0.5.14.\
 - [ ] **`setCredential()` duplicate keychain entries** \'97 needs explicit `deletePassword` before `setPassword`. Burned an hour during v0.5.5. Still pending.\
 \
 ## \uc0\u55357 \u56523  Documentation / scope reconciliation (tomorrow's primary goal)\

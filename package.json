@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node dist/src/server/index.js",
     "dev": "ts-node src/server/index.ts",
-    "build": "tsc",
+    "build": "tsc && cp -r src/ui dist/src/",
     "typecheck": "tsc --noEmit",
     "chat": "ts-node scripts/chat.ts",
     "chat:dev": "concurrently \"npm run dev\" \"sleep 2 && npm run chat\""

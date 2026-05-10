@@ -8,8 +8,8 @@ in OS keychain, `.env` self-check on boot)
 ## What this version is
 
 The first T1-backlog burndown after the credential-store migration arc.
-Two commits land together, both under the "least-privilege tightening /
-broker enforcement" theme.
+Three commits land together, all under the "least-privilege tightening /
+broker enforcement / build hygiene" theme.
 
 - **First commit (config layer)** — `tool_groups:` prefix-matching in
   `config.yaml` so the user can disable an entire SOC service in one
@@ -19,6 +19,9 @@ broker enforcement" theme.
   adapters, and `findTool()` gets a sibling `findEnabledTool()` for any
   caller outside the broker that needs a gated lookup. Closes T1 #1
   and #2.
+- **Third commit (build hygiene)** — `package.json` build script copies
+  `src/ui` into `dist/src/` after `tsc`, so the production server can
+  find `index.html` at runtime. Closes T1 #5.
 
 T1 #1 turned out to be different from what the audit memory captured.
 The bypass wasn't in `agent.ts` — that path already routes through
@@ -30,6 +33,23 @@ just not via the broker), but the duplication meant the broker's
 future additions — v0.7's `maxModelTrustLevel`, source aggregation,
 standardised error formatting — wouldn't propagate to the prefetch
 path without remembering to keep the two in sync.
+
+## What changed — build hygiene (T1 #5)
+
+### `package.json`
+
+Build script changed from `tsc` to `tsc && cp -r src/ui dist/src/`.
+
+`tsc` only emits TypeScript output; the HTML files in `src/ui/`
+(`index.html`, `security-panel.html`, the `assets/` folder) never
+made it into `dist/`. `ui-routes.ts` resolves `../ui/index.html`
+relative to its compiled location, which on production Optiplex
+becomes `dist/src/ui/index.html` — a path that did not exist.
+Result: ENOENT on the root route, no web UI on Optiplex.
+
+Fix is a single shell append. `dist/` is gitignored and rebuilt on
+pull, so this only takes effect after the next `npm run build` on
+Optiplex. No code changes elsewhere.
 
 ## What changed — broker enforcement (T1 #1, #2)
 
@@ -185,8 +205,11 @@ lookups against `config.tools[name]`.
 | 2 | `findTool()` doesn't filter by `enabled` | **Done (v0.5.14)** — added `findEnabledTool()`, help-tool migrated |
 | 3 | `config.yaml` SOC keys mismatch tool names | **Done (v0.5.14)** |
 | 4 | Memory writes at L1, should be L2 | Deferred to v0.7 |
-| 5 | `dist/src/ui/index.html` ENOENT on Optiplex | Open |
-| 6 | Empty literal `src/{types,...}/` directory | Open |
+| 5 | `dist/src/ui/index.html` ENOENT on Optiplex | **Done (v0.5.14)** — build script copies `src/ui` after `tsc` |
+| 6 | Empty literal `src/{types,...}/` directory | **Done** — cleared via `rmdir` outside this commit |
+
+T1 backlog is fully cleared except for #4, which is deferred by design
+to v0.7 (memory write/read split lands with the memory side panel).
 
 ## Verified
 
