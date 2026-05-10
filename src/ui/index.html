@@ -842,13 +842,20 @@
     /* Past chats container — flex: 1 to absorb remaining space.
        min-height: 0 is critical: without it, the flex child won't
        shrink below its content size, and the inner scroll never
-       activates. */
+       activates.
+
+       The border-top here is what gives Scheduled Jobs its "boxed"
+       look — it serves as the visual bottom of the cron-panel
+       above. Matches the same pattern host-panel uses against
+       cron-panel. */
     .past-chats-container {
       flex: 1;
       display: flex;
       flex-direction: column;
       min-height: 0;
       overflow: hidden;
+      border-top: 1px solid var(--border);
+      margin-top: 8px;
     }
 
     .past-chats-list {
@@ -913,6 +920,44 @@
       color: var(--text-muted);
       font-style: italic;
       line-height: 1.5;
+    }
+
+    /* Past-chats header row — holds the section label and the
+       "+ NEW" button on a single row. */
+    .past-chats-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-right: 8px;
+    }
+    .past-chats-header .sidebar-section {
+      /* v0.5.16 Phase 2c polish: match the cron-panel-header /
+         host-panel-header typography so "Past chats" reads as
+         a peer category on the panel, not a smaller subheader.
+         Same size, weight, letter-spacing, and padding as the
+         collapsible card headers above it. */
+      padding: 6px 16px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+    }
+
+    .new-chat-btn {
+      font-family: var(--font-mono);
+      font-size: 8px;
+      letter-spacing: 1.5px;
+      color: var(--cyan);
+      background: transparent;
+      border: 1px solid var(--cyan-dim);
+      padding: 3px 8px;
+      cursor: pointer;
+      border-radius: 1px;
+      transition: all var(--transition-fast);
+    }
+    .new-chat-btn:hover {
+      background: var(--cyan-dim);
+      border-color: var(--cyan-mid);
+      box-shadow: 0 0 6px var(--cyan-glow);
     }
 
     /* Module dock — small icon buttons at the very bottom of the
@@ -2350,7 +2395,15 @@
   display: none;
   padding: 4px 0;
 }
-.cron-job-list.open { display: block; }
+.cron-job-list.open {
+  /* v0.5.16 Phase 2c polish: cap the open list so a heavy cron
+     setup can't push past-chats out of view. ~5 cards (each
+     ~30px) fit cleanly; beyond that the list scrolls inside
+     its own container, leaving the past-chats area intact. */
+  display: block;
+  max-height: 170px;
+  overflow-y: auto;
+}
 .cron-job-card {
   display: flex;
   align-items: center;
@@ -2646,7 +2699,10 @@
     </div>
 
     <div class="past-chats-container">
-      <div class="sidebar-section">Past chats</div>
+      <div class="past-chats-header">
+        <div class="sidebar-section">Past chats</div>
+        <button class="new-chat-btn" onclick="newChat()" title="Start a new chat">+ NEW</button>
+      </div>
       <div class="past-chats-list" id="past-chats-list">
         <div class="past-chat-empty">Loading…</div>
       </div>
@@ -3019,15 +3075,39 @@
   // ============================================================
 
   async function restoreSessionFromServer() {
-    const agentId = localStorage.getItem('nerdalert_agent') ?? 'sherman';
+    const agentId       = localStorage.getItem('nerdalert_agent')          ?? 'sherman';
+    const savedSession  = localStorage.getItem('nerdalert_active_session');
+
     try {
+      // v0.5.16 Phase 2c: prefer the explicit session ID stored in
+      // localStorage. The legacy /api/session/restore path stays as
+      // a fallback for first boot and for users whose stored ID
+      // points to a session that was deleted on the server.
+      if (savedSession) {
+        const res  = await fetch(`${BASE_URL}/api/sessions/${encodeURIComponent(savedSession)}`, {
+          headers: { 'Authorization': `Bearer ${CFG.token}` },
+        });
+        const data = await res.json();
+        if (data.ok && data.session) {
+          conversationHistory = data.session.messages || [];
+          PAST_CHATS_STATE.activeSessionId = data.session.id;
+          console.log(`[Session] Restored ${conversationHistory.length} messages from session ${data.session.id}`);
+          if (conversationHistory.length > 0) renderRestoredHistory(conversationHistory);
+          return;
+        }
+        // Saved ID is stale (deleted, missing). Drop it and fall
+        // through to the legacy restore path.
+        console.warn(`[Session] Stored session ${savedSession} not found, falling back`);
+        localStorage.removeItem('nerdalert_active_session');
+      }
+
       const res  = await fetch(`${BASE_URL}/api/session/restore?agentId=${agentId}`, {
         headers: { 'Authorization': `Bearer ${CFG.token}` },
       });
       const data = await res.json();
       if (data.ok && data.messages.length > 0) {
         conversationHistory = data.messages;
-        console.log(`[Session] Restored ${data.messages.length} messages for agent "${agentId}"`);
+        console.log(`[Session] Restored ${data.messages.length} messages for agent "${agentId}" (legacy)`);
         renderRestoredHistory(data.messages);
       }
     } catch (err) {
@@ -3036,16 +3116,26 @@
   }
 
   async function saveSessionToServer() {
-    const agentId = localStorage.getItem('nerdalert_agent') ?? 'sherman';
+    const agentId   = localStorage.getItem('nerdalert_agent') ?? 'sherman';
+    const sessionId = PAST_CHATS_STATE.activeSessionId || undefined;
     try {
-      await fetch(`${BASE_URL}/api/session/save`, {
+      const res  = await fetch(`${BASE_URL}/api/session/save`, {
         method:  'POST',
         headers: {
           'Content-Type':  'application/json',
           'Authorization': `Bearer ${CFG.token}`,
         },
-        body: JSON.stringify({ agentId, messages: conversationHistory }),
+        body: JSON.stringify({ agentId, sessionId, messages: conversationHistory }),
       });
+      // v0.5.16 Phase 2c: capture the session summary the server
+      // returns. On a first save (no sessionId sent), this is how
+      // the UI learns which session it's now living in.
+      const data = await res.json();
+      if (data.ok && data.session && data.session.id) {
+        if (PAST_CHATS_STATE.activeSessionId !== data.session.id) {
+          setActiveSession(data.session.id);
+        }
+      }
       // v0.5.16 Phase 2b: refresh the past-chats list so the
       // just-saved session reflects in the sidebar with the
       // new updatedAt (and freshly-derived title on first save).
@@ -3077,15 +3167,42 @@
   // Render restored messages as chat bubbles without re-sending them.
   // Skips tool result turns (content arrays) since those render
   // as tool blocks that aren't meaningful out of context.
-  function renderRestoredHistory(messages) {
-    clearEmptyState();
+  //
+  // v0.5.16 Phase 2c: clears the container first so this can also
+  // be used to swap one session's transcript out for another's. An
+  // empty messages array yields the empty-state placeholder. The
+  // optional banner argument lets callers customise the divider
+  // text ("RESUMED <title>" vs "SESSION RESTORED"). Passing null
+  // suppresses the banner entirely — used by newChat() and
+  // resumeAgentMostRecent() when there's nothing to resume.
+  function renderRestoredHistory(messages, bannerText) {
     const container = document.getElementById('chat-messages');
+    if (!container) return;
 
-    // Add a faint session-restored banner
-    const banner = document.createElement('div');
-    banner.style.cssText = 'text-align:center;font-size:9px;color:var(--text-muted);letter-spacing:2px;padding:8px 0 4px;';
-    banner.textContent   = '── SESSION RESTORED ──';
-    container.appendChild(banner);
+    // Reset to empty state when there are no messages to render.
+    if (!messages || messages.length === 0) {
+      container.innerHTML = `
+        <div class="empty-state" id="empty-state">
+          <div class="empty-state-logo">NERDALERT</div>
+          <div class="empty-state-sub" id="empty-state-sub">${activeAgentName.toUpperCase()} ONLINE</div>
+        </div>
+      `;
+      return;
+    }
+
+    // Wipe the container (empty state, prior transcript, banners)
+    // before laying out the restored messages. Without this, a
+    // session switch would stack new bubbles on top of the old ones.
+    container.innerHTML = '';
+
+    // Banner is optional. Default text covers the page-load case;
+    // loadPastChat passes a custom "RESUMED <title>" banner.
+    if (bannerText !== null) {
+      const banner = document.createElement('div');
+      banner.style.cssText = 'text-align:center;font-size:9px;color:var(--text-muted);letter-spacing:2px;padding:8px 0 4px;';
+      banner.textContent   = bannerText || '── SESSION RESTORED ──';
+      container.appendChild(banner);
+    }
 
     for (const msg of messages) {
       if (typeof msg.content !== 'string') continue; // skip tool result arrays
@@ -3125,6 +3242,7 @@
     hostMetricsInit();
     setupTopbarDropdowns();
     setupSidebarSearch();
+    setupPastChatsClicks();
     loadPastChats();
 
     // Set trust level pips
@@ -3337,7 +3455,7 @@
     }).join('');
   }
 
-  function topbarSelectPersonality(id) {
+  async function topbarSelectPersonality(id) {
     // Close the dropdown immediately for snappy UX. Subsequent
     // re-render below leaves it closed; the next click reopens.
     document.getElementById('personality-dropdown')?.classList.remove('open');
@@ -3345,33 +3463,18 @@
     const character = CHARACTERS.find(c => c.id === id);
     if (!character) return;
 
-    // Same side effects as the settings-panel switchAgent path,
-    // minus the openPanel('settings') call — from the top bar
-    // we stay in the current view rather than yanking the user
-    // into Settings on every personality switch.
-    localStorage.setItem('nerdalert_agent', character.id);
-    localStorage.setItem('nerdalert_accent', JSON.stringify({
-      accent:     character.accent,
-      accentGlow: character.accentGlow,
-      accentDim:  character.accentDim,
-      accentMid:  character.accentMid,
-    }));
-    applyAccentColor(character);
-    activeAgentName = character.name;
+    // Avoid a redundant resume + transcript flicker when the user
+    // re-selects the personality they're already on.
+    if (character.id === localStorage.getItem('nerdalert_agent')) return;
 
-    const agentNameEl  = document.getElementById('agent-name');
-    const agentTitleEl = document.getElementById('agent-title');
-    const statusTextEl = document.getElementById('status-text');
-    if (agentNameEl)  agentNameEl.textContent  = character.name.toUpperCase();
-    if (agentTitleEl) agentTitleEl.textContent = character.fullName + ' · ' + character.title;
-    if (statusTextEl) statusTextEl.textContent = `${character.name.toUpperCase()} ONLINE // LVL ${CFG.trustLevel}`;
+    applyPersonality(character);
 
-    syncTopbarLabels();
-    renderPersonalityMenu();
-    // v0.5.16 Phase 2b: switching agents from the top bar
-    // moves the active-session highlight to whichever session
-    // is most recent for the new agent.
-    loadPastChats();
+    // v0.5.16 Phase 2c: switching personality from the top bar
+    // resumes that agent's most recent chat (or clears the
+    // transcript if they have none). Either way the user lands
+    // in a coherent state — the on-screen chat always matches
+    // the active accent + agent name.
+    await resumeAgentMostRecent(id);
   }
 
   async function topbarSelectModel(id) {
@@ -3433,7 +3536,6 @@
   };
 
   async function loadPastChats() {
-    const agentId = localStorage.getItem('nerdalert_agent') ?? 'sherman';
     try {
       const res  = await fetch(`${BASE_URL}/api/sessions`, {
         headers: { 'Authorization': `Bearer ${CFG.token}` },
@@ -3446,15 +3548,11 @@
       PAST_CHATS_STATE.sessions   = Array.isArray(data.sessions) ? data.sessions : [];
       PAST_CHATS_STATE.totalBytes = data.totalBytes || 0;
 
-      // Heuristic for the active-session highlight: the most
-      // recently updated session for the current agent. The
-      // saveSession path on every chat turn keeps updatedAt in
-      // sync with the active.json pointer, so this is accurate
-      // for normal usage in Phase 2b. Phase 2c will track this
-      // explicitly when past-chat clicks become real and the
-      // heuristic stops being equivalent.
-      const mine = PAST_CHATS_STATE.sessions.filter(s => s.agentId === agentId);
-      PAST_CHATS_STATE.activeSessionId = mine.length > 0 ? mine[0].id : null;
+      // v0.5.16 Phase 2c: activeSessionId is no longer derived from
+      // the list. It's owned by localStorage (restore on load),
+      // loadPastChat (click), newChat (button), and saveSessionToServer
+      // (server-assigned on first save). If nothing has set it yet,
+      // it stays null and no highlight shows — that's correct.
 
       applyPastChatsFilter();
     } catch (err) {
@@ -3464,13 +3562,20 @@
 
   function applyPastChatsFilter() {
     const q = PAST_CHATS_STATE.searchQuery.toLowerCase().trim();
+    // v0.5.16 Phase 2c: drop empty sessions from the displayed list.
+    // "New chat" creates a session immediately so /chat/stream has
+    // somewhere to land, but until the first message arrives it
+    // would clutter the sidebar as "Untitled chat". The activeSession
+    // highlight handles "current chat that's still empty" via the
+    // bordered chat input area itself, not via a list entry.
+    const nonEmpty = PAST_CHATS_STATE.sessions.filter(s => (s.messageCount || 0) > 0);
     if (q) {
-      PAST_CHATS_STATE.filtered = PAST_CHATS_STATE.sessions.filter(s =>
+      PAST_CHATS_STATE.filtered = nonEmpty.filter(s =>
         (s.title || '').toLowerCase().includes(q) ||
         (s.agentId || '').toLowerCase().includes(q),
       );
     } else {
-      PAST_CHATS_STATE.filtered = PAST_CHATS_STATE.sessions;
+      PAST_CHATS_STATE.filtered = nonEmpty;
     }
     renderPastChats();
   }
@@ -3573,6 +3678,192 @@
     input.addEventListener('input', (e) => {
       PAST_CHATS_STATE.searchQuery = e.target.value || '';
       applyPastChatsFilter();
+    });
+  }
+
+
+  // ============================================================
+  // SESSION SWITCHING — v0.5.16 Phase 2c
+  // ============================================================
+  // Click a past chat → load that session, auto-switch personality
+  // if it belongs to a different agent, rehydrate the transcript.
+  // "+ New chat" → POST /api/sessions/new, reset UI, become the
+  // active session for subsequent /chat/stream requests.
+  //
+  // localStorage.nerdalert_active_session is the source of truth
+  // for "which session is open". It survives page reloads. Every
+  // /chat/stream request now carries sessionId so saves land in
+  // the right session file regardless of what the server's
+  // active.json thinks.
+  // ============================================================
+
+  // Single point of truth for "set the active session":
+  //   - update PAST_CHATS_STATE
+  //   - mirror to localStorage so it survives reloads
+  //   - re-render the past-chats list so the highlight moves
+  function setActiveSession(sessionId) {
+    PAST_CHATS_STATE.activeSessionId = sessionId || null;
+    if (sessionId) {
+      localStorage.setItem('nerdalert_active_session', sessionId);
+    } else {
+      localStorage.removeItem('nerdalert_active_session');
+    }
+    renderPastChats();
+  }
+
+  // Apply a personality without resuming a session or opening a
+  // panel. Extracted from topbarSelectPersonality so loadPastChat()
+  // can switch personality when loading a chat from a different
+  // agent without re-triggering the chat-resume side effects of
+  // the top-bar path. Also called by switchAgent (Settings panel).
+  function applyPersonality(character) {
+    localStorage.setItem('nerdalert_agent', character.id);
+    localStorage.setItem('nerdalert_accent', JSON.stringify({
+      accent:     character.accent,
+      accentGlow: character.accentGlow,
+      accentDim:  character.accentDim,
+      accentMid:  character.accentMid,
+    }));
+    applyAccentColor(character);
+    activeAgentName = character.name;
+
+    const agentNameEl  = document.getElementById('agent-name');
+    const agentTitleEl = document.getElementById('agent-title');
+    const statusTextEl = document.getElementById('status-text');
+    if (agentNameEl)  agentNameEl.textContent  = character.name.toUpperCase();
+    if (agentTitleEl) agentTitleEl.textContent = character.fullName + ' · ' + character.title;
+    if (statusTextEl) statusTextEl.textContent = `${character.name.toUpperCase()} ONLINE // LVL ${CFG.trustLevel}`;
+
+    syncTopbarLabels();
+    renderPersonalityMenu();
+  }
+
+  // Load a past chat by session ID. Switches personality if the
+  // session belongs to a different agent than the one currently
+  // active. Replaces conversationHistory and re-renders the chat
+  // transcript. Idempotent — clicking the already-active session
+  // is a no-op.
+  async function loadPastChat(sessionId) {
+    if (!sessionId) return;
+    if (sessionId === PAST_CHATS_STATE.activeSessionId) {
+      // Already loaded — just make sure we're in the chat view.
+      if (currentView !== 'chat') switchView('chat', null);
+      return;
+    }
+
+    try {
+      const res  = await fetch(`${BASE_URL}/api/sessions/${encodeURIComponent(sessionId)}`, {
+        headers: { 'Authorization': `Bearer ${CFG.token}` },
+      });
+      const data = await res.json();
+      if (!data.ok || !data.session) {
+        console.warn('[Past Chats] Load failed:', data.error || 'unknown');
+        return;
+      }
+      const session = data.session;
+
+      // Switch personality if this session belongs to a different
+      // agent. The accent color, agent name, and topbar dropdown
+      // all need to match the chat being shown — mixed signals
+      // ("reading Brett's chat while wearing Sherman's accent")
+      // are jarring and easy to avoid.
+      const currentAgentId = localStorage.getItem('nerdalert_agent');
+      if (session.agentId !== currentAgentId) {
+        const character = CHARACTERS.find(c => c.id === session.agentId);
+        if (character) applyPersonality(character);
+      }
+
+      // Reset in-flight chat state. Approval cards and pending
+      // images don't carry across session boundaries.
+      conversationHistory = session.messages || [];
+      approvalShownThisSession.clear();
+      clearPendingImages();
+
+      setActiveSession(session.id);
+      renderRestoredHistory(conversationHistory, '── RESUMED ' + (session.title || 'chat').toUpperCase() + ' ──');
+      if (currentView !== 'chat') switchView('chat', null);
+
+      console.log(`[Past Chats] Loaded session ${session.id} (${conversationHistory.length} messages)`);
+    } catch (err) {
+      console.warn('[Past Chats] Load failed:', err);
+    }
+  }
+
+  // Create a fresh session and make it active. Empty sessions are
+  // filtered out of the past-chats list (see renderPastChats), so
+  // the new chat won't appear in the sidebar until the user sends
+  // their first message and messageCount becomes 1.
+  async function newChat() {
+    const agentId = localStorage.getItem('nerdalert_agent') ?? 'sherman';
+    try {
+      const res  = await fetch(`${BASE_URL}/api/sessions/new`, {
+        method:  'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${CFG.token}`,
+        },
+        body: JSON.stringify({ agentId }),
+      });
+      const data = await res.json();
+      if (!data.ok || !data.session) {
+        console.warn('[Past Chats] New chat failed:', data.error || 'unknown');
+        return;
+      }
+
+      // Reset chat state and the UI to empty.
+      conversationHistory = [];
+      approvalShownThisSession.clear();
+      clearPendingImages();
+
+      setActiveSession(data.session.id);
+      renderRestoredHistory([], null);
+      if (currentView !== 'chat') switchView('chat', null);
+
+      // Refresh past-chats list — the new empty session won't show
+      // (filtered out), but if there was a previously-active empty
+      // session for this agent we want activeSessionId tracking to
+      // shift cleanly. loadPastChats() re-reads the server view.
+      loadPastChats();
+
+      console.log(`[Past Chats] New chat created: ${data.session.id}`);
+    } catch (err) {
+      console.warn('[Past Chats] New chat failed:', err);
+    }
+  }
+
+  // After a personality switch (from top-bar or Settings panel),
+  // load that agent's most recent NON-EMPTY session. If they
+  // don't have any past chats yet, clear the transcript and
+  // leave activeSessionId null — the first message will create
+  // a new session via newChat-equivalent flow on the server.
+  async function resumeAgentMostRecent(agentId) {
+    const mine = PAST_CHATS_STATE.sessions
+      .filter(s => s.agentId === agentId && (s.messageCount || 0) > 0);
+
+    if (mine.length > 0) {
+      // Sessions list is already sorted updatedAt desc by the server.
+      await loadPastChat(mine[0].id);
+    } else {
+      conversationHistory = [];
+      approvalShownThisSession.clear();
+      clearPendingImages();
+      setActiveSession(null);
+      renderRestoredHistory([], null);
+    }
+  }
+
+  // Wire click delegation on the past-chats list. The list HTML
+  // is rebuilt on every renderPastChats() call, so we attach to
+  // the stable container and walk up from e.target to find the
+  // .past-chat-item that was clicked.
+  function setupPastChatsClicks() {
+    const list = document.getElementById('past-chats-list');
+    if (!list) return;
+    list.addEventListener('click', (e) => {
+      const item = e.target.closest('.past-chat-item');
+      if (!item) return;
+      const sessionId = item.dataset.sessionId;
+      if (sessionId) loadPastChat(sessionId);
     });
   }
 
@@ -3800,23 +4091,18 @@
     }
   }
 
-  function switchAgent(id) {
+  async function switchAgent(id) {
     const character = CHARACTERS.find(c => c.id === id);
     if (!character) return;
 
-    localStorage.setItem('nerdalert_agent',  character.id);
-    localStorage.setItem('nerdalert_accent', JSON.stringify({
-      accent:     character.accent,
-      accentGlow: character.accentGlow,
-      accentDim:  character.accentDim,
-      accentMid:  character.accentMid,
-    }));
+    const wasCurrent = character.id === localStorage.getItem('nerdalert_agent');
+    applyPersonality(character);
 
-    applyAccentColor(character);
-    activeAgentName = character.name;
-    document.getElementById('agent-name').textContent  = character.name.toUpperCase();
-    document.getElementById('agent-title').textContent = character.fullName + ' · ' + character.title;
-    document.getElementById('status-text').textContent = `${character.name.toUpperCase()} ONLINE // LVL ${CFG.trustLevel}`;
+    // v0.5.16 Phase 2c: Settings-panel agent switch follows the
+    // same resume-most-recent flow as the top-bar dropdown. The
+    // wasCurrent short-circuit avoids reloading the active chat
+    // when the user clicks their own agent card.
+    if (!wasCurrent) await resumeAgentMostRecent(id);
 
     openPanel('settings');
   }
@@ -3825,6 +4111,10 @@
   conversationHistory = [];
   approvalShownThisSession.clear();
   clearPendingImages();
+  // v0.5.16 Phase 2c: drop the active-session pointer so the
+  // next message-send creates a fresh session rather than
+  // re-populating the one the user just wiped.
+  setActiveSession(null);
   const container = document.getElementById('chat-messages');
   container.innerHTML = `
     <div class="empty-state" id="empty-state">
@@ -4500,6 +4790,7 @@
           conversationHistory: conversationHistory,
           agentId:             localStorage.getItem('nerdalert_agent') ?? 'sherman',
           agentName:           activeAgentName,
+          sessionId:           PAST_CHATS_STATE.activeSessionId || undefined,
           images:              imagesForThisSend.length > 0 ? imagesForThisSend : undefined,
         }),
       });
