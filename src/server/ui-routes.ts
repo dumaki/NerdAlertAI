@@ -880,7 +880,7 @@ export function mountUIRoutes(app: Express): void {
     const { model } = req.body as { model: string };
     const allowed = [
       'anthropic/claude-sonnet-4-6',
-      'nvidia/nemotron-nano-12b-v2-vl:free',
+      'google/gemma-4-26b-a4b-it:free',
       'ollama/mistral-small3.2',
     ];
     if (!allowed.includes(model)) {

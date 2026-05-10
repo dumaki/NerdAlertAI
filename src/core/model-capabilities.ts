@@ -122,36 +122,39 @@ const BUILTIN_CAPABILITIES: Record<string, ModelCapabilities> = {
 
 
   // ── OpenRouter ───────────────────────────────────────────
-  // Nemotron Nano 12B v2 VL is NVIDIA's chat-first multimodal
-  // model — 12B dense (not MoE), text + multi-image in, text
-  // out. Trained on NVIDIA-curated synthetic datasets optimized
-  // for OCR, chart reasoning, and document intelligence. Strong
-  // benchmarks on OCRBench v2, MMMU, MathVista, AI2D, ChartQA,
-  // DocVQA, and Video-MME.
+  // Gemma 4 26B A4B Instruct is Google DeepMind's instruction-
+  // tuned Mixture-of-Experts multimodal model — 25.2B total,
+  // 3.8B active per token. Text + image in, text out. 256K
+  // context, native function calling, configurable reasoning
+  // (opt-in), Apache 2.0 license, 140+ languages. Free on
+  // OpenRouter.
   //
-  // WHY THIS ONE OVER NANO OMNI REASONING
+  // FREE-TIER VISION MODEL JOURNEY
   // ─────────────────────────────────────────────────────
-  // We tried `nemotron-3-nano-omni-30b-a3b-reasoning:free`
-  // first because it shared more architectural lineage with
-  // the Nemotron 3 Super 120B model that previously occupied
-  // this slot. It didn't work for our prefetch+narration flow:
-  //   - Reasoning OFF: model babbled, looped ("I think I need
-  //     to answer:" repeating to fill the buffer)
-  //   - Reasoning ON: sparse/blank `content`, all useful output
-  //     routed to the `reasoning` field which our pseudo-tool
-  //     adapter doesn't read. Personality was ignored.
+  // 1. `nemotron-3-nano-omni-30b-a3b-reasoning:free` — perception
+  //    sub-agent variant. Babbled with reasoning off, blank
+  //    content with reasoning on. Wrong fit for character chat.
+  // 2. `nemotron-nano-12b-v2-vl:free` — chat-first, worked well
+  //    in prefetch+narration lanes (time/weather/memory/web/
+  //    vision-with-image), but fell apart on meta-questions:
+  //    denied its own capabilities, hallucinated identity as
+  //    DeepSeek, claimed July 2024 cutoff. Strong for OCR/charts
+  //    but weak self-knowledge made it unreliable as a daily
+  //    conversational model.
+  // 3. `google/gemma-4-31b-it:free` — dense 30.7B, Google
+  //    family. Configured but hit OpenRouter 429 rate limits at
+  //    Google AI Studio upstream on first request. Free-tier
+  //    31B pool is popular; never validated behavior.
+  // 4. `google/gemma-4-26b-a4b-it:free` (current) — MoE
+  //    sibling of the 31B dense. 25.2B total, 3.8B active per
+  //    token. Same Apache 2.0 license, same multimodal caps,
+  //    separate rate-limit pool from the 31B. Smaller active
+  //    params should mean faster inference under throttle.
   //
-  // Diagnosis: that model is a perception sub-agent variant.
-  // It's optimized to output reasoning tokens and treats the
-  // assistant turn as a terse summary. Doesn't play with a
-  // character-driven narration pipeline.
-  //
-  // Nano 12B v2 VL is the chat-first sibling. Reasoning is
-  // opt-in (not default), so `content` gets the model's full
-  // attention. Same family lineage, similar OCR/document
-  // strengths, smaller footprint for the free-tier rate limits.
+  // Adding more vision-capable OpenRouter models (Qwen3-VL,
+  // Pixtral cloud, etc.) is a one-line addition here.
 
-  'nvidia/nemotron-nano-12b-v2-vl:free': { vision: true  },
+  'google/gemma-4-26b-a4b-it:free': { vision: true  },
 };
 
 
