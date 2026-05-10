@@ -114,13 +114,67 @@ interface OpenAITool {
 
 // ── Registry functions ────────────────────────────────────────
 
+// Policy resolution
+//
+// Decides whether a given tool is enabled AND what its minimum
+// trust-level requirement is, by consulting (in order):
+//
+//   1. config.tools[tool.name]   - per-tool override (highest priority)
+//   2. config.tool_groups[*]     - first group whose prefix matches
+//   3. compiled defaults         - { enabled: true, trust_level: tool.trustLevel }
+//
+// Trust-level rule is "floor only": the compiled tool.trustLevel is the
+// security minimum. Config can RAISE the requirement (require a higher
+// trust level than the tool author chose) but never lower it. We use
+// Math.max so a misconfigured low number can't grant inappropriate access.
+//
+// Order of group iteration follows YAML key order (preserved by js-yaml
+// + Object.keys). If two groups had overlapping prefixes, the first match
+// would win - today none of the SOC service prefixes overlap.
+
+interface ResolvedPolicy {
+  enabled:                boolean;
+  effectiveMinTrustLevel: number;
+}
+
+function resolveToolPolicy(tool: NerdAlertTool): ResolvedPolicy {
+  // Step 1: per-tool override wins outright.
+  const perTool = config.tools?.[tool.name];
+  if (perTool) {
+    return {
+      enabled:                perTool.enabled,
+      effectiveMinTrustLevel: Math.max(tool.trustLevel, perTool.trust_level ?? 0),
+    };
+  }
+
+  // Step 2: first group whose prefix matches.
+  const groups = config.tool_groups;
+  if (groups) {
+    for (const groupName of Object.keys(groups)) {
+      const group = groups[groupName];
+      if (tool.name.startsWith(group.prefix)) {
+        return {
+          enabled:                group.enabled,
+          effectiveMinTrustLevel: Math.max(tool.trustLevel, group.trust_level ?? 0),
+        };
+      }
+    }
+  }
+
+  // Step 3: nothing matched - use compiled defaults.
+  return {
+    enabled:                true,
+    effectiveMinTrustLevel: tool.trustLevel,
+  };
+}
+
 export function getAvailableTools(): NerdAlertTool[] {
   const currentTrustLevel = config.agent.trust_level;
 
   return ALL_TOOLS.filter(tool => {
-    const toolConfig = config.tools?.[tool.name];
-    if (toolConfig && !toolConfig.enabled) return false;
-    if (tool.trustLevel > currentTrustLevel)  return false;
+    const policy = resolveToolPolicy(tool);
+    if (!policy.enabled) return false;
+    if (policy.effectiveMinTrustLevel > currentTrustLevel) return false;
     return true;
   });
 }

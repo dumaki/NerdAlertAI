@@ -99,7 +99,27 @@ export interface NerdAlertTool {
 
 export interface ToolConfig {
   enabled: boolean;
-  trust_level: number;
+  trust_level?: number;  // Optional override. When present, acts as a floor-raise:
+                         // it can RAISE the requirement above tool.trustLevel,
+                         // never lower it. Resolution lives in tools/registry.ts.
+}
+
+// --- TOOL GROUP CONFIG ---
+// A tool group covers many tools at once, by prefix-matching their .name.
+// Example: a group named "wazuh" with prefix "wazuh_" applies to every tool
+// whose name starts with "wazuh_" (wazuh_get_alerts, wazuh_alert_summary, ...).
+//
+// This exists so users can disable an entire SOC service (Wazuh, Pi-hole, etc.)
+// in one line instead of listing every action under it.
+//
+// Per-tool entries in `tools:` always win over a group match — so groups give
+// you "turn off a whole service" by default, and the per-tool map is the
+// override path for exceptions.
+
+export interface ToolGroupConfig {
+  prefix: string;          // Membership rule e.g. "wazuh_"
+  enabled: boolean;        // Whether tools in this group are visible to the agent
+  trust_level?: number;    // Optional floor-raise (same rule as ToolConfig)
 }
 
 export interface AgentConfig {
@@ -112,9 +132,10 @@ export interface AgentConfig {
     port: number;
     local_only: boolean;
   };
-  tools: Record<string, ToolConfig>; // Record<string, ToolConfig> means
-                                      // "an object where keys are strings
-                                      // and values are ToolConfig objects"
+  tools: Record<string, ToolConfig>; // per-tool overrides, keyed by tool.name
+  tool_groups?: Record<string, ToolGroupConfig>; // optional group overrides — if
+                                                 // absent, registry falls through
+                                                 // to per-tool + compiled defaults
   logging: {
     enabled: boolean;
     log_dir: string;
