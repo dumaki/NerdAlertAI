@@ -808,6 +808,179 @@
     }
 
     /* ==========================================================
+       SIDEBAR — v0.5.16 Phase 2b additions
+       ==========================================================
+       Search input, past-chats list, and module dock. The list
+       gets flex: 1 so it consumes whatever vertical space the
+       agent card + search + host + cron don't take. The dock
+       sticks to the bottom via being the last flex child.
+       ========================================================== */
+
+    .sidebar-search {
+      padding: 10px 12px 4px;
+    }
+
+    .sidebar-search input {
+      width: 100%;
+      background: var(--bg-base);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 5px 8px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      border-radius: 1px;
+      outline: none;
+      transition: border-color var(--transition-fast);
+    }
+    .sidebar-search input:focus {
+      border-color: var(--cyan-mid);
+    }
+    .sidebar-search input::placeholder {
+      color: var(--text-muted);
+    }
+
+    /* Past chats container — flex: 1 to absorb remaining space.
+       min-height: 0 is critical: without it, the flex child won't
+       shrink below its content size, and the inner scroll never
+       activates. */
+    .past-chats-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .past-chats-list {
+      flex: 1;
+      overflow-y: auto;
+      padding-bottom: 6px;
+    }
+
+    .past-chat-group {
+      padding: 10px 12px 4px;
+      font-size: 8px;
+      color: var(--text-muted);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+
+    .past-chat-item {
+      padding: 7px 12px 7px 14px;
+      cursor: pointer;
+      border-left: 2px solid transparent;
+      transition: all var(--transition-fast);
+      line-height: 1.35;
+    }
+    .past-chat-item:hover {
+      background: rgba(255,255,255,0.02);
+      border-left-color: var(--cyan-mid);
+    }
+    .past-chat-item.active {
+      background: var(--cyan-dim);
+      border-left-color: var(--cyan);
+    }
+
+    .past-chat-title {
+      font-size: 11px;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .past-chat-item.active .past-chat-title {
+      color: var(--cyan);
+      text-shadow: 0 0 6px var(--cyan-glow);
+    }
+
+    .past-chat-meta {
+      display: flex;
+      gap: 5px;
+      margin-top: 2px;
+      font-size: 9px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .past-chat-meta .meta-dot {
+      color: var(--text-muted);
+    }
+
+    .past-chat-empty {
+      padding: 14px 14px;
+      font-size: 10px;
+      color: var(--text-muted);
+      font-style: italic;
+      line-height: 1.5;
+    }
+
+    /* Module dock — small icon buttons at the very bottom of the
+       sidebar. Each one switches a view. Active state mirrors the
+       cyan-dim treatment the topbar dropdowns use, for visual
+       consistency across the two nav surfaces. */
+    .module-dock {
+      border-top: 1px solid var(--border);
+      padding: 8px 10px;
+      display: flex;
+      gap: 6px;
+      background: var(--bg-base);
+      flex-shrink: 0;
+    }
+
+    .dock-icon {
+      flex: 1;
+      height: 34px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      cursor: pointer;
+      border-radius: 1px;
+      transition: all var(--transition-fast);
+      font-family: var(--font-mono);
+      font-size: 14px;
+      position: relative;
+      padding: 0;
+    }
+    .dock-icon:hover {
+      color: var(--cyan);
+      border-color: var(--cyan-mid);
+      background: var(--cyan-dim);
+    }
+    .dock-icon.active {
+      color: var(--cyan);
+      border-color: var(--cyan);
+      background: var(--cyan-dim);
+      text-shadow: 0 0 6px var(--cyan);
+    }
+
+    .dock-icon-glyph {
+      line-height: 1;
+    }
+
+    /* Notification dot on dock icons — reuses email-badge / soc-badge
+       IDs from the old sidebar items so any future wiring lands here
+       unchanged. */
+    .dock-icon .dock-badge {
+      position: absolute;
+      top: 3px;
+      right: 3px;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--amber);
+      box-shadow: 0 0 4px var(--amber);
+    }
+    .dock-icon .dock-badge.alert {
+      background: var(--red);
+      box-shadow: 0 0 4px var(--red);
+      animation: pulse 1.5s infinite;
+    }
+
+    /* ==========================================================
        CHAT AREA — center column
        ========================================================== */
 
@@ -2431,38 +2604,21 @@
       </div>
     </div>
 
-    <!-- Navigation items -->
-    <div class="sidebar-section">Session</div>
-
-    <div class="sidebar-item active" id="sb-chat" onclick="switchView('chat', null)">
-      <span class="item-icon">⬡</span> Chat
+    <!-- v0.5.16 Phase 2b: search → host → cron → past chats → module dock.
+         The four old sidebar-item nav rows (Chat / Email / SOC / Memory)
+         and the Settings row at the bottom collapse into the module
+         dock at the very bottom. Past chats becomes the primary
+         scrolling content (flex: 1). The host + cron cards remain
+         where they were, between search and past chats. -->
+    <div class="sidebar-search">
+      <input
+        type="text"
+        id="chat-search"
+        placeholder="search chats…"
+        autocomplete="off"
+        spellcheck="false"
+      />
     </div>
-
-    <div class="sidebar-item" id="sb-email" onclick="switchView('email', null)">
-      <span class="item-icon">✉</span> Email
-      <span class="sidebar-badge" id="email-badge" style="display:none">0</span>
-    </div>
-
-    <div class="sidebar-item" id="sb-soc" onclick="switchView('soc', null)">
-      <span class="item-icon">⚠</span> SOC
-      <span class="sidebar-badge alert" id="soc-badge" style="display:none">!</span>
-    </div>
-
-    <div class="sidebar-item" id="sb-memory" onclick="switchView('memory', null)">
-      <span class="item-icon">◈</span> Memory
-    </div>
-
-    <div class="cron-panel">
-  <div class="cron-panel-header" id="cronPanelHeader">
-    <span>Scheduled Jobs</span>
-    <span class="cron-collapse-icon">▾</span>
-  </div>
-  <div class="cron-job-list" id="cronJobList">
-    <div style="padding: 8px 16px; font-size: 12px; color: var(--text-muted);">
-      Loading...
-    </div>
-  </div>
-</div>
 
     <div class="host-panel">
       <div class="host-panel-header" id="hostPanelHeader">
@@ -2477,12 +2633,43 @@
       </div>
     </div>
 
-    <!-- Push settings to bottom -->
-    <div class="sidebar-spacer"></div>
-    <div class="sidebar-divider"></div>
+    <div class="cron-panel">
+      <div class="cron-panel-header" id="cronPanelHeader">
+        <span>Scheduled Jobs</span>
+        <span class="cron-collapse-icon">▾</span>
+      </div>
+      <div class="cron-job-list" id="cronJobList">
+        <div style="padding: 8px 16px; font-size: 12px; color: var(--text-muted);">
+          Loading...
+        </div>
+      </div>
+    </div>
 
-    <div class="sidebar-item" id="sb-settings" onclick="switchView('settings', null)">
-      <span class="item-icon">⚙</span> Settings
+    <div class="past-chats-container">
+      <div class="sidebar-section">Past chats</div>
+      <div class="past-chats-list" id="past-chats-list">
+        <div class="past-chat-empty">Loading…</div>
+      </div>
+    </div>
+
+    <div class="module-dock" id="module-dock">
+      <button class="dock-icon active" data-view="chat" onclick="switchView('chat', null)" title="Chat">
+        <span class="dock-icon-glyph">⬡</span>
+      </button>
+      <button class="dock-icon" data-view="email" onclick="switchView('email', null)" title="Email">
+        <span class="dock-icon-glyph">✉</span>
+        <span class="dock-badge" id="email-badge" style="display:none"></span>
+      </button>
+      <button class="dock-icon" data-view="soc" onclick="switchView('soc', null)" title="SOC">
+        <span class="dock-icon-glyph">⚠</span>
+        <span class="dock-badge alert" id="soc-badge" style="display:none"></span>
+      </button>
+      <button class="dock-icon" data-view="memory" onclick="switchView('memory', null)" title="Memory">
+        <span class="dock-icon-glyph">◈</span>
+      </button>
+      <button class="dock-icon" data-view="settings" onclick="switchView('settings', null)" title="Settings">
+        <span class="dock-icon-glyph">⚙</span>
+      </button>
     </div>
 
   </aside>
@@ -2752,6 +2939,12 @@
     syncTopbarLabels();
     renderPersonalityMenu();
 
+    // v0.5.16 Phase 2b: refresh the past-chats list so the
+    // active-session highlight moves to this agent's session
+    // (if any). New agents with no prior session land with no
+    // active highlight — the list still shows everyone's chats.
+    loadPastChats();
+
     const greeting = isCustom
       ? "I don't have a preset personality yet — tell me what you're looking for. Give me a name, a vibe, a voice. We'll build it together."
       : `Hey — I'm ${character.name}. Tell me a little about yourself. What would you like me to call you? What should I know before we get started? Or if you'd prefer, we can skip the formalities and just get into it.`;
@@ -2853,6 +3046,10 @@
         },
         body: JSON.stringify({ agentId, messages: conversationHistory }),
       });
+      // v0.5.16 Phase 2b: refresh the past-chats list so the
+      // just-saved session reflects in the sidebar with the
+      // new updatedAt (and freshly-derived title on first save).
+      loadPastChats();
     } catch (err) {
       console.warn('[Session] Save failed:', err);
     }
@@ -2869,6 +3066,9 @@
         },
         body: JSON.stringify({ agentId }),
       });
+      // v0.5.16 Phase 2b: refresh after the active session is
+      // gone so the past-chats list drops the deleted entry.
+      loadPastChats();
     } catch (err) {
       console.warn('[Session] Clear failed:', err);
     }
@@ -2924,6 +3124,8 @@
     cronInit();
     hostMetricsInit();
     setupTopbarDropdowns();
+    setupSidebarSearch();
+    loadPastChats();
 
     // Set trust level pips
     for (let i = 1; i <= 5; i++) {
@@ -3166,6 +3368,10 @@
 
     syncTopbarLabels();
     renderPersonalityMenu();
+    // v0.5.16 Phase 2b: switching agents from the top bar
+    // moves the active-session highlight to whichever session
+    // is most recent for the new agent.
+    loadPastChats();
   }
 
   async function topbarSelectModel(id) {
@@ -3200,6 +3406,178 @@
 
 
   // ============================================================
+  // PAST CHATS — v0.5.16 Phase 2b
+  // ============================================================
+  // Renders the list of conversation sessions in the left rail,
+  // grouped by date. Wires the search input above it for local
+  // filtering by title or agent. Clicks are NOT wired here — that
+  // arrives in Phase 2c (session switching). For now this is a
+  // visual surface: it shows the user what's there and which one
+  // is active, so they can verify the multi-session backend before
+  // we hand control over.
+  //
+  // The list refreshes on:
+  //   - page load
+  //   - after each saveSessionToServer (so updatedAt + freshly-
+  //     derived titles reflect immediately)
+  //   - clearConversation (the cleared session disappears)
+  //   - agent switch (the active-session highlight moves)
+  // ============================================================
+
+  const PAST_CHATS_STATE = {
+    sessions:        [],   // full list from /api/sessions
+    filtered:        [],   // sessions after applying searchQuery
+    activeSessionId: null, // best-guess active session for current agent
+    searchQuery:     '',
+    totalBytes:      0,
+  };
+
+  async function loadPastChats() {
+    const agentId = localStorage.getItem('nerdalert_agent') ?? 'sherman';
+    try {
+      const res  = await fetch(`${BASE_URL}/api/sessions`, {
+        headers: { 'Authorization': `Bearer ${CFG.token}` },
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        console.warn('[Past Chats] Load failed:', data.error);
+        return;
+      }
+      PAST_CHATS_STATE.sessions   = Array.isArray(data.sessions) ? data.sessions : [];
+      PAST_CHATS_STATE.totalBytes = data.totalBytes || 0;
+
+      // Heuristic for the active-session highlight: the most
+      // recently updated session for the current agent. The
+      // saveSession path on every chat turn keeps updatedAt in
+      // sync with the active.json pointer, so this is accurate
+      // for normal usage in Phase 2b. Phase 2c will track this
+      // explicitly when past-chat clicks become real and the
+      // heuristic stops being equivalent.
+      const mine = PAST_CHATS_STATE.sessions.filter(s => s.agentId === agentId);
+      PAST_CHATS_STATE.activeSessionId = mine.length > 0 ? mine[0].id : null;
+
+      applyPastChatsFilter();
+    } catch (err) {
+      console.warn('[Past Chats] Load failed:', err);
+    }
+  }
+
+  function applyPastChatsFilter() {
+    const q = PAST_CHATS_STATE.searchQuery.toLowerCase().trim();
+    if (q) {
+      PAST_CHATS_STATE.filtered = PAST_CHATS_STATE.sessions.filter(s =>
+        (s.title || '').toLowerCase().includes(q) ||
+        (s.agentId || '').toLowerCase().includes(q),
+      );
+    } else {
+      PAST_CHATS_STATE.filtered = PAST_CHATS_STATE.sessions;
+    }
+    renderPastChats();
+  }
+
+  function renderPastChats() {
+    const list = document.getElementById('past-chats-list');
+    if (!list) return;
+
+    const sessions = PAST_CHATS_STATE.filtered;
+    if (sessions.length === 0) {
+      const empty = PAST_CHATS_STATE.searchQuery
+        ? 'No chats match your search.'
+        : 'No past chats yet. Start a conversation!';
+      list.innerHTML = `<div class="past-chat-empty">${empty}</div>`;
+      return;
+    }
+
+    const groups = groupSessionsByDate(sessions);
+    const labels = {
+      today:     'Today',
+      yesterday: 'Yesterday',
+      thisWeek:  'This week',
+      older:     'Older',
+    };
+
+    let html = '';
+    for (const key of ['today', 'yesterday', 'thisWeek', 'older']) {
+      const items = groups[key];
+      if (!items || items.length === 0) continue;
+      html += `<div class="past-chat-group">${labels[key]}</div>`;
+      for (const s of items) {
+        const char        = CHARACTERS.find(c => c.id === s.agentId);
+        const agentName   = char?.name || (s.agentId.charAt(0).toUpperCase() + s.agentId.slice(1));
+        const agentColor  = char?.accent || 'var(--text-dim)';
+        const isActive    = s.id === PAST_CHATS_STATE.activeSessionId;
+        const titleHtml   = escapeHTML(s.title || 'Untitled chat');
+        html += `
+          <div class="past-chat-item ${isActive ? 'active' : ''}" data-session-id="${escapeHTML(s.id)}" title="${titleHtml}">
+            <div class="past-chat-title">${titleHtml}</div>
+            <div class="past-chat-meta">
+              <span style="color:${agentColor}">${escapeHTML(agentName)}</span>
+              <span class="meta-dot">·</span>
+              <span>${escapeHTML(formatChatTime(s.updatedAt))}</span>
+            </div>
+          </div>
+        `;
+      }
+    }
+    list.innerHTML = html;
+  }
+
+  // Date-grouping helpers — today/yesterday/thisWeek/older.
+  // All thresholds are anchored to the start of "today" so the
+  // groups stay stable across the day (e.g. an 11pm chat doesn't
+  // jump from Today to Yesterday at midnight while the user is
+  // mid-conversation — it stays Today until the next page load).
+  function groupSessionsByDate(sessions) {
+    const now       = new Date();
+    const today     = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today.getTime() -      24 * 60 * 60 * 1000);
+    const weekAgo   = new Date(today.getTime() - 7  * 24 * 60 * 60 * 1000);
+
+    const groups = { today: [], yesterday: [], thisWeek: [], older: [] };
+    for (const s of sessions) {
+      const updated = new Date(s.updatedAt);
+      if      (updated >= today)     groups.today.push(s);
+      else if (updated >= yesterday) groups.yesterday.push(s);
+      else if (updated >= weekAgo)   groups.thisWeek.push(s);
+      else                           groups.older.push(s);
+    }
+    return groups;
+  }
+
+  function formatChatTime(updatedAt) {
+    const d         = new Date(updatedAt);
+    const now       = new Date();
+    const today     = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today.getTime() -      24 * 60 * 60 * 1000);
+    const weekAgo   = new Date(today.getTime() - 7  * 24 * 60 * 60 * 1000);
+
+    if (d >= yesterday) {
+      // Today or Yesterday — show clock time (e.g. "12:14p")
+      return d.toLocaleTimeString('en-US', {
+        hour:     'numeric',
+        minute:   '2-digit',
+        hour12:   true,
+      }).toLowerCase().replace(' ', '');
+    }
+    if (d >= weekAgo) {
+      // Within a week — weekday name ("Tue")
+      return d.toLocaleDateString('en-US', { weekday: 'short' });
+    }
+    // Older — short date ("May 8")
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  function setupSidebarSearch() {
+    const input = document.getElementById('chat-search');
+    if (!input) return;
+    input.addEventListener('input', (e) => {
+      PAST_CHATS_STATE.searchQuery = e.target.value || '';
+      applyPastChatsFilter();
+    });
+  }
+
+
+  // ============================================================
   // VIEW SWITCHING
   // Switches between Chat (center only), Email (center + panel),
   // SOC (center + panel), and Memory (center + panel).
@@ -3212,18 +3590,22 @@
     // Always shut down the SOC wall SSE when switching views.
     closeSOCStream();
 
-    // Update nav button active state
+    // Legacy nav-btn handling (removed in Phase 2a; querySelectorAll
+    // is a safe no-op when the elements don't exist).
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-    if (navBtn) navBtn.classList.add('active');
-    else {
-      const btn = document.getElementById(`nav-${view}`);
-      if (btn) btn.classList.add('active');
+    if (navBtn && navBtn.classList && navBtn.classList.contains('nav-btn')) {
+      navBtn.classList.add('active');
+    } else {
+      document.getElementById(`nav-${view}`)?.classList.add('active');
     }
 
-    // Update sidebar active state
+    // Legacy sidebar-item handling (removed in Phase 2b; safe no-op).
     document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
-    const sbItem = document.getElementById(`sb-${view}`);
-    if (sbItem) sbItem.classList.add('active');
+    document.getElementById(`sb-${view}`)?.classList.add('active');
+
+    // v0.5.16 Phase 2b: module dock is the live active-state surface.
+    document.querySelectorAll('.dock-icon').forEach(i => i.classList.remove('active'));
+    document.querySelector(`.dock-icon[data-view="${view}"]`)?.classList.add('active');
 
     // Open or close the panel based on view
     if (view === 'email')    { openPanel('email'); loadEmailPanel(); return; }
@@ -3270,6 +3652,9 @@
     document.getElementById('nav-chat')?.classList.add('active');
     document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
     document.getElementById('sb-chat')?.classList.add('active');
+    // v0.5.16 Phase 2b: dock state moves with closePanel back to chat.
+    document.querySelectorAll('.dock-icon').forEach(i => i.classList.remove('active'));
+    document.querySelector('.dock-icon[data-view="chat"]')?.classList.add('active');
     currentView = 'chat';
   }
 
