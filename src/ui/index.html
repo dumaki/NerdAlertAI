@@ -1977,6 +1977,40 @@
       border-color: var(--red);
     }
 
+    /* ── Quick action buttons ── v0.5.17 pre5
+       Stacked full-width buttons in the Settings QUICK ACTIONS
+       section. Visually distinct from .settings-clear-btn (which
+       is red/destructive) — these are cyan/neutral, the same
+       "action that does something useful" treatment as the
+       export-panel buttons. Full width per button (rather than
+       flex-row side-by-side) so longer labels like SETUP
+       CREDENTIALS don't get squeezed at the default sidebar
+       width of 320px. */
+    .settings-actions-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .settings-action-btn {
+      width: 100%;
+      padding: 9px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      text-align: center;
+      color: var(--cyan);
+      background: transparent;
+      border: 1px solid var(--cyan-mid);
+      border-radius: 1px;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .settings-action-btn:hover {
+      background: var(--cyan-dim);
+      border-color: var(--cyan);
+    }
+
     /* ── Module toggles ── v0.5.17 pre3
        Each row is the module's literal label. Click flips the
        state: bright accent text + phosphor glow when ON, dim
@@ -4380,6 +4414,16 @@
       <div class="settings-section-label" style="margin-top:16px">MODULES</div>
       <div class="settings-modules-list" id="settings-modules-list">${renderModuleToggleRows()}</div>
 
+      <div class="settings-section-label" style="margin-top:16px">QUICK ACTIONS</div>
+      <div class="settings-actions-list">
+        <button class="settings-action-btn" onclick="openSetupPanel()">
+          SETUP CREDENTIALS
+        </button>
+        <button class="settings-action-btn" onclick="runHelpCommand()">
+          TOOL LIST
+        </button>
+      </div>
+
       <div class="settings-section-label" style="margin-top:16px">SESSION</div>
       <button class="settings-clear-btn" onclick="clearConversation()">
         CLEAR CONVERSATION
@@ -4396,6 +4440,41 @@
       </div>
     `;
   }
+
+  // ── Quick actions ── v0.5.17 pre5
+  //
+  // The Settings QUICK ACTIONS section gives users a UI surface
+  // for two existing chat commands: /setup (credential panel)
+  // and /help (tool list). Product discovery matters — a tester
+  // might find Settings before they find the chat command list.
+  //
+  // Both handlers route through the SAME code paths the chat
+  // intercepts use, so behavior stays consistent regardless of
+  // entry point.
+
+  // Open the loopback setup panel in a new tab. Same URL the
+  // /setup chat intercept builds — single source of truth for
+  // the setup flow. We don't close Settings on click; the user
+  // is now in a new tab, and when they switch back the panel
+  // they were on stays put (least-surprising behaviour).
+  function openSetupPanel() {
+    const token = window.NERDALERT_CONFIG?.token || '';
+    const url = `${BASE_URL}/api/setup/panel#token=${encodeURIComponent(token)}`;
+    window.open(url, '_blank', 'noopener');
+  }
+
+  // Close Settings and run /help through the chat. We pass it
+  // through sendMessage() (which has a prefill arg) so the user
+  // message "/help" appears in the transcript exactly as if
+  // they'd typed it — and so the existing /help intercept
+  // inside sendMessage handles the render. closePanel() also
+  // resets currentView to 'chat', so we land where /help would
+  // expect to render.
+  function runHelpCommand() {
+    closePanel();
+    sendMessage('/help');
+  }
+
 
   // ── Module toggles ── v0.5.17 pre3
   //
