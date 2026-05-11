@@ -307,40 +307,87 @@ Verification on dev: `tsc --noEmit` clean. `npm install` clean
 (0 vulnerabilities for chrono-node@2.9.1). All new files lint-
 adjacent (no diagnostics from the type-checker).
 
-Live behavior verification deferred to the post-commit smoke
-test in the next chat session — verifying on Sonnet (Brett)
-and Mistral (Kenny):
+Live behavior on Mac dev server immediately after ship:
 
-- "Remind me to take the laundry out in 20 minutes" → set
-- "What reminders do I have?" → list
-- "Cancel reminder rem-..." → cancel
-- "Directions from Chicago to Milwaukee" → directions
-- "How far is the Empire State Building?" → directions (memory-backed from)
-- "Address of the Field Museum" → geocode
-- Mistral on "remind me ... in 20 minutes" should commit via
-  prefetch (capture-on-prefetch policy)
-- Mistral on "directions to X" should commit via prefetch
-  (read-only, safe)
+- Reminder set via "go to bed" — fired on schedule. Dispatcher
+  log line: `[Reminders] Telegram not configured — reminder
+  "rem-mp0n9ip5-gy3up" fired but cannot be delivered.` Engine
+  marked it fired anyway (correct "drop one rather than spam
+  ten" behavior). See "Known limitation" below.
+- Maps queries prefetched correctly: `[NerdAlert] Intent
+  detected: maps` → `[NerdAlert] Prefetch results: maps=ok`.
+  Routing through to the model worked first try.
 
-## Commits planned on `dev`
+Full cross-model verification (Sonnet / Mistral phrasing
+matrix) deferred to the next chat session.
 
-Two commits in order:
+## Known limitation — split-server reminder delivery
+
+The dispatcher resolves Telegram per-process by reading the
+local credential store. In a split-server deployment where the
+Mac runs an interactive NerdAlert and the Optiplex runs the
+production NerdAlert with Telegram configured, reminders set
+on the Mac fire on the Mac (no Telegram — logged warning,
+still marked fired), and reminders set on the Optiplex fire
+there (delivered via Telegram). The two SQLite stores at
+`data/reminders.db` are independent.
+
+Observed during the v0.5.20 smoke test: a reminder set on the
+Mac ("go to bed") fired correctly but logged the dispatcher
+warning because the Mac instance has no `telegram-bot-token`
+in its keychain.
+
+**This is working as designed for v0.5.20** — the dispatcher's
+fallback behavior is the right choice for the no-channel case
+(better than retry-spam when Telegram eventually returns).
+But on a split-server deployment the user-visible UX is poor:
+you ask the Mac for a reminder, it confirms, the row fires on
+time, and you never hear about it.
+
+Candidate solutions for a follow-up (target probably v0.5.21
+or v0.6, depending on broader UX work):
+
+1. **Configure Telegram on the Mac too.** Same bot token,
+   same chat id. Cheapest fix. Both servers deliver to the
+   same Telegram thread, and the dedup is the user noticing
+   if both fired (unlikely in practice since reminders set on
+   one server only fire on that server).
+
+2. **Chat injection as a Mac-side delivery channel.** When
+   the chat UI is open in a browser tab pointed at the Mac
+   instance, the dispatcher could push a `reminder_fired` SSE
+   event that the UI surfaces as a chat-side notification.
+   Useful even on the Optiplex (faster than waiting for the
+   Telegram round-trip). Requires a new SSE event in the
+   wire format, opt-in additive.
+
+3. **Shared reminders.db across servers.** Either symlink to a
+   network mount, or extract the reminders module to talk to
+   a single Postgres / SQLite-on-NAS. Larger architectural
+   commitment — only worth it if multiple servers also share
+   memory, cron, sessions. Out of scope for a tools-tier fix.
+
+4. **Cross-server forwarding.** Mac dispatcher posts a tiny
+   webhook to the Optiplex when it has no Telegram; Optiplex
+   delivers. Adds a coupling between instances that the
+   project has so far avoided.
+
+Decision deferred. The cheapest fix (#1) probably lands first;
+the second-cheapest (#2, chat injection) was already mentioned
+in the dispatcher header comment as a future channel and would
+compose cleanly with #1 for full coverage.
+
+## Commits on `dev`
+
+One commit on `dev` (single-commit cadence matching v0.5.18,
+not the two-commit split the earlier draft of this spec
+proposed):
 
 ```
-v0.5.20a  reminders module + tool + boot hook + intent group
-v0.5.20b  maps tool + intent group
+60342b2  v0.5.20: reminders + maps tools
 ```
 
-Each commit ships with the relevant pieces of `package.json`,
-`config.yaml`, `registry.ts`, `personalities/base.ts`, and the
-spec doc updates appropriate to that commit's scope. `main`
-untouched per branch policy.
-
-Two-commit split (rather than one big v0.5.20 commit) follows
-the v0.5.18 → v0.5.18.1 / .2 / .3 pattern: reminders has more
-moving parts (new module + new dep + boot wiring) and is worth
-isolating from the maps tool so a hypothetical bisect on either
-half lands cleanly.
+`main` untouched per branch policy.
 
 ---
 
