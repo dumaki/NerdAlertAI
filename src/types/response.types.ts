@@ -171,6 +171,7 @@ export interface AgentConfig {
     log_approvals: boolean;
   };
   voice?: VoiceConfig;       // optional — absent = module disabled, no /api/tts route
+  memory?: MemoryConfig;     // optional — absent = pure TF-IDF, no semantic search
 }
 
 // --- VOICE MODULE CONFIG ---
@@ -220,5 +221,45 @@ export interface VoiceConfig {
     models_dir?: string;                   // default ~/.nerdalert/whisper-models
     model?: string;                        // whisper.cpp model name, e.g. 'base.en'
     max_recording_seconds?: number;        // default 60
+  };
+}
+
+// --- MEMORY MODULE CONFIG ---
+// Optional toggle for the semantic-memory sub-module. The memory engine
+// itself is a core shippable module (capture, search, recent, decay) and
+// works fine without this block — absent = TF-IDF keyword search only,
+// identical UX to v0.5.25 and earlier.
+//
+// When the `semantic` sub-block is present and enabled, search() routes
+// queries through hybridSearch() which embeds the query with the local
+// embedding model, scores records by cosine similarity against stored
+// vectors, and blends the result with TF-IDF at `blend_weight`. If the
+// model file is missing at boot, the capability check disables semantic
+// search transparently and the engine falls back to pure TF-IDF — no
+// agent-visible breakage. Same isolation contract as the voice module.
+//
+// `model_path` is the directory containing the embedding model files
+// (config.json, onnx/, tokenizer.json, etc. — the standard HuggingFace
+// layout). Tilde-expansion happens at consumption time via os.homedir().
+// For BAAI/bge-base-en-v1.5 (MIT, 768-dim) the directory shape is:
+//   ~/.nerdalert/embeddings/bge-base-en-v1.5/
+//     config.json
+//     tokenizer.json
+//     onnx/
+//       model_quantized.onnx
+//
+// `blend_weight` is the semantic-score weight in the hybrid blend:
+//   finalScore = (blend_weight * semantic) + ((1 - blend_weight) * keyword)
+// 0.5 ships as the default — lets semantic earn its weight against
+// keyword from a neutral start. Tune from observed retrieval quality.
+//
+// `provider` is plumbed for future cloud-embedding toggles but only
+// 'huggingface-local' is read today.
+export interface MemoryConfig {
+  semantic?: {
+    enabled: boolean;
+    provider?: 'huggingface-local';        // only local supported today
+    model_path?: string;                   // default ~/.nerdalert/embeddings/bge-base-en-v1.5
+    blend_weight?: number;                 // default 0.5; range 0.0–1.0
   };
 }

@@ -43,6 +43,13 @@ export interface MemoryRecord {
 // needed to score relevance. Full record content is loaded from the JSONL
 // only for records that pass the relevance threshold.
 // This is the "closet" concept from MemPalace — a compact pointer layer.
+//
+// `embedded` (added in v0.5.26): true if a corresponding vector exists in
+// memory-embeddings.json for this record id. The embedding store itself is
+// the source of truth; this boolean is cached on the index so the backfill
+// scan and capability-aware search dispatch can avoid a second file read on
+// every query. Set to false on toIndexEntry() construction; flipped to true
+// by the engine after a successful embedding write.
 export interface MemoryIndexEntry {
   id:           string
   subject:      string
@@ -53,6 +60,7 @@ export interface MemoryIndexEntry {
   last_accessed: string
   active:       boolean
   archived:     boolean
+  embedded:     boolean         // v0.5.26: has a vector in memory-embeddings.json
 }
 
 // ── The index file shape ──────────────────────────────────────────────────────

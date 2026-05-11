@@ -227,3 +227,32 @@ voice:
     models_dir: ~/.nerdalert/whisper-models
     model: base.en
     max_recording_seconds: 60
+
+# --- MEMORY MODULE — SEMANTIC SUB-BLOCK ---
+# Optional toggle for hybrid (TF-IDF + embedding) search. The core memory
+# engine — capture, search, recent, decay — ships and works without this
+# block; absence = pure keyword search, identical UX to v0.5.25 and earlier.
+# Setting enabled: false here, or removing the whole block, collapses
+# search() back to TF-IDF only and never loads the embedding model into
+# RAM. Same module isolation contract as the voice block above.
+#
+# When enabled, the engine routes search() through a hybrid scorer:
+#   finalScore = (blend_weight * cosine) + ((1 - blend_weight) * tfidf)
+# 0.5 lets semantic earn its weight from a neutral start — tune from
+# observed retrieval quality once there's enough corpus to measure on.
+#
+# model_path is the directory containing the embedding model in the
+# standard HuggingFace layout (config.json, tokenizer.json, onnx/).
+# Ships pointing at BAAI/bge-base-en-v1.5 (MIT, 768-dim, 109M params,
+# commercial-clean). The repo never ships embedding model files —
+# users download once at install. See README.md for the curl command.
+#
+# If the model directory is missing at boot, the capability check
+# returns { available: false } and the engine falls back to TF-IDF
+# transparently — no agent-visible breakage, single line logged.
+memory:
+  semantic:
+    enabled: true
+    provider: huggingface-local      # only 'huggingface-local' supported today
+    model_path: ~/.nerdalert/embeddings/bge-base-en-v1.5
+    blend_weight: 0.5                 # 0.0 = keyword-only, 1.0 = semantic-only

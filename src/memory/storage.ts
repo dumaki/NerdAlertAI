@@ -30,7 +30,14 @@ const MEMORY_DIR   = process.env.NERDALERT_MEMORY_DIR
 const RECORDS_FILE = path.join(MEMORY_DIR, 'memory.jsonl')
 const INDEX_FILE   = path.join(MEMORY_DIR, 'memory-index.json')
 
-const INDEX_VERSION = 1
+// Index schema version.
+//   1 — initial shape (v0.5.x through v0.5.25).
+//   2 — v0.5.26 added `embedded: boolean` to MemoryIndexEntry. When the
+//       stored index reports version !== INDEX_VERSION, readIndex() calls
+//       rebuildIndex() which regenerates every entry from the JSONL source
+//       of truth — fresh entries get `embedded: false` and the backfill
+//       worker fills them in asynchronously after server boot.
+const INDEX_VERSION = 2
 
 // ── Private: ensure the directory exists ─────────────────────────────────────
 // Separated from ensureStorage() so writeIndex() can call this without
@@ -148,6 +155,11 @@ export function upsertIndexEntry(entry: MemoryIndexEntry): void {
 
 // ── Convert a full record to a compact index entry ────────────────────────────
 export function toIndexEntry(record: MemoryRecord): MemoryIndexEntry {
+  // `embedded` always starts false here — the embedding store is written
+  // after the index entry on the capture path (engine.ts), and that write
+  // flips the boolean by re-calling upsertIndexEntry with the updated entry.
+  // Rebuilds from the JSONL also start at false; the backfill worker walks
+  // the index and embeds any record whose `embedded` is still false.
   return {
     id:            record.id,
     subject:       record.subject,
@@ -158,6 +170,7 @@ export function toIndexEntry(record: MemoryRecord): MemoryIndexEntry {
     last_accessed: record.last_accessed,
     active:        record.active,
     archived:      record.archived,
+    embedded:      false,
   }
 }
 
