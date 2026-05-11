@@ -213,8 +213,17 @@ voice:
     voices_dir: ~/.nerdalert/voices
     auto_play_default: false        # UI default; per-user override available
     max_chars_per_request: 5000     # DoS guard for long-text requests
-  # stt block reserved for Slice 3; not read by the server yet
+  # stt block — read by /api/stt as of Slice 3. Same isolation
+  # contract as TTS — turning voice.enabled off hides the route.
+  #
+  # `model` is the short name (e.g. `base.en`); the server resolves it
+  # to <models_dir>/ggml-<model>.bin. This matches whisper.cpp's
+  # download-ggml-model.sh output, so dropping a model in is just:
+  #   bash /path/to/whisper.cpp/models/download-ggml-model.sh base.en \
+  #     ~/.nerdalert/whisper-models
+  # See whisper-models.example/README.md for full setup.
   stt:
     provider: whisper-local
+    models_dir: ~/.nerdalert/whisper-models
     model: base.en
     max_recording_seconds: 60

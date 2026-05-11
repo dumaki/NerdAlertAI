@@ -45,7 +45,18 @@ data/reminders.db-shm
 # (piper writes timestamped files when the output path isn't explicit).
 # These are ephemeral test artifacts and license-encumbered, never
 # belong in the repo. Blanket ignore for safety.
+# .webm joins the list for STT testing — browser MediaRecorder output
+# captured for offline replay should never get committed.
 *.wav
 *.mp3
 *.ogg
 *.flac
+*.webm
+
+# === WHISPER MODELS ===
+# Whisper.cpp ggml-*.bin model files are large binaries (100-3000 MB)
+# and live outside the repo at ~/.nerdalert/whisper-models/. The
+# whisper-models.example/ folder only holds documentation, never
+# actual model files. Blanket ignore as a safety net so a stray
+# `cp` into the repo can't ship a multi-GB binary.
+*.bin

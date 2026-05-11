@@ -201,10 +201,23 @@ export interface VoiceConfig {
     auto_play_default?: boolean;          // UI default; per-user override
     max_chars_per_request?: number;       // default 5000
   };
-  // stt block reserved for Slice 3 — not read yet, but defining the
-  // shape now prevents a config-schema migration when STT ships.
+  // stt block — read by /api/stt as of Slice 3.
+  //
+  // models_dir holds whisper.cpp ggml-*.bin model files, structured as:
+  //   ~/.nerdalert/whisper-models/ggml-base.en.bin
+  //   ~/.nerdalert/whisper-models/ggml-small.en.bin
+  //   ~/.nerdalert/whisper-models/ggml-large-v3.bin
+  //
+  // The `model` field uses the short name (e.g. `base.en`); the route
+  // handler resolves it to <models_dir>/ggml-<model>.bin via
+  // resolveModelPath() in whisper-client.ts. This matches the filenames
+  // produced by whisper.cpp's official download-ggml-model.sh script.
+  //
+  // `provider` is plumbed for future cloud-STT toggles (Slice 6) but
+  // only 'whisper-local' is read today.
   stt?: {
     provider?: 'whisper-local' | 'openai' | 'groq';
+    models_dir?: string;                   // default ~/.nerdalert/whisper-models
     model?: string;                        // whisper.cpp model name, e.g. 'base.en'
     max_recording_seconds?: number;        // default 60
   };

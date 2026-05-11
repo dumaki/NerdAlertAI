@@ -20,7 +20,7 @@ import { getAuthMiddleware, initServerAuthToken, getServerAuthToken } from './au
 import { mountUIRoutes, broadcastCronStatus } from './ui-routes';
 import { mountSecurityRoutes } from './security-routes';
 import { mountFilesRoutes, ensureProjectsRoot } from './files-routes';
-import { mountVoiceRoutes, ensureVoicesDir } from './voice-routes';
+import { mountVoiceRoutes, ensureVoicesDir, ensureWhisperModelsDir } from './voice-routes';
 import { startTelegram } from '../telegram';
 import { startCron, stopCron, setCronStatusEmitter } from '../cron';
 import { startReminders, stopReminders } from '../reminders';
@@ -221,6 +221,12 @@ startTelegram().catch((err: unknown) => {
   // voice is disabled.
   ensureVoicesDir().catch((err: unknown) => {
     console.error('[NerdAlert] ensureVoicesDir failed:', err);
+  });
+
+  // Parallel for the STT side — whisper-models directory. No-op when
+  // voice is disabled.
+  ensureWhisperModelsDir().catch((err: unknown) => {
+    console.error('[NerdAlert] ensureWhisperModelsDir failed:', err);
   });
 
   // Pull gmail-app-password from the keychain (or file backend) once at boot.

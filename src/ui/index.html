@@ -1304,6 +1304,92 @@
     }
 
     /* ==========================================================
+       MIC BUTTON — Voice STT (Slice 4)
+       ==========================================================
+       Sits between the paperclip and SEND. Hidden by default;
+       loadSttCapability() reveals it on boot if /api/voice/stt-capability
+       reports the whisper model is on disk.
+
+       Four states (mutually exclusive via class):
+         .idle        — default, microphone glyph
+         .recording   — pulsing red dot + elapsed timer; cyan ring
+                        replaced by red
+         .processing  — dim, cursor:wait; while POST /api/stt is in flight
+         .error       — red text for 2s after a permission denial or
+                        backend failure, then auto-reverts to .idle
+
+       Sizing matches .upload-button so the three controls
+       (paperclip / mic / SEND) form a visually consistent group.
+       ========================================================== */
+    .mic-button {
+      display: none;                  /* revealed by loadSttCapability() */
+      align-items: center;
+      justify-content: center;
+      min-width: 38px;
+      padding: 6px 10px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--cyan);
+      background: transparent;
+      border: 1px solid var(--cyan-mid);
+      border-radius: 1px;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      flex-shrink: 0;
+      line-height: 1;
+    }
+    .mic-button:hover:not(:disabled) {
+      background: var(--cyan-dim);
+      box-shadow: 0 0 14px var(--cyan-glow);
+    }
+    .mic-button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .mic-button.recording {
+      color: var(--red);
+      border-color: rgba(255, 58, 58, 0.7);
+      background: var(--red-dim);
+      font-size: 9px;
+      letter-spacing: 1.5px;
+      padding: 6px 8px;
+      min-width: 64px;                /* room for "● 0:05" timer */
+    }
+    .mic-button.recording:hover:not(:disabled) {
+      background: rgba(255, 58, 58, 0.18);
+      box-shadow: 0 0 14px rgba(255, 58, 58, 0.2);
+    }
+    /* The pulsing red dot inside the recording-state button.
+       Lives as a child span so we can size it independently of
+       the elapsed-time text next to it. */
+    .mic-button.recording .mic-pulse {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--red);
+      margin-right: 5px;
+      box-shadow: 0 0 6px var(--red);
+      animation: micPulse 1s ease-in-out infinite;
+    }
+    @keyframes micPulse {
+      0%, 100% { opacity: 1;   transform: scale(1);   }
+      50%      { opacity: 0.35; transform: scale(1.4); }
+    }
+    .mic-button.processing {
+      color: var(--text-dim);
+      border-color: var(--border-mid);
+      cursor: wait;
+      font-size: 11px;
+    }
+    .mic-button.error {
+      color: var(--red);
+      border-color: rgba(255, 58, 58, 0.5);
+      font-size: 9px;
+      letter-spacing: 1.5px;
+    }
+
+    /* ==========================================================
        FILE UPLOAD — paperclip, drop zone, chip tray
        Files dropped or picked land in ~/.nerdalert/projects/inbox/
        ========================================================== */
@@ -3075,6 +3161,7 @@
       />
       <input type="file" id="upload-file-input" style="display:none" />
       <button class="upload-button" id="upload-button" title="Attach a file (or drag-and-drop onto this bar)" onclick="document.getElementById('upload-file-input').click()">📎</button>
+      <button class="mic-button idle" id="mic-button" title="Speak (click to record)" onclick="toggleMicRecording()">🎤</button>
       <button class="send-button" id="send-button" onclick="sendMessage()">SEND</button>
     </div>
 
@@ -3247,6 +3334,48 @@
     try { return localStorage.getItem(AUTOPLAY_KEY) === '1'; }
     catch { return false; }
   })();
+
+  // ── Voice STT state (Slice 4) ────────────────────────────
+  // sttCapability mirrors GET /api/voice/stt-capability. The mic
+  // button is hidden in CSS by default; loadSttCapability() reveals
+  // it on boot if the whisper model file is on disk. An empty/null
+  // capability (voice disabled, or model missing) keeps the button
+  // hidden — same graceful-absence pattern as the speaker icons.
+  //
+  // The recording* vars are only populated during an active capture.
+  // micButtonState tracks which CSS class is on the button so the
+  // toggle handler knows what to do (idle → start, recording → stop).
+  let sttCapability       = null;     // { available, modelName, hint, modelPath } | null
+  let mediaRecorder       = null;     // active MediaRecorder during capture
+  let recordingStream     = null;     // MediaStream — kept so we can release the mic on stop
+  let recordingChunks     = [];       // accumulated Blob chunks from ondataavailable
+  let recordingMimeType   = '';       // what MediaRecorder is actually producing
+  let recordingStartedAt  = 0;        // Date.now() at start; used by the elapsed-timer
+  let recordingTimerId    = null;     // setInterval handle for the timer display
+  let recordingMaxTimerId = null;     // setTimeout handle for the auto-stop safety net
+  let micButtonState      = 'idle';   // 'idle' | 'recording' | 'processing' | 'error'
+
+  // Hard cap on a single recording, in milliseconds. Mirrors
+  // config.voice.stt.max_recording_seconds (default 60s). Hardcoded
+  // on the UI side because we don't currently surface server config
+  // values to the client; if max_recording_seconds ever becomes
+  // user-tunable, expose it via /api/voice/stt-capability and read
+  // it here.
+  const STT_MAX_RECORDING_MS = 60 * 1000;
+
+  // MediaRecorder mimeType candidates in preference order. opus in
+  // webm is the most efficient and works on Chrome / Edge / Firefox.
+  // audio/mp4 is the Safari fallback. The browser picks the first
+  // type it supports via MediaRecorder.isTypeSupported(); whatever
+  // it actually produces is sent unchanged to /api/stt as the
+  // Content-Type, and our server-side ffmpeg decode handles all
+  // four cleanly.
+  const STT_PREFERRED_MIMES = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/mp4',
+    'audio/ogg;codecs=opus',
+  ];
   const VISION_IMAGE_MIMES = new Set([
     'image/png', 'image/jpeg', 'image/gif', 'image/webp',
   ]);
@@ -3600,6 +3729,10 @@
     // Empty result (voice disabled, or no ONNX files present) is fine —
     // speaker icons silently don't appear.
     loadVoiceablePersonalities();
+
+    // Slice 4: same shape for STT capability. A null/false result
+    // keeps the mic button hidden (CSS default).
+    loadSttCapability();
 
     // Set trust level pips
     for (let i = 1; i <= 5; i++) {
@@ -4923,10 +5056,317 @@
   function renderVoiceToggleRows() {
     const state = autoPlayEnabled ? 'on' : 'off';
     const label = autoPlayEnabled ? 'AUTO-PLAY · ON' : 'AUTO-PLAY · OFF';
+
+    // STT readout. Three states:
+    //   - capability null — voice disabled or fetch failed; hide line
+    //   - capability.available true — "STT · READY (base.en)", green
+    //   - capability.available false — "STT · MODEL MISSING" + hint, amber-ish
+    let sttRow = '';
+    if (sttCapability) {
+      if (sttCapability.available) {
+        const model = sttCapability.modelName || 'unknown';
+        sttRow = `
+          <div class="settings-module-row on" style="cursor:default;pointer-events:none">
+            STT · READY (${escapeHtml(model)})
+          </div>
+        `;
+      } else {
+        // Not interactive — just a status readout pointing at the README.
+        // pointer-events:none kills the hover state so it doesn't look
+        // clickable when there's nothing to do here.
+        sttRow = `
+          <div class="settings-module-row off"
+               style="cursor:default;pointer-events:none"
+               title="${escapeHtml(sttCapability.hint || '')}">
+            STT · MODEL MISSING
+          </div>
+        `;
+      }
+    }
+
     return `
       <button class="settings-module-row ${state}"
               onclick="toggleAutoPlay()">${label}</button>
+      ${sttRow}
     `;
+  }
+
+  // ── Voice STT helpers (Slice 4) ─────────────────────────
+  // Plumbing for the mic button next to SEND. Talks to
+  // /api/voice/stt-capability (discovery) and /api/stt (transcription).
+  // MediaRecorder integration is feature-detected; a browser without
+  // it (very old Safari, some embedded contexts) keeps the mic button
+  // hidden gracefully.
+
+  // Fetched once at boot. Drives whether the mic button renders.
+  // A 404 from the endpoint (voice module disabled in config.yaml)
+  // is normal — we leave sttCapability null and the button stays
+  // hidden. Same shape as loadVoiceablePersonalities().
+  async function loadSttCapability() {
+    // Feature-detect MediaRecorder up front. If the browser can't
+    // record audio at all, there's no point asking the server about
+    // capability — we'd just have to hide the button anyway.
+    if (typeof window.MediaRecorder === 'undefined' ||
+        !navigator?.mediaDevices?.getUserMedia) {
+      sttCapability = null;
+      return;
+    }
+    try {
+      const res = await fetch('/api/voice/stt-capability', {
+        headers: { 'Authorization': `Bearer ${CFG.token}` },
+      });
+      if (!res.ok) {
+        sttCapability = null;
+        return;
+      }
+      sttCapability = await res.json();
+      if (sttCapability?.available) {
+        const btn = document.getElementById('mic-button');
+        if (btn) btn.style.display = 'inline-flex';
+      }
+    } catch (err) {
+      console.warn('[voice] loadSttCapability failed:', err);
+      sttCapability = null;
+    }
+  }
+
+  // Pick the best mimeType for this browser. Returns '' if none of
+  // the candidates are supported — caller treats that as a hard
+  // failure and shows an error state.
+  function pickRecordingMimeType() {
+    for (const candidate of STT_PREFERRED_MIMES) {
+      if (window.MediaRecorder?.isTypeSupported?.(candidate)) {
+        return candidate;
+      }
+    }
+    return '';
+  }
+
+  // Apply a state class to the mic button. Mutually exclusive: we
+  // strip the others before adding the new one. Also updates the
+  // button's innerHTML to match — different states have different
+  // glyphs / timers.
+  function setMicButtonState(state, label) {
+    const btn = document.getElementById('mic-button');
+    if (!btn) return;
+    micButtonState = state;
+    btn.classList.remove('idle', 'recording', 'processing', 'error');
+    btn.classList.add(state);
+    if (label !== undefined) {
+      btn.innerHTML = label;
+    } else {
+      // Default labels per state
+      switch (state) {
+        case 'idle':       btn.innerHTML = '🎤'; break;
+        case 'recording':  btn.innerHTML = '<span class="mic-pulse"></span>0:00'; break;
+        case 'processing': btn.innerHTML = '…'; break;
+        case 'error':      btn.innerHTML = 'ERR'; break;
+      }
+    }
+  }
+
+  // Format milliseconds as M:SS for the recording-state timer label.
+  function formatRecordingElapsed(ms) {
+    const totalSec = Math.floor(ms / 1000);
+    const mm = Math.floor(totalSec / 60);
+    const ss = String(totalSec % 60).padStart(2, '0');
+    return `${mm}:${ss}`;
+  }
+
+  // Entry point for the button onclick. Branches on current state:
+  //   idle       → start recording
+  //   recording  → stop recording (triggers handleRecordingStopped)
+  //   processing → ignored (button is disabled visually anyway)
+  //   error      → ignored; let the auto-revert clear it first
+  function toggleMicRecording() {
+    if (micButtonState === 'idle')      return startMicRecording();
+    if (micButtonState === 'recording') return stopMicRecording();
+    // processing/error: no-op
+  }
+
+  // Acquire mic permission, spin up a MediaRecorder, start the
+  // elapsed timer, schedule the auto-stop safety net. Any failure
+  // here — permission denial, no mic device, unsupported mimeType —
+  // surfaces as an error state that auto-reverts to idle after 2s.
+  async function startMicRecording() {
+    // Pre-flight: pick a supported mime BEFORE asking for the mic so
+    // we don't burn a permission prompt on a browser that can't
+    // record anything anyway.
+    const mime = pickRecordingMimeType();
+    if (!mime) {
+      setMicButtonState('error', 'NO MIME');
+      setTimeout(() => setMicButtonState('idle'), 2000);
+      return;
+    }
+
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      // NotAllowedError = user denied; NotFoundError = no device.
+      // Either way: brief error, then back to idle.
+      console.warn('[voice] getUserMedia failed:', err?.name || err);
+      const label = err?.name === 'NotAllowedError' ? 'DENIED' : 'NO MIC';
+      setMicButtonState('error', label);
+      setTimeout(() => setMicButtonState('idle'), 2000);
+      return;
+    }
+
+    // Wire up the MediaRecorder. ondataavailable fires once at stop()
+    // (no timeslice argument), giving us a single concatenable blob.
+    let recorder;
+    try {
+      recorder = new MediaRecorder(stream, { mimeType: mime });
+    } catch (err) {
+      console.warn('[voice] MediaRecorder construction failed:', err);
+      stream.getTracks().forEach(t => t.stop());
+      setMicButtonState('error', 'NO REC');
+      setTimeout(() => setMicButtonState('idle'), 2000);
+      return;
+    }
+
+    recordingChunks   = [];
+    recordingMimeType = mime;
+    recordingStream   = stream;
+    mediaRecorder     = recorder;
+    recordingStartedAt = Date.now();
+
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) recordingChunks.push(e.data);
+    };
+    recorder.onstop = () => {
+      // Fires after stop() — either user click, max-time auto-stop, or
+      // an error. handleRecordingStopped reads recordingChunks and
+      // POSTs them.
+      handleRecordingStopped();
+    };
+    recorder.onerror = (e) => {
+      console.warn('[voice] MediaRecorder error:', e?.error || e);
+      // Force-stop so onstop fires and cleanup runs. Guard against
+      // re-entry: if already stopping, this is a no-op.
+      if (recorder.state === 'recording') recorder.stop();
+    };
+
+    recorder.start();
+    setMicButtonState('recording', '<span class="mic-pulse"></span>0:00');
+
+    // Live elapsed-time label, updated every 500ms. Cleared on stop.
+    recordingTimerId = setInterval(() => {
+      if (micButtonState !== 'recording') return;
+      const elapsed = Date.now() - recordingStartedAt;
+      const btn = document.getElementById('mic-button');
+      if (btn) btn.innerHTML = `<span class="mic-pulse"></span>${formatRecordingElapsed(elapsed)}`;
+    }, 500);
+
+    // Safety net: auto-stop at the configured max. The server-side cap
+    // is 20 MB on the upload body, plenty of headroom for 60s of opus,
+    // but enforcing here keeps the user from accidentally streaming
+    // forever if they walk away.
+    recordingMaxTimerId = setTimeout(() => {
+      if (mediaRecorder?.state === 'recording') {
+        stopMicRecording();
+      }
+    }, STT_MAX_RECORDING_MS);
+  }
+
+  // Tell the MediaRecorder to stop. The onstop handler does the
+  // post-processing (POST to /api/stt, populate input, reset UI).
+  function stopMicRecording() {
+    if (recordingTimerId)    { clearInterval(recordingTimerId);    recordingTimerId    = null; }
+    if (recordingMaxTimerId) { clearTimeout(recordingMaxTimerId);  recordingMaxTimerId = null; }
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      try { mediaRecorder.stop(); }
+      catch (err) { console.warn('[voice] mediaRecorder.stop failed:', err); }
+    }
+  }
+
+  // Run after MediaRecorder.onstop. Assembles the blob, POSTs to
+  // /api/stt, and stuffs the transcribed text into the input bar.
+  // Auto-populate (not auto-send) per the Slice 4 spec — user
+  // reviews and submits.
+  async function handleRecordingStopped() {
+    // Release the mic immediately — don't leave the indicator on
+    // while we're POSTing.
+    if (recordingStream) {
+      recordingStream.getTracks().forEach(t => t.stop());
+      recordingStream = null;
+    }
+
+    const chunks = recordingChunks;
+    const mime   = recordingMimeType || 'audio/webm';
+    recordingChunks   = [];
+    recordingMimeType = '';
+    mediaRecorder     = null;
+
+    if (!chunks.length) {
+      // Nothing captured — shouldn't happen in practice, but if it
+      // does, just return to idle silently.
+      setMicButtonState('idle');
+      return;
+    }
+
+    setMicButtonState('processing');
+
+    try {
+      const blob = new Blob(chunks, { type: mime });
+      // 0-byte blob defense (e.g. recorder stopped before any chunks):
+      if (blob.size === 0) {
+        setMicButtonState('error', 'EMPTY');
+        setTimeout(() => setMicButtonState('idle'), 2000);
+        return;
+      }
+
+      const res = await fetch('/api/stt', {
+        method:  'POST',
+        headers: {
+          'Authorization': `Bearer ${CFG.token}`,
+          'Content-Type':  mime,
+        },
+        body: blob,
+      });
+
+      if (!res.ok) {
+        let msg = `STT failed (${res.status})`;
+        try {
+          const errBody = await res.json();
+          if (errBody?.error) msg = errBody.error;
+        } catch { /* not JSON, keep generic */ }
+        throw new Error(msg);
+      }
+
+      const data = await res.json();
+      const text = (data?.text || '').trim();
+
+      if (!text) {
+        // Whisper returned empty (silence, or hallucinated nothing).
+        // Brief readout so the user knows the round trip completed
+        // but no speech was detected.
+        setMicButtonState('error', 'SILENT');
+        setTimeout(() => setMicButtonState('idle'), 2000);
+        return;
+      }
+
+      // Auto-populate: append to existing input (with a space
+      // separator) rather than replacing. Lets the user dictate
+      // mid-compose. Focus the input so they can review and press
+      // Enter to send.
+      const input = document.getElementById('chat-input');
+      if (input) {
+        const existing = input.value.trim();
+        input.value = existing ? `${existing} ${text}` : text;
+        input.focus();
+        // Move cursor to end so any further typing appends naturally.
+        const len = input.value.length;
+        input.setSelectionRange(len, len);
+      }
+
+      setMicButtonState('idle');
+
+    } catch (err) {
+      console.warn('[voice] /api/stt failed:', err);
+      setMicButtonState('error', 'ERR');
+      setTimeout(() => setMicButtonState('idle'), 2000);
+    }
   }
 
   // ── Storage display helpers ── v0.5.17 pre2
