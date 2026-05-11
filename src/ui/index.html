@@ -2090,6 +2090,57 @@
       color: var(--text-dim);
     }
 
+    /* ── Message audio actions (Voice module Slice 2) ──
+       Speaker button attached to each agent message whose personality
+       has a Piper voice configured. Renders inside the message but
+       outside the bubble — small phosphor-style action that doesn't
+       compete with the message content itself.
+
+       Always visible (not hover-only) so the feature is discoverable
+       on first use; styled understated so it doesn't pull focus from
+       the reply text. */
+    .message-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 4px;
+      padding-left: 2px;
+    }
+    .speaker-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 7px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 1px;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .speaker-btn:hover:not(:disabled) {
+      color: var(--cyan);
+      border-color: var(--cyan-mid);
+      text-shadow: 0 0 4px var(--cyan-glow);
+    }
+    .speaker-btn.playing {
+      color: var(--cyan);
+      border-color: var(--cyan);
+      background: var(--cyan-dim);
+      text-shadow: 0 0 4px var(--cyan-glow);
+    }
+    .speaker-btn.loading {
+      color: var(--text-dim);
+      cursor: wait;
+    }
+    .speaker-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
     /* ── About section ── v0.5.17 pre2
        Lives at the bottom of the Settings panel. Three lines:
        version (from window.NERDALERT_CONFIG.version, originally
@@ -2852,6 +2903,12 @@
 </head>
 <body>
 
+<!-- Voice module (Slice 2) — hidden audio element shared across all
+     message speaker buttons. Single element rather than per-message
+     so playback is naturally exclusive: starting a new clip stops
+     any in-progress one. -->
+<audio id="tts-player" preload="none" hidden></audio>
+
 <!-- ============================================================
      APP SHELL
      ============================================================ -->
@@ -3172,6 +3229,24 @@
   // a user pasted in the gap between turns.
   let pendingImages = [];   // [{mediaType, data, name, chipEl}]
   const MAX_IMAGES_PER_MESSAGE = 5;
+
+  // ── Voice module state (Slice 2) ──────────────────────────
+  // voiceablePersonalities is the set of personality IDs that can
+  // actually speak right now — i.e. their voices.piper config points
+  // at an ONNX file that exists on disk. Populated once at boot from
+  // GET /api/voice/personalities, used by every speaker-icon decision.
+  // Empty set = no speaker icons anywhere (graceful absence).
+  //
+  // autoPlayEnabled mirrors localStorage.nerdalert_voice_autoplay. When
+  // true, every assistant message that finishes streaming fires its
+  // TTS playback automatically. When false (default), the user must
+  // click the speaker icon to hear a message.
+  const AUTOPLAY_KEY = 'nerdalert_voice_autoplay';
+  let voiceablePersonalities = new Set();
+  let autoPlayEnabled = (() => {
+    try { return localStorage.getItem(AUTOPLAY_KEY) === '1'; }
+    catch { return false; }
+  })();
   const VISION_IMAGE_MIMES = new Set([
     'image/png', 'image/jpeg', 'image/gif', 'image/webp',
   ]);
@@ -3484,6 +3559,12 @@
           <div class="message-bubble"><span style="white-space:pre-wrap">${escapeHTML(msg.content)}</span></div>
         `;
         container.appendChild(div);
+
+        // Voice module Slice 2: attach speaker to restored agent messages.
+        // Auto-play deliberately does NOT fire on history restore — only
+        // on freshly-streamed messages — to avoid blasting audio at the
+        // user every time they reload the page.
+        addSpeakerButtonToMessage(div, msg.content);
       }
     }
 
@@ -3513,6 +3594,12 @@
     // and hides any matching dock icons. Idempotent and cheap —
     // safe to call here even before the user opens Settings.
     applyDisabledModules();
+
+    // Voice module Slice 2: discover which personalities can speak
+    // right now. One-shot fetch; result lives in voiceablePersonalities.
+    // Empty result (voice disabled, or no ONNX files present) is fine —
+    // speaker icons silently don't appear.
+    loadVoiceablePersonalities();
 
     // Set trust level pips
     for (let i = 1; i <= 5; i++) {
@@ -4454,6 +4541,9 @@
       <div class="settings-section-label" style="margin-top:16px">MODULES</div>
       <div class="settings-modules-list" id="settings-modules-list">${renderModuleToggleRows()}</div>
 
+      <div class="settings-section-label" style="margin-top:16px">VOICE</div>
+      <div class="settings-modules-list" id="settings-voice-list">${renderVoiceToggleRows()}</div>
+
       <div class="settings-section-label" style="margin-top:16px">QUICK ACTIONS</div>
       <div class="settings-actions-list">
         <button class="settings-action-btn" onclick="openSetupPanel()">
@@ -4661,6 +4751,183 @@
     }).join('');
   }
 
+
+  // ── Voice module helpers (Slice 2) ───────────────────────
+  // Plumbing for the speaker icon on agent messages and the auto-play
+  // toggle in Settings. Talks to /api/voice/personalities (capability
+  // discovery) and /api/tts (synthesis). Hidden <audio id="tts-player">
+  // at the top of <body> is the playback target — single element so
+  // starting a new clip cleanly stops any in-flight one.
+
+  // Fetched once at boot. Used by addSpeakerButtonToMessage() to decide
+  // whether to render the speaker icon for a given personality. A 404
+  // from the endpoint (voice module disabled in config.yaml) is normal
+  // and results in an empty set — no speaker icons appear anywhere.
+  async function loadVoiceablePersonalities() {
+    try {
+      const res = await fetch('/api/voice/personalities', {
+        headers: { 'Authorization': `Bearer ${CFG.token}` },
+      });
+      if (!res.ok) {
+        voiceablePersonalities = new Set();
+        return;
+      }
+      const data = await res.json();
+      voiceablePersonalities = new Set(data.personalities || []);
+    } catch (err) {
+      console.warn('[voice] loadVoiceablePersonalities failed:', err);
+      voiceablePersonalities = new Set();
+    }
+  }
+
+  // Play an assistant message's text in the personality's voice.
+  //   btnEl:         the .speaker-btn that triggered this (visual state)
+  //   text:          the message body to synthesize
+  //   personalityId: which voice to use
+  //
+  // A single shared <audio> element means starting a new clip naturally
+  // stops any in-flight one. The previously-playing button gets its
+  // label reset by the loop at the top before the new request fires.
+  // If the user clicks the same button that's currently playing, the
+  // reset loop stops playback and we return early (toggle behavior).
+  async function playMessageAudio(text, personalityId, btnEl) {
+    const player = document.getElementById('tts-player');
+    if (!player) return;
+
+    // Was this button already in the "playing" state? If yes, we're
+    // toggling off — stop and bail before kicking off a new request.
+    const wasPlaying = btnEl && btnEl.classList.contains('playing');
+
+    // Reset any currently-playing speaker buttons (only one can be active).
+    document.querySelectorAll('.speaker-btn.playing, .speaker-btn.loading').forEach(b => {
+      b.classList.remove('playing', 'loading');
+      b.textContent = '▶ PLAY';
+    });
+    player.pause();
+    if (player.dataset.objectUrl) {
+      URL.revokeObjectURL(player.dataset.objectUrl);
+      delete player.dataset.objectUrl;
+    }
+    if (wasPlaying) return;
+
+    if (btnEl) {
+      btnEl.classList.add('loading');
+      btnEl.textContent = '… LOADING';
+    }
+
+    try {
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${CFG.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text, personality: personalityId }),
+      });
+
+      if (!res.ok) {
+        // Pull the JSON error body if there is one; fall back to a
+        // status-code message otherwise.
+        let msg = `TTS failed (${res.status})`;
+        try {
+          const errBody = await res.json();
+          if (errBody?.error) msg = errBody.error;
+        } catch { /* not JSON, keep the generic message */ }
+        throw new Error(msg);
+      }
+
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      player.src = url;
+      player.dataset.objectUrl = url;
+
+      if (btnEl) {
+        btnEl.classList.remove('loading');
+        btnEl.classList.add('playing');
+        btnEl.textContent = '■ STOP';
+      }
+
+      const cleanup = () => {
+        if (btnEl) {
+          btnEl.classList.remove('playing', 'loading');
+          btnEl.textContent = '▶ PLAY';
+        }
+        URL.revokeObjectURL(url);
+        delete player.dataset.objectUrl;
+        player.onended = null;
+        player.onerror = null;
+      };
+      player.onended = cleanup;
+      player.onerror = cleanup;
+
+      await player.play();
+    } catch (err) {
+      console.warn('[voice] playMessageAudio failed:', err);
+      if (btnEl) {
+        btnEl.classList.remove('loading', 'playing');
+        btnEl.textContent = '! ERROR';
+        // Restore the play label after 2s so the button doesn't get
+        // stuck on "ERROR" forever. Guarded against a subsequent click
+        // that put it back into the playing state.
+        setTimeout(() => {
+          if (btnEl && !btnEl.classList.contains('playing') && !btnEl.classList.contains('loading')) {
+            btnEl.textContent = '▶ PLAY';
+          }
+        }, 2000);
+      }
+    }
+  }
+
+  // Attach a speaker button to a message element if the active
+  // personality can speak. No-op if voice is disabled, the personality
+  // has no Piper config, or the model file is missing on disk.
+  //
+  // For LIVE messages this matches perfectly — the agent that just
+  // streamed the response is the active personality. For RESTORED
+  // history messages this assumes the active personality wrote them,
+  // which is correct unless the user switched agents mid-conversation
+  // before restore. Per-message agent persistence is a future enhancement.
+  function addSpeakerButtonToMessage(messageEl, text) {
+    if (!messageEl) return;
+    if (!text || !text.trim()) return;
+    const personalityId = localStorage.getItem('nerdalert_agent') ?? 'sherman';
+    if (!voiceablePersonalities.has(personalityId)) return;
+    if (messageEl.querySelector('.speaker-btn')) return;  // idempotent
+
+    const actions = document.createElement('div');
+    actions.className = 'message-actions';
+
+    const btn = document.createElement('button');
+    btn.className   = 'speaker-btn';
+    btn.textContent = '▶ PLAY';
+    btn.addEventListener('click', () => playMessageAudio(text, personalityId, btn));
+
+    actions.appendChild(btn);
+    messageEl.appendChild(actions);
+  }
+
+  // Auto-play toggle: stored in localStorage, no server roundtrip.
+  // Per-browser preference. Mirrors the disabled-modules pattern.
+  function toggleAutoPlay() {
+    autoPlayEnabled = !autoPlayEnabled;
+    try { localStorage.setItem(AUTOPLAY_KEY, autoPlayEnabled ? '1' : '0'); }
+    catch { /* quota / private browsing — session-only fallback */ }
+    const list = document.getElementById('settings-voice-list');
+    if (list) list.innerHTML = renderVoiceToggleRows();
+  }
+
+  // Build the inner row markup for the VOICE section of Settings.
+  // Mirrors renderModuleToggleRows() pattern — a single button that
+  // shows current state and flips on click. Easy to extend later
+  // (push-to-talk mode, voice provider selection, etc.).
+  function renderVoiceToggleRows() {
+    const state = autoPlayEnabled ? 'on' : 'off';
+    const label = autoPlayEnabled ? 'AUTO-PLAY · ON' : 'AUTO-PLAY · OFF';
+    return `
+      <button class="settings-module-row ${state}"
+              onclick="toggleAutoPlay()">${label}</button>
+    `;
+  }
 
   // ── Storage display helpers ── v0.5.17 pre2
   //
@@ -5073,6 +5340,22 @@
       if (span) span.removeAttribute('id');
       const prefetch = bubble.querySelector('#prefetch-blocks');
       if (prefetch) prefetch.removeAttribute('id');
+
+      // Voice module Slice 2: attach a speaker button if the active
+      // personality has voice capability. addSpeakerButtonToMessage
+      // is a no-op when voice is unavailable, so this is safe to call
+      // unconditionally.
+      const messageEl = bubble.closest('.message.agent');
+      addSpeakerButtonToMessage(messageEl, text);
+
+      // Auto-play if the user has it enabled — fire the same click
+      // path the speaker button would. Wrapped in a check so it only
+      // runs when the button actually got rendered (i.e. voice is
+      // available for the active personality).
+      if (autoPlayEnabled && messageEl) {
+        const btn = messageEl.querySelector('.speaker-btn');
+        if (btn) btn.click();
+      }
     }
   }
 

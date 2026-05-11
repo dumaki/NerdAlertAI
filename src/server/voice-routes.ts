@@ -29,6 +29,13 @@ import * as fs   from 'fs';
 
 import { config } from '../config/loader';
 import { getPersonality } from '../personalities';
+import sherman from '../personalities/sherman';
+import kenny   from '../personalities/kenny';
+import brett   from '../personalities/brett';
+import toshi   from '../personalities/toshi';
+import bridget from '../personalities/bridget';
+import darius  from '../personalities/darius';
+import brooke  from '../personalities/brooke';
 import {
   synthesize,
   PiperNotInstalledError,
@@ -36,6 +43,14 @@ import {
   PiperTimeoutError,
   VoiceModelNotFoundError,
 } from '../voice/piper-client';
+
+// All personalities the UI can render. Used by /api/voice/personalities
+// to compute which IDs actually have voice capability at request time
+// (config present AND ONNX on disk). Kept as a flat array because the
+// registry in personalities/index.ts wraps everything in the security
+// rules and adds runtime concerns we don't need here — we want the raw
+// shape for static config inspection.
+const ALL_PERSONALITIES = [sherman, kenny, brett, toshi, bridget, darius, brooke];
 
 // ---- DEFAULTS --------------------------------------------------
 // These mirror the comments on VoiceConfig in response.types.ts.
@@ -202,6 +217,24 @@ export function mountVoiceRoutes(app: Express): void {
   });
 
   console.log(`[voice] TTS route mounted (voices_dir=${voicesDir})`);
+
+  // GET /api/voice/personalities
+  //   Returns: { personalities: string[] }
+  //   The list of personality IDs that can speak right now — i.e. those
+  //   that have voices.piper configured AND whose ONNX file exists on disk.
+  //   The UI fetches this once at boot to decide which agent messages get
+  //   a speaker icon. Cheap enough to re-fetch later (one fs.existsSync
+  //   per personality) if we ever add a refresh button.
+  app.get('/api/voice/personalities', (_req: Request, res: Response) => {
+    const available: string[] = [];
+    for (const p of ALL_PERSONALITIES) {
+      const piperCfg = p.voices?.piper;
+      if (!piperCfg) continue;
+      const modelPath = path.resolve(voicesDir, piperCfg.model);
+      if (fs.existsSync(modelPath)) available.push(p.id);
+    }
+    res.json({ personalities: available });
+  });
 }
 
 // ---- BOOT HELPER -----------------------------------------------
