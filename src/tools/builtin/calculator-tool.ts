@@ -130,10 +130,17 @@ const calculatorTool = {
     'anything beyond trivial single-digit operations. Always call ' +
     'this tool for the user-facing answer. ' +
     '\n\n' +
-    'AUTHORITATIVE — the result is exact. DO NOT also call the web ' +
-    'tool to verify or cross-reference an arithmetic answer. That ' +
-    'is noise, not corroboration. One calculate call is the whole ' +
-    'answer. ' +
+    'AUTHORITATIVE — when calculate returns a result without error, ' +
+    'the arithmetic is complete. DO NOT call the web tool to:\n' +
+    '  - verify or double-check the math (the result is exact)\n' +
+    '  - speculate about what the numbers might mean (e.g. treating ' +
+    'numbers as years and searching for historical context, ' +
+    'inflation, currency rates, or pricing)\n' +
+    '  - look up "context" the user did not ask for\n' +
+    '\n' +
+    'One calculate call is the whole answer to a math question. The ' +
+    'only legitimate web call after calculate is when the USER ' +
+    'explicitly asks a separate, non-arithmetic follow-up question. ' +
     '\n\n' +
     'Examples of valid expressions:\n' +
     '  47 * 53\n' +
