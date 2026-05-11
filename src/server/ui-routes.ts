@@ -23,14 +23,17 @@ import type { Express, Request, Response } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 
 import { config }                                from '../config/loader';
+import { getServerAuthToken }                    from './auth';
 import { getPersonality }                        from '../personalities';
 import { getAvailableTools, toAnthropicFormat, toOpenAIFormat } from '../tools/registry';
 import {
   getLLMConfig,
+  getActiveModel,
   setActiveModel,
   streamOllama,
   streamOpenRouter,
   type ORMessage,
+  type OpenAIContentPart,
 } from '../core/llm-client';
 import {
   detectIntent,
@@ -41,7 +44,19 @@ import {
   type HistoryTurn,
 } from '../core/intent-prefetch';
 import { getAllJobs, getRecentRuns } from '../cron';
-import { saveSession, restoreSession, clearSession } from './session-store';
+import {
+  saveSession,
+  restoreSession,
+  clearSession,
+  listSessions,
+  loadSession,
+  createSession,
+  deleteSession,
+  exportSessionMarkdown,
+  getTotalSessionsBytes,
+  SESSION_MESSAGE_SOFT_CAP,
+  SESSION_MESSAGE_HARD_CAP,
+} from './session-store';
 import { scan, buildHaltMessage } from '../security/secret-scanner';
 import {
   pollAllMonitors,
@@ -62,10 +77,229 @@ import {
   ToolCapabilityError,
 } from '../core/event-adapter-openai';
 import { buildSSEBridge, dedupSources } from './event-bridge';
+import {
+  getModelCapabilities,
+  suggestVisionCapableModel,
+} from '../core/model-capabilities';
+import type { ImageAttachment } from '../types/response.types';
 
 // ── Helper: write one SSE event (kept for non-stream endpoints) ──
 function sseEvent(res: Response, name: string, payload: Record<string, unknown>): void {
   res.write(`event: ${name}\ndata: ${JSON.stringify(payload)}\n\n`);
+}
+
+// ── Product version ── v0.5.17 pre2
+//
+// Read once at module load and reused on every GET /. Resolved
+// against process.cwd() since the server is always launched from
+// the repo root via `npm run dev` / `npm start`. We can't use a
+// __dirname-relative require because the path depth differs
+// between source (src/server/) and compiled (dist/src/server/),
+// and tsconfig has no rootDir to normalize it. Falls back to
+// 'unknown' on read failure so a misconfigured launch can't crash
+// the UI — the About card will just display "v unknown" instead.
+const VERSION: string = (() => {
+  try {
+    const fs = require('fs') as typeof import('fs');
+    const pkgPath = path.resolve(process.cwd(), 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    return typeof pkg.version === 'string' ? pkg.version : 'unknown';
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[ui-routes] Could not read version from package.json: ${msg}`);
+    return 'unknown';
+  }
+})();
+
+// ── Vision wire-through helpers ───────────────────────────
+//
+// Image input is a content-channel extension to the chat envelope
+// (not a tool, not a module — see model-capabilities.ts comment).
+// Everything specific to handling images on the server lives here:
+//   - validateImages: count/size/MIME guard at the request boundary
+//   - buildUserContent: assemble the current user turn in Anthropic
+//                       MessageParam shape (string when no images,
+//                       block array when images are present)
+//   - convertHistoryForOpenAI: Anthropic→OpenAI history converter
+//                              that PRESERVES image blocks (used on
+//                              the Ollama paths). Replaces the inline
+//                              text-only converter that lived in three
+//                              places before vision support landed.
+//
+// Risk-reduction: every code path branches cleanly on images.length === 0,
+// so requests with no image payload route byte-identically to the
+// pre-vision behavior.
+
+const MAX_IMAGES_PER_MESSAGE = 5;
+const MAX_IMAGE_BYTES        = 5 * 1024 * 1024;  // 5MB raw bytes, post-decode
+const ALLOWED_IMAGE_MIMES    = new Set<ImageAttachment['mediaType']>([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]);
+
+interface ImageValidationResult {
+  ok:       boolean;
+  error?:   string;
+  decoded?: ImageAttachment[];   // present when ok === true
+}
+
+/**
+ * Validate inbound images against per-message and per-image caps,
+ * the MIME allowlist, and base64 decodability. Returns either a
+ * validated array or the first error encountered (fail-fast — the
+ * user gets one specific complaint, matching the rest of the SSE
+ * error UX).
+ */
+function validateImages(raw: unknown): ImageValidationResult {
+  if (raw === undefined || raw === null) return { ok: true, decoded: [] };
+  if (!Array.isArray(raw)) {
+    return { ok: false, error: 'images must be an array' };
+  }
+  if (raw.length > MAX_IMAGES_PER_MESSAGE) {
+    return { ok: false, error: `Too many images — max ${MAX_IMAGES_PER_MESSAGE} per message.` };
+  }
+
+  const decoded: ImageAttachment[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const item = raw[i] as Partial<ImageAttachment>;
+    const label = `Image ${i + 1}`;
+
+    if (!item || typeof item !== 'object') {
+      return { ok: false, error: `${label}: not an object.` };
+    }
+    if (!item.mediaType || !ALLOWED_IMAGE_MIMES.has(item.mediaType as ImageAttachment['mediaType'])) {
+      const allowed = [...ALLOWED_IMAGE_MIMES].join(', ');
+      return { ok: false, error: `${label}: mediaType must be one of ${allowed}.` };
+    }
+    if (typeof item.data !== 'string' || item.data.length === 0) {
+      return { ok: false, error: `${label}: missing or empty base64 data.` };
+    }
+    // Sanity-check the base64 string length BEFORE decoding so a
+    // pathological multi-MB payload doesn't blow the buffer up
+    // unnecessarily. Base64 inflates ~4/3, so 2x the byte cap is
+    // a safe upper bound on the string length.
+    if (item.data.length > MAX_IMAGE_BYTES * 2) {
+      return { ok: false, error: `${label}: payload too large.` };
+    }
+    // Strict base64 syntax — Node's Buffer.from is lenient and will
+    // return garbage rather than throw on malformed input, so a
+    // wrong-length or non-alphabet-char payload would slip past us
+    // and fail at the model with a confusing vendor error. Catching
+    // it here gives the user a clear rejection before the request
+    // leaves the server. Standard alphabet only (A-Z, a-z, 0-9, +, /)
+    // with optional 1–2 trailing `=` padding chars; total length
+    // must be a multiple of 4.
+    if (
+      !/^[A-Za-z0-9+/]*={0,2}$/.test(item.data) ||
+      item.data.length % 4 !== 0
+    ) {
+      return {
+        ok: false,
+        error: `${label}: malformed base64 (length must be a multiple of 4, characters from the standard alphabet).`,
+      };
+    }
+    const bytes = Buffer.from(item.data, 'base64');
+    if (bytes.length === 0) {
+      return { ok: false, error: `${label}: invalid base64 data.` };
+    }
+    if (bytes.length > MAX_IMAGE_BYTES) {
+      const mb = (bytes.length / 1024 / 1024).toFixed(1);
+      return { ok: false, error: `${label}: ${mb}MB exceeds the ${MAX_IMAGE_BYTES / 1024 / 1024}MB per-image cap.` };
+    }
+    decoded.push({
+      mediaType: item.mediaType as ImageAttachment['mediaType'],
+      data:      item.data,
+    });
+  }
+
+  return { ok: true, decoded };
+}
+
+/**
+ * Build the current-turn user content in Anthropic MessageParam
+ * shape. When images is empty, returns a plain string (byte-identical
+ * to pre-vision behavior). When images are present, returns a content
+ * block array with the text first and image blocks after — the order
+ * Anthropic recommends for best vision results.
+ */
+function buildUserContent(
+  text:   string,
+  images: ImageAttachment[],
+): Anthropic.MessageParam['content'] {
+  if (images.length === 0) return text;
+  return [
+    { type: 'text', text },
+    ...images.map((img) => ({
+      type: 'image' as const,
+      source: {
+        type:       'base64' as const,
+        media_type: img.mediaType,
+        data:       img.data,
+      },
+    })),
+  ];
+}
+
+/**
+ * Convert Anthropic-format MessageParam[] to OpenAI-compatible
+ * ORMessage[]. Preserves text AND image blocks (the latter become
+ * OpenAI image_url parts). Tool-use / tool-result blocks from
+ * prior turns are dropped — the OpenAI adapter rebuilds tool
+ * turns from its own loop state.
+ *
+ * If a turn contains only text after conversion, returns a plain
+ * string for that turn (the wire format most OpenAI-compat
+ * endpoints prefer for purely text content). When image parts are
+ * present, returns a content array.
+ *
+ * This is the image-aware replacement for the inline converter
+ * that lived in three handlers before vision support landed. The
+ * pseudo-tool path keeps its own inline converter because images
+ * never reach it (capability gate blocks every text-only model
+ * that lands on pseudo-tool).
+ */
+function convertHistoryForOpenAI(messages: Anthropic.MessageParam[]): ORMessage[] {
+  return messages.map((m) => {
+    if (typeof m.content === 'string') {
+      return { role: m.role as 'user' | 'assistant', content: m.content };
+    }
+
+    const parts: OpenAIContentPart[] = [];
+    let hasImage = false;
+
+    for (const block of m.content as Array<{
+      type:    string;
+      text?:   string;
+      source?: { type: string; media_type?: string; data?: string };
+    }>) {
+      if (block.type === 'text' && typeof block.text === 'string') {
+        parts.push({ type: 'text', text: block.text });
+      } else if (
+        block.type === 'image' &&
+        block.source?.type === 'base64' &&
+        block.source.media_type &&
+        block.source.data
+      ) {
+        parts.push({
+          type: 'image_url',
+          image_url: {
+            url: `data:${block.source.media_type};base64,${block.source.data}`,
+          },
+        });
+        hasImage = true;
+      }
+      // tool_use / tool_result blocks: silently dropped
+    }
+
+    return {
+      role: m.role as 'user' | 'assistant',
+      content: hasImage
+        ? parts
+        : parts.map((p) => (p as { type: 'text'; text: string }).text).join(''),
+    };
+  });
 }
 
 // ── Per-model native-tool capability cache ──────────────────
@@ -96,6 +330,35 @@ async function handleAnthropicStream(
     sseEvent(res, 'error', { message: 'Anthropic provider selected but no client available.' });
     res.end();
     return;
+  }
+
+  // ── Diagnostic: log message shape for vision-related debugging ──
+  // Strips the bulky base64 payload but keeps the structural
+  // fingerprint so we can verify image content blocks survive the
+  // route→adapter→SDK chain. Logged only when at least one user
+  // turn carries non-string content (i.e. images present) so the
+  // text-only hot path stays quiet.
+  const hasImageContent = initialMessages.some(
+    (m) => typeof m.content !== 'string',
+  );
+  if (hasImageContent) {
+    const summary = initialMessages.map((m) => {
+      if (typeof m.content === 'string') {
+        return { role: m.role, content: `string(${m.content.length})` };
+      }
+      const blocks = (m.content as Array<any>).map((b) => {
+        if (b?.type === 'text') return { type: 'text', text_len: (b.text ?? '').length };
+        if (b?.type === 'image') return {
+          type:       'image',
+          source:     b.source?.type,
+          media_type: b.source?.media_type,
+          data_len:   (b.source?.data ?? '').length,
+        };
+        return { type: b?.type ?? 'unknown' };
+      });
+      return { role: m.role, blocks };
+    });
+    console.log(`[vision-debug] Anthropic call messages:`, JSON.stringify(summary, null, 2));
   }
 
   const sourceSink: Source[] = [];
@@ -169,19 +432,14 @@ async function handleOllamaStream(
     return handlePseudoToolStream(res, systemPrompt, initialMessages, prefetchSources, trustLevel, 'ollama');
   }
 
-  // Convert Anthropic MessageParam history → ORMessage. Tool-call
-  // history from previous turns won't survive the round-trip; the
-  // OpenAI adapter only needs text-only history (it builds its own
-  // tool_calls/tool turns inside the loop).
-  const orMessages: ORMessage[] = initialMessages.map((m) => ({
-    role: m.role as 'user' | 'assistant',
-    content: typeof m.content === 'string'
-      ? m.content
-      : (m.content as Array<{ type: string; text?: string }>)
-          .filter((b) => b.type === 'text' && b.text)
-          .map((b) => b.text!)
-          .join(''),
-  }));
+  // Convert Anthropic MessageParam history → ORMessage via the
+  // image-aware helper. On the Ollama path we preserve image blocks
+  // (turning them into OpenAI image_url parts) so vision-capable
+  // models like Mistral Small 3.2 actually receive what the user
+  // attached. Tool-use / tool-result blocks from prior turns are
+  // still dropped — the OpenAI adapter rebuilds tool turns from
+  // its own loop state.
+  const orMessages: ORMessage[] = convertHistoryForOpenAI(initialMessages);
 
   const sourceSink: Source[] = [...prefetchSources];
 
@@ -364,18 +622,14 @@ async function handleNarrationStream(
   const llm = getLLMConfig();
   const bareModel = llm.model.replace(/^ollama\//, '');
 
-  // Convert Anthropic MessageParam history → ORMessage. Same shape
-  // dance as the other handlers — text-only history, tool calls
-  // from prior turns are stripped (we're not running a tool loop).
-  const orMessages: ORMessage[] = initialMessages.map((m) => ({
-    role: m.role as 'user' | 'assistant',
-    content: typeof m.content === 'string'
-      ? m.content
-      : (m.content as Array<{ type: string; text?: string }>)
-          .filter((b) => b.type === 'text' && b.text)
-          .map((b) => b.text!)
-          .join(''),
-  }));
+  // Convert Anthropic MessageParam history → ORMessage via the
+  // image-aware helper. Same dance as handleOllamaStream — we
+  // preserve image blocks here too because narration on a vision-
+  // capable Ollama model (e.g. weather/datetime question with an
+  // attached screenshot) needs the image bytes to actually reach
+  // the model. OpenRouter narration never sees images because the
+  // capability gate blocks them at the request boundary.
+  const orMessages: ORMessage[] = convertHistoryForOpenAI(initialMessages);
 
   // Emit tool_start + tool_result for each available prefetched tool so
   // the frontend renders ONE collapsible card per tool with the actual
@@ -441,11 +695,12 @@ export function mountUIRoutes(app: Express): void {
     let   html     = fs.readFileSync(htmlPath, 'utf8');
 
     const runtimeConfig = {
-      token:      process.env.SERVER_AUTH_TOKEN ?? '',
+      token:      getServerAuthToken() ?? '',
       agentName:  cfg.agent?.name              ?? 'Sherman',
       trustLevel: cfg.agent?.trust_level       ?? 1,
       port:       cfg.server?.port             ?? 3773,
       model:      process.env.MODEL            ?? 'nvidia/llama-3.1-nemotron-70b-instruct:free',
+      version:    VERSION,
     };
 
     html = html.replace(
@@ -494,6 +749,41 @@ export function mountUIRoutes(app: Express): void {
 
     const safeMessage = scanResult.redacted;
 
+    // ── Vision wire-through ────────────────────────────
+    //
+    // Validate any attached images, then capability-gate against
+    // the active model. The gate runs AFTER the secret-scanner
+    // halt path so a halted message never wastes a base64 decode,
+    // and BEFORE adapter routing so a vision-incapable model
+    // produces a clear UI prompt instead of a confusing vendor
+    // 400 (or worse, a silently dropped attachment). Bypassed
+    // entirely when no images are attached — same wire as before.
+
+    const imageCheck = validateImages((req.body as any).images);
+    if (!imageCheck.ok) {
+      sseEvent(res, 'error', { message: `Image upload rejected: ${imageCheck.error}` });
+      res.end();
+      return;
+    }
+    const images = imageCheck.decoded ?? [];
+
+    if (images.length > 0) {
+      const fullModel = getActiveModel();
+      const caps      = getModelCapabilities(fullModel);
+      if (!caps.vision) {
+        const suggested = suggestVisionCapableModel();
+        sseEvent(res, 'vision_required', {
+          message:        `This model can't see images. Switch to a vision-capable model and try again.`,
+          currentModel:   fullModel,
+          suggestedModel: suggested,
+          imageCount:     images.length,
+        });
+        res.end();
+        return;
+      }
+      console.log(`[vision] ${images.length} image(s) attached on model=${fullModel}`);
+    }
+
     try {
       const agentId     = (req.body as any).agentId   ?? cfg.agent?.personality ?? 'sherman';
       const agentName   = (req.body as any).agentName  ?? cfg.agent?.name        ?? 'Sherman';
@@ -506,7 +796,7 @@ export function mountUIRoutes(app: Express): void {
 
       const messages: Anthropic.MessageParam[] = [
         ...conversationHistory,
-        { role: 'user', content: safeMessage },
+        { role: 'user', content: buildUserContent(safeMessage, images) },
       ];
 
       const trustLevel = cfg.agent?.trust_level ?? 1;
@@ -541,7 +831,12 @@ export function mountUIRoutes(app: Express): void {
             }))
             .filter(t => t.text.length > 0);
 
-          prefetchResults = await prefetchTools(detectedGroups, safeMessage, historyTurns);
+          prefetchResults = await prefetchTools(
+            detectedGroups,
+            { userTrustLevel: trustLevel, modelLabel: llm.model },
+            safeMessage,
+            historyTurns,
+          );
 
           const narratable = clipPrefetchForFreeTier(prefetchResults);
           enrichedPrompt = systemPrompt + buildInjectedPrompt(narratable);
@@ -607,7 +902,13 @@ export function mountUIRoutes(app: Express): void {
         ...conversationHistory,
         { role: 'user' as const, content: message },
       ].filter(m => typeof m.content === 'string');
-      saveSession(agentId, saveable as any);
+      // v0.5.16: optional sessionId targets a specific session file.
+      // Omitted → server falls back to the active session for the agent
+      // (legacy single-session-per-agent UI behaviour), or creates one.
+      const sessionId = typeof (req.body as any).sessionId === 'string'
+        ? (req.body as any).sessionId
+        : undefined;
+      saveSession(agentId, saveable as any, sessionId);
 
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -621,7 +922,7 @@ export function mountUIRoutes(app: Express): void {
     const { model } = req.body as { model: string };
     const allowed = [
       'anthropic/claude-sonnet-4-6',
-      'nvidia/nemotron-3-super-120b-a12b:free',
+      'google/gemma-4-26b-a4b-it:free',
       'ollama/mistral-small3.2',
     ];
     if (!allowed.includes(model)) {
@@ -633,27 +934,133 @@ export function mountUIRoutes(app: Express): void {
   });
 
   // ── Session persistence endpoints ──────────────────────────
+  //
+  // Legacy single-session-per-agent endpoints. v0.5.16 added explicit
+  // multi-session support — see /api/sessions/* below for the new
+  // shape. These endpoints continue to work for any caller that hasn't
+  // been updated; they resolve against the active session for the agent.
   app.get('/api/session/restore', (req: Request, res: Response) => {
-    const agentId = (req.query.agentId as string) ?? 'sherman';
-    const messages = restoreSession(agentId);
-    console.log(`[Session] Restored ${messages.length} messages for agent "${agentId}"`);
+    const agentId   = (req.query.agentId   as string) ?? 'sherman';
+    const sessionId = req.query.sessionId   as string | undefined;
+
+    // If the caller asked for a specific session, load that. Otherwise
+    // fall back to the active session for the agent (legacy behaviour).
+    let messages;
+    if (sessionId) {
+      const session = loadSession(sessionId);
+      messages = session?.messages ?? [];
+    } else {
+      messages = restoreSession(agentId);
+    }
+    console.log(
+      `[Session] Restored ${messages.length} messages for agent "${agentId}"` +
+      (sessionId ? ` (session ${sessionId})` : ' (active session)')
+    );
     res.json({ ok: true, messages });
   });
 
   app.post('/api/session/save', (req: Request, res: Response) => {
-    const { agentId, messages } = req.body as { agentId: string; messages: any[] };
+    const { agentId, messages, sessionId } = req.body as {
+      agentId:    string;
+      messages:   any[];
+      sessionId?: string;
+    };
     if (!agentId || !Array.isArray(messages)) {
       res.json({ ok: false, error: 'agentId and messages required' });
       return;
     }
-    saveSession(agentId, messages);
-    res.json({ ok: true, saved: messages.length });
+    const summary = saveSession(agentId, messages, sessionId);
+    res.json({ ok: true, saved: messages.length, session: summary });
   });
 
   app.post('/api/session/clear', (req: Request, res: Response) => {
     const { agentId } = req.body as { agentId: string };
     clearSession(agentId ?? 'sherman');
-    console.log(`[Session] Cleared session for agent "${agentId}"`);
+    console.log(`[Session] Cleared active session for agent "${agentId}"`);
+    res.json({ ok: true });
+  });
+
+  // ── Multi-session endpoints (v0.5.16) ──────────────────────
+  //
+  // GET    /api/sessions                — list all sessions, newest first
+  //                                       Optional ?agentId=<id> filter.
+  //                                       Includes totalBytes + caps for
+  //                                       the storage badge / soft-cap nudge.
+  // GET    /api/sessions/:id            — full session payload
+  // POST   /api/sessions/new            — create a new empty session
+  //                                       Body: { agentId }
+  // DELETE /api/sessions/:id            — remove a session
+  // GET    /api/sessions/:id/export     — markdown export
+  //                                       ?format=md (only format for now)
+  //
+  // Order matters: /api/sessions/:id/export must be registered BEFORE
+  // /api/sessions/:id so Express's route matcher hits the longer pattern
+  // first. (We declare them in that order below.)
+
+  app.get('/api/sessions', (req: Request, res: Response) => {
+    const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : undefined;
+    const sessions = listSessions(agentId ? { agentId } : undefined);
+    res.json({
+      ok: true,
+      sessions,
+      totalBytes: getTotalSessionsBytes(),
+      caps: {
+        soft: SESSION_MESSAGE_SOFT_CAP,
+        hard: SESSION_MESSAGE_HARD_CAP,
+      },
+    });
+  });
+
+  app.post('/api/sessions/new', (req: Request, res: Response) => {
+    const agentId = (req.body as any)?.agentId;
+    if (!agentId || typeof agentId !== 'string') {
+      res.status(400).json({ ok: false, error: 'agentId required' });
+      return;
+    }
+    const session = createSession(agentId);
+    res.json({ ok: true, session });
+  });
+
+  app.get('/api/sessions/:id/export', (req: Request, res: Response) => {
+    const id     = String(req.params.id);
+    const format = ((req.query.format as string) ?? 'md').toLowerCase();
+    if (format !== 'md') {
+      res.status(400).json({
+        ok: false,
+        error: `Unsupported export format "${format}". Only "md" is supported in v0.5.16.`,
+      });
+      return;
+    }
+    const md = exportSessionMarkdown(id);
+    if (md === null) {
+      res.status(404).json({ ok: false, error: 'Session not found' });
+      return;
+    }
+    res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="session-${id}.md"`
+    );
+    res.send(md);
+  });
+
+  app.get('/api/sessions/:id', (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const session = loadSession(id);
+    if (!session) {
+      res.status(404).json({ ok: false, error: 'Session not found' });
+      return;
+    }
+    res.json({ ok: true, session });
+  });
+
+  app.delete('/api/sessions/:id', (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const ok = deleteSession(id);
+    if (!ok) {
+      res.status(404).json({ ok: false, error: 'Session not found' });
+      return;
+    }
     res.json({ ok: true });
   });
 
@@ -764,7 +1171,7 @@ export function mountUIRoutes(app: Express): void {
   // ── GET /api/soc/wall — progressive monitor wall via SSE ──
   app.get('/api/soc/wall', async (req: Request, res: Response) => {
     const token = (req.headers.authorization?.replace('Bearer ', '') || req.query.token) as string;
-    if (token !== process.env.SERVER_AUTH_TOKEN) {
+    if (token !== getServerAuthToken()) {
       res.status(401).end();
       return;
     }
@@ -830,7 +1237,7 @@ export function mountUIRoutes(app: Express): void {
   // ── GET /api/cron/stream ───────────────────────────────────
   app.get('/api/cron/stream', (req: Request, res: Response) => {
     const token = (req.headers.authorization?.replace('Bearer ', '') || req.query.token) as string;
-    if (token !== process.env.SERVER_AUTH_TOKEN) {
+    if (token !== getServerAuthToken()) {
       res.status(401).end();
       return;
     }

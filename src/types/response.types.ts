@@ -38,6 +38,34 @@ export interface Source {
 }
 
 
+// --- IMAGE ATTACHMENT ---
+// One image attached to a chat message for vision-capable models.
+// Populated client-side when a user pastes / drags / picks an image
+// in the chat input bar; carried inline on /chat/stream and converted
+// to provider-native format (Anthropic image block or OpenAI image_url
+// part) at the request boundary in server/ui-routes.ts.
+//
+// Why base64 not URL: keeps image bytes private to the local server
+// process (never written to disk, never hosted at a URL), and avoids
+// a CORS / signed-URL detour for in-memory attachments. The tradeoff
+// is request-size bloat — enforced by the 5MB-per-image cap and
+// 5-images-per-message cap in server validation.
+//
+// Why no `name` field: the model doesn't need a filename to interpret
+// pixels, and surfacing a filename in chat history adds a privacy
+// vector (screenshot of "unreleased-product-mockup.png" leaks intent
+// even after the image bytes are stripped). The UI carries the name
+// for the chip preview only — not in the wire format.
+
+export interface ImageAttachment {
+  /** MIME type of the image. Server enforces an allowlist. */
+  mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+
+  /** Base64-encoded raw bytes (no `data:` prefix — just the payload). */
+  data: string;
+}
+
+
 // --- RESPONSE METADATA ---
 // Supporting info attached to a response.
 // Every field is optional (the ? means optional in TypeScript)
@@ -99,7 +127,27 @@ export interface NerdAlertTool {
 
 export interface ToolConfig {
   enabled: boolean;
-  trust_level: number;
+  trust_level?: number;  // Optional override. When present, acts as a floor-raise:
+                         // it can RAISE the requirement above tool.trustLevel,
+                         // never lower it. Resolution lives in tools/registry.ts.
+}
+
+// --- TOOL GROUP CONFIG ---
+// A tool group covers many tools at once, by prefix-matching their .name.
+// Example: a group named "wazuh" with prefix "wazuh_" applies to every tool
+// whose name starts with "wazuh_" (wazuh_get_alerts, wazuh_alert_summary, ...).
+//
+// This exists so users can disable an entire SOC service (Wazuh, Pi-hole, etc.)
+// in one line instead of listing every action under it.
+//
+// Per-tool entries in `tools:` always win over a group match — so groups give
+// you "turn off a whole service" by default, and the per-tool map is the
+// override path for exceptions.
+
+export interface ToolGroupConfig {
+  prefix: string;          // Membership rule e.g. "wazuh_"
+  enabled: boolean;        // Whether tools in this group are visible to the agent
+  trust_level?: number;    // Optional floor-raise (same rule as ToolConfig)
 }
 
 export interface AgentConfig {
@@ -112,9 +160,10 @@ export interface AgentConfig {
     port: number;
     local_only: boolean;
   };
-  tools: Record<string, ToolConfig>; // Record<string, ToolConfig> means
-                                      // "an object where keys are strings
-                                      // and values are ToolConfig objects"
+  tools: Record<string, ToolConfig>; // per-tool overrides, keyed by tool.name
+  tool_groups?: Record<string, ToolGroupConfig>; // optional group overrides — if
+                                                 // absent, registry falls through
+                                                 // to per-tool + compiled defaults
   logging: {
     enabled: boolean;
     log_dir: string;

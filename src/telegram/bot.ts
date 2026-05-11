@@ -28,14 +28,25 @@
 // ============================================================
 
 import { chat } from '../core/agent';
+import { getTelegramBotToken } from './credential';
 // Message type matches agent.ts internal shape
 type Message = { role: 'user' | 'assistant'; content: string };
 
 // ── Config ───────────────────────────────────────────────────
 
-const BOT_TOKEN  = process.env.TELEGRAM_BOT_TOKEN ?? '';
-const CHAT_ID    = process.env.TELEGRAM_CHAT_ID   ?? '';
-const API_BASE   = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const CHAT_ID = process.env.TELEGRAM_CHAT_ID ?? '';
+
+// Build the Telegram API base URL from the cached bot token.
+// Returns null if the token isn't configured — callers must check
+// this and skip the request rather than hit a malformed URL.
+//
+// CHAT_ID stays as an env var — it's a chat identifier, not a
+// secret. The bot token is what gates access; the chat ID just
+// tells the API which conversation to post to.
+function apiBase(): string | null {
+  const token = getTelegramBotToken();
+  return token ? `https://api.telegram.org/bot${token}` : null;
+}
 
 // How long Telegram holds the connection open waiting for updates.
 // 30 seconds is the standard — reduces polling traffic significantly.
@@ -74,8 +85,9 @@ let running = false;
 
 // Send a text message to your chat
 export async function sendMessage(text: string): Promise<void> {
-  if (!BOT_TOKEN || !CHAT_ID) {
-    console.warn('[Telegram] BOT_TOKEN or CHAT_ID not set — skipping send');
+  const base = apiBase();
+  if (!base || !CHAT_ID) {
+    console.warn('[Telegram] Bot token or CHAT_ID not configured — skipping send');
     return;
   }
 
@@ -85,7 +97,7 @@ export async function sendMessage(text: string): Promise<void> {
 
   for (const chunk of chunks) {
     try {
-      const res = await fetch(`${API_BASE}/sendMessage`, {
+      const res = await fetch(`${base}/sendMessage`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -100,7 +112,7 @@ export async function sendMessage(text: string): Promise<void> {
         // If Markdown parse fails, retry as plain text
         // (agent sometimes produces malformed markdown)
         if (err.includes('Bad Request')) {
-          await fetch(`${API_BASE}/sendMessage`, {
+          await fetch(`${base}/sendMessage`, {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ chat_id: CHAT_ID, text: chunk }),
@@ -138,9 +150,18 @@ function splitMessage(text: string, limit = 4000): string[] {
 
 // Fetch pending updates from Telegram
 async function getUpdates(offset: number): Promise<TelegramUpdate[]> {
+  const base = apiBase();
+  if (!base) {
+    // Token went away mid-poll (e.g. user cleared it via /setup).
+    // Return empty so the poll loop sleeps and retries; the next
+    // /setup write will refresh the cache and the next iteration
+    // will succeed.
+    return [];
+  }
+
   try {
     const res = await fetch(
-      `${API_BASE}/getUpdates?offset=${offset}&timeout=${POLL_TIMEOUT}&allowed_updates=["message"]`
+      `${base}/getUpdates?offset=${offset}&timeout=${POLL_TIMEOUT}&allowed_updates=["message"]`
     );
 
     if (!res.ok) {
@@ -193,11 +214,14 @@ async function handleMessage(msg: TelegramMessage): Promise<void> {
   // Forward to agent
   try {
     // Show typing indicator while agent thinks
-    await fetch(`${API_BASE}/sendChatAction`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: CHAT_ID, action: 'typing' }),
-    });
+    const base = apiBase();
+    if (base) {
+      await fetch(`${base}/sendChatAction`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: CHAT_ID, action: 'typing' }),
+      });
+    }
 
     const response = await chat(text, conversationHistory as Message[]);
     const replyText = response.content;
@@ -221,12 +245,12 @@ async function handleMessage(msg: TelegramMessage): Promise<void> {
 // ── Poll loop ─────────────────────────────────────────────────
 
 export async function startPolling(): Promise<void> {
-  if (!BOT_TOKEN) {
-    console.warn('[Telegram] TELEGRAM_BOT_TOKEN not set — bot disabled');
+  if (!getTelegramBotToken()) {
+    console.warn('[Telegram] telegram-bot-token not configured — bot disabled. Open http://localhost:3773/api/setup/panel to add it.');
     return;
   }
   if (!CHAT_ID) {
-    console.warn('[Telegram] TELEGRAM_CHAT_ID not set — bot disabled');
+    console.warn('[Telegram] TELEGRAM_CHAT_ID not set in .env — bot disabled');
     return;
   }
 

@@ -1,12 +1,12 @@
 {
   "name": "nerdalert",
-  "version": "1.0.0",
+  "version": "0.5.22",
   "description": "",
   "main": "dist/server/index.js",
   "scripts": {
     "start": "node dist/src/server/index.js",
     "dev": "ts-node src/server/index.ts",
-    "build": "tsc",
+    "build": "tsc && cp -r src/ui dist/src/",
     "typecheck": "tsc --noEmit",
     "chat": "ts-node scripts/chat.ts",
     "chat:dev": "concurrently \"npm run dev\" \"sleep 2 && npm run chat\""
@@ -17,6 +17,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.92.0",
     "better-sqlite3": "^12.9.0",
+    "chrono-node": "^2.9.1",
     "cron-parser": "^5.5.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
@@ -26,6 +27,7 @@
     "keytar": "^7.9.0",
     "mailparser": "^3.9.8",
     "mammoth": "^1.7.0",
+    "mathjs": "^15.2.0",
     "nodemailer": "^8.0.7",
     "pdf-parse": "^1.1.1",
     "uuid": "^14.0.0",

@@ -46,6 +46,7 @@ import {
   type BrokerContext,
   executeTool,
 } from './permission-broker';
+import { WebSuppressionTracker } from './web-suppression';
 import type { Source } from '../types/response.types';
 
 // ── Types ────────────────────────────────────────────────────
@@ -123,6 +124,16 @@ export async function runAnthropicAdapter(
   // the final `done` event so the UI knows what to persist as the
   // assistant turn.
   let fullText = '';
+
+  // Per-turn web suppression tracker. Mechanically enforces the
+  // "don't stack web on a specialized tool answer" rule that
+  // prompt-layer guidance couldn't deliver against Mistral in the
+  // v0.5.18.x patch arc. See src/core/web-suppression.ts.
+  // Sonnet routes correctly on prompt-layer guidance alone, but
+  // running the tracker for every adapter keeps the behavior
+  // uniform and the conversation history identical regardless of
+  // which provider answered.
+  const suppressionTracker = new WebSuppressionTracker();
 
   for (let iteration = 1; iteration <= maxIterations; iteration++) {
     emit(meta('anthropic:iteration_begin', { iteration }));
@@ -241,6 +252,13 @@ export async function runAnthropicAdapter(
       // Run every pending tool through the broker. This serializes
       // tool execution, which matches existing behavior — parallel
       // tool execution is a future optimization, not in scope here.
+      //
+      // Web suppression check happens BEFORE the broker call: if a
+      // specialized tool already succeeded this turn and the model
+      // is now reaching for `web`, we substitute a synthetic result
+      // that steers the model back to the existing answer. The
+      // broker is never invoked for suppressed calls — no network,
+      // no audit log entry, no source rail pollution.
       const toolResultBlocks: AnthropicToolResultBlock[] = [];
       for (const pending of pendingTools) {
         let parsedArgs: Record<string, unknown> = {};
@@ -251,10 +269,40 @@ export async function runAnthropicAdapter(
         }
 
         emit(toolCallExecuting(pending.id, pending.name));
-        const result = await executeTool(
-          { id: pending.id, name: pending.name, args: parsedArgs },
-          brokerContext,
-        );
+
+        // ── Web suppression interception ────────────────────
+        // If `web` is being called after a specialized tool
+        // already answered, swap the live call for a synthetic
+        // tool_result steering the model to the existing answer.
+        // This is the mechanical layer that prompt-layer
+        // guidance couldn't deliver against Mistral.
+        let result: { output: string; error: boolean; sources: Source[] };
+        if (suppressionTracker.shouldSuppress(pending.name)) {
+          const triggeredBy = suppressionTracker.succeededList();
+          console.log(
+            `[anthropic:web_suppressed] target=${pending.name} ` +
+            `triggered_by=${triggeredBy.join(',')}`,
+          );
+          emit(meta('anthropic:web_suppressed', {
+            target:       pending.name,
+            triggered_by: triggeredBy,
+          }));
+          result = {
+            output:  suppressionTracker.buildSuppressedResult(pending.name),
+            error:   false,
+            sources: [],
+          };
+        } else {
+          result = await executeTool(
+            { id: pending.id, name: pending.name, args: parsedArgs },
+            brokerContext,
+          );
+        }
+
+        // Record the result for future suppression decisions in
+        // this turn. Non-specialized tools and errored calls are
+        // no-ops inside recordResult; safe to call unconditionally.
+        suppressionTracker.recordResult(pending.name, result.output, result.error);
 
         // Aggregate sources for the eventual `done` event.
         if (result.sources.length) sourceSink.push(...result.sources);

@@ -13,16 +13,21 @@
 
 import express, { Request, Response } from 'express';
 import * as path from 'path';
-import { config, SERVER_PORT, SERVER_AUTH_TOKEN } from '../config/loader';
+import { config, SERVER_PORT } from '../config/loader';
 import { NerdAlertResponse } from '../types/response.types';
 import { chat } from '../core/agent';
-import { getAuthMiddleware } from './auth';
+import { getAuthMiddleware, initServerAuthToken, getServerAuthToken } from './auth';
 import { mountUIRoutes, broadcastCronStatus } from './ui-routes';
 import { mountSecurityRoutes } from './security-routes';
 import { mountFilesRoutes, ensureProjectsRoot } from './files-routes';
 import { startTelegram } from '../telegram';
 import { startCron, stopCron, setCronStatusEmitter } from '../cron';
+import { startReminders, stopReminders } from '../reminders';
 import { initGmailCredential } from '../gmail/config';
+import { initOpenRouterKey, initAnthropicKey } from '../core/llm-client';
+import { initOpenclawCredential } from '../tools/builtin/soc-client';
+import { logAvailableTools } from '../tools/registry';
+import { selfCheckEnv, logEnvSelfCheck } from '../security/env-self-check';
 
 // Catch unhandled promise rejections globally
 // The Anthropic SDK throws APIUserAbortError when the browser disconnects
@@ -40,8 +45,14 @@ process.on('unhandledRejection', (reason: unknown) => {
 
 const app = express();
 
-// Parse incoming JSON request bodies automatically
-app.use(express.json());
+// Parse incoming JSON request bodies automatically.
+// `limit` is raised above the Express default (100kb) so vision
+// requests with base64-encoded images can fit. Server-side image
+// validation caps each image at 5MB raw; 5MB x ~4/3 base64
+// inflation x up to 5 images per message + envelope overhead
+// fits comfortably under 40MB, with 10mb being the practical
+// cap for a typical 1-2 image request from the chat UI.
+app.use(express.json({ limit: '40mb' }));
 app.use('/assets', express.static(path.resolve(__dirname, '..', 'ui', 'assets')));
 
 // ---- APPLY AUTH STRATEGY ----
@@ -130,9 +141,28 @@ app.post('/chat', async (req: Request, res: Response) => {
 
 
 // ---- START THE SERVER ----
+//
+// initServerAuthToken() runs BEFORE app.listen() so the auth
+// middleware's cached token is guaranteed to be populated by the
+// time the first request arrives. The other credential inits
+// (Gmail, OpenRouter, Anthropic, OpenClaw) fire-and-forget inside
+// the listen callback because their consumers have lazy fallbacks;
+// auth doesn't, so we need the deterministic ordering here.
+//
+// If init fails (broken keychain backend AND broken file fallback),
+// the server refuses to start. Better to crash visibly than run
+// with no auth.
+
+initServerAuthToken()
+  .catch((err: unknown) => {
+    console.error('[NerdAlert] Fatal: initServerAuthToken failed — cannot start server without auth token. Error:', err);
+    process.exit(1);
+  })
+  .then(() => {
 
 app.listen(SERVER_PORT, () => {
   const authStrategy = (config as any).auth?.strategy ?? 'token';
+  const tokenLoaded  = Boolean(getServerAuthToken());
 
   console.log('');
   console.log('  ███╗   ██╗███████╗██████╗ ██████╗  █████╗ ██╗     ███████╗██████╗ ████████╗');
@@ -145,9 +175,24 @@ app.listen(SERVER_PORT, () => {
   console.log(`  Agent  : ${config.agent.name}`);
   console.log(`  Trust  : Level ${config.agent.trust_level}`);
   console.log(`  Port   : ${SERVER_PORT}`);
-  console.log(`  Auth   : ${authStrategy}${authStrategy === 'token' && !SERVER_AUTH_TOKEN ? ' (warning: no token set)' : ''}`);
+  console.log(`  Auth   : ${authStrategy}${authStrategy === 'token' && !tokenLoaded ? ' (warning: no token loaded)' : ''}`);
+  logAvailableTools();
   console.log('');
   console.log(`  Ready at http://localhost:${SERVER_PORT}`);
+  console.log('');
+
+  // ── .env self-check (boot-time secret scanner) ──────────────
+  // Scan the loaded .env against the secret-scanner ruleset and
+  // log a warning per unexpected hit. Transitional keys (declared
+  // in env-self-check.ts) are allowlisted with an explanatory note.
+  // Warnings only — never blocks startup.
+  //
+  // This catches three regression classes:
+  //   1. New contributor adds a secret to .env instead of /setup
+  //   2. A migration is incomplete and leaves a stale credential
+  //   3. User upgraded but their .env was written by an older
+  //      setup.sh that wrote secrets
+  logEnvSelfCheck(selfCheckEnv());
   console.log('');
 
 startTelegram().catch((err: unknown) => {
@@ -172,21 +217,68 @@ startTelegram().catch((err: unknown) => {
     console.error('[NerdAlert] initGmailCredential failed:', err);
   });
 
+  // ── LLM provider keys (v0.5.13.x — keychain-backed) ────────────────────
+  // Pull the OpenRouter / Anthropic keys from the keychain once at boot.
+  // Without this, the first chat request after a server start has to do
+  // the keychain read inline (the lazy-init fallback in resolveOpenRouterKey),
+  // which adds a small latency to the cold path. Eager init keeps the hot
+  // path purely in-memory.
+  //
+  // Both inits are non-blocking (.then) so a slow keychain doesn't delay
+  // the server from listening on its port. The lazy fallbacks inside
+  // callOpenRouter / streamOpenRouter / getLLMConfig handle the case
+  // where a chat request arrives before this resolves.
+  initOpenRouterKey().then(found => {
+    if (found) console.log('[NerdAlert] OpenRouter key loaded from credential store');
+  }).catch((err: unknown) => {
+    console.error('[NerdAlert] initOpenRouterKey failed:', err);
+  });
+
+  initAnthropicKey().then(found => {
+    if (found) console.log('[NerdAlert] Anthropic key loaded from credential store');
+  }).catch((err: unknown) => {
+    console.error('[NerdAlert] initAnthropicKey failed:', err);
+  });
+
+  // ── OpenClaw gateway token ────────────────────────────────────
+  // Eager init for the same latency reason as the LLM keys above.
+  // The lazy fallback inside queryOpenClaw handles cold-start races.
+  initOpenclawCredential().then(found => {
+    if (found) console.log('[NerdAlert] OpenClaw token loaded from credential store');
+  }).catch((err: unknown) => {
+    console.error('[NerdAlert] initOpenclawCredential failed:', err);
+  });
+
   startCron().catch((err: unknown) => {
     console.error('[Cron] Failed to start:', err);
   });
 
+  // ── Reminders engine ────────────────────────────────────────
+  // Starts the 30-second tick loop that fires due reminders. On
+  // first tick, any past-due reminders (server was down when they
+  // should have fired) get delivered with a delayed flag so the
+  // Telegram message includes a "delayed from HH:MM" tag. Separate
+  // module from cron because reminders are one-shot vs recurring
+  // — different table, different lifecycle, different UX.
+  startReminders().catch((err: unknown) => {
+    console.error('[Reminders] Failed to start:', err);
+  });
+
   process.on('SIGTERM', () => {
     console.log('[Server] SIGTERM received — shutting down...');
+    stopReminders();
     stopCron();
     process.exit(0);
   });
 
   process.on('SIGINT', () => {
     console.log('[Server] SIGINT received — shutting down...');
+    stopReminders();
     stopCron();
     process.exit(0);
   });
 });
+
+  });
 
 export default app;

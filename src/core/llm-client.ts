@@ -28,7 +28,7 @@
 //     → endpoint: OLLAMA_HOST/v1/chat/completions (OpenAI-compatible)
 //     → think: false suppresses Qwen3 <think>...</think> traces
 //
-//   MODEL=nvidia/llama-3.1-nemotron-70b-instruct:free   (default)
+//   MODEL=nvidia/nemotron-3-super-120b-a12b:free   (default)
 //     → uses OpenRouter via fetch with OPENROUTER_API_KEY
 //     → model string passed as-is — OpenRouter uses the full path
 //     → endpoint: https://openrouter.ai/api/v1/chat/completions
@@ -289,23 +289,175 @@
 // ============================================================
 
 import Anthropic from '@anthropic-ai/sdk';
+import { getCredential, setCredential } from '../security/credential-store';
 
 // ── Read config from environment ──────────────────────────────
 //
 // MODEL defaults to free Nemotron if not set.
-// This means a fresh install with just an OpenRouter key works
-// out of the box without touching .env beyond what setup.sh creates.
+// API keys (OpenRouter, Anthropic) live in the OS keychain via
+// /setup, NOT in .env — see the credential cache section below.
 
-let activeModel: string = process.env.MODEL ?? 'nvidia/llama-3.1-nemotron-70b-instruct:free';
+let activeModel: string = process.env.MODEL ?? 'nvidia/nemotron-3-super-120b-a12b:free';
 
 export function setActiveModel(model: string): void {
   activeModel = model;
   console.log(`[NerdAlert] Model switched to: ${model}`);
 }
 
-const OR_KEY  = process.env.OPENROUTER_API_KEY ?? '';
-const ANT_KEY = process.env.ANTHROPIC_API_KEY  ?? '';
+/**
+ * Returns the FULL prefixed model string currently active
+ * (e.g. "anthropic/claude-sonnet-4-6", not just "claude-sonnet-4-6").
+ *
+ * `getLLMConfig().model` returns the bare downstream string with
+ * the provider prefix stripped — useful for the SDK call but
+ * useless as a key into the capability map (which keys on the
+ * full prefixed string the user picks in Settings).
+ *
+ * Use this getter when you need to ask "what did the user select?"
+ * rather than "what string do I pass to the SDK?".
+ */
+export function getActiveModel(): string {
+  return activeModel;
+}
+
 const OR_URL  = 'https://openrouter.ai/api/v1/chat/completions';
+
+// ── Credential cache (v0.5.13.x — keychain-backed) ───────────
+//
+// API keys are stored in the OS keychain (or chmod-600 file fallback
+// at ~/.nerdalert/secrets/) via /setup, NEVER in .env. We cache the
+// values once at boot and refresh when /setup writes a new one —
+// security-routes.ts calls initOpenRouterKey() / initAnthropicKey()
+// after a successful credential write so the running process picks
+// up the new value without a restart.
+//
+// Pattern mirrors src/server/soc-clients/wazuh.ts and
+// src/gmail/config.ts. Reading the keychain on every API call would
+// add IPC latency to the chat hot path; caching keeps it free.
+//
+// `cachedAnthropicClient` is rebuilt by initAnthropicKey whenever the
+// key changes, so getLLMConfig() can stay synchronous — it just hands
+// back the cached client. Old clients are GC'd once no caller holds a
+// reference. There is no separate `cachedAnthropicKey` field because
+// the SDK client is the only thing any caller actually needs.
+
+let cachedOpenRouterKey:   string | null = null;
+let cachedAnthropicClient: Anthropic | null = null;
+
+/**
+ * Pull openrouter-key from the credential store and cache it.
+ * Call once at boot (from server/index.ts) and again after /setup
+ * writes a new value (from server/security-routes.ts).
+ *
+ * Legacy migration: if the keychain is empty but process.env has
+ * an OPENROUTER_API_KEY (because the user is upgrading from older
+ * code that read it from .env), copy it into the keychain on first
+ * boot and log a one-time migration notice. The .env line then
+ * becomes inert and can be safely removed.
+ *
+ * Returns true if a credential was found, false otherwise — in
+ * which case callOpenRouter / streamOpenRouter will throw a clear
+ * "key not configured" error to the caller, and the SSE bridge in
+ * ui-routes.ts surfaces it as an error event the user sees.
+ */
+export async function initOpenRouterKey(): Promise<boolean> {
+  // 1. Try the credential store first — the normal post-migration case.
+  try {
+    const value = await getCredential('openrouter-key');
+    if (value) {
+      cachedOpenRouterKey = value;
+      return true;
+    }
+  } catch {
+    // Keychain read failed (rare — e.g. user denied keychain access).
+    // Fall through to legacy migration.
+  }
+
+  // 2. Legacy migration: if OPENROUTER_API_KEY is in process.env
+  //    (older setup.sh wrote it to .env), copy it into the credential
+  //    store so the upgrade is seamless. The user's existing .env
+  //    line stays in place but is now inert; the .env self-check at
+  //    boot will warn them to remove it.
+  const legacy = process.env.OPENROUTER_API_KEY;
+  if (legacy) {
+    try {
+      await setCredential('openrouter-key', legacy);
+      console.log('[NerdAlert] Migrated OPENROUTER_API_KEY from .env to credential store — the .env line can now be safely removed');
+      cachedOpenRouterKey = legacy;
+      return true;
+    } catch (err) {
+      // setCredential failed — fall through to "not found" but warn.
+      console.warn('[NerdAlert] Could not migrate legacy OPENROUTER_API_KEY to credential store:', err);
+    }
+  }
+
+  // 3. No credential available. Cache stays null; callers throw a
+  //    "key not configured" error pointing the user to /setup.
+  cachedOpenRouterKey = null;
+  return false;
+}
+
+/**
+ * Pull anthropic-key from the credential store, cache the value,
+ * and rebuild the Anthropic SDK client. Call once at boot and
+ * again after /setup writes a new value.
+ *
+ * Legacy migration: if the keychain is empty but process.env has
+ * an ANTHROPIC_API_KEY (because the user is upgrading from older
+ * code that read it from .env), copy it into the keychain on first
+ * boot and log a one-time migration notice. The .env line then
+ * becomes inert and can be safely removed.
+ *
+ * The SDK client is constructed eagerly here so getLLMConfig() can
+ * stay synchronous. When the user rotates the key via /setup, the
+ * security route calls this function again, which builds a fresh
+ * client bound to the new key and replaces the cached reference.
+ * Subsequent getLLMConfig() calls return the new client.
+ */
+export async function initAnthropicKey(): Promise<boolean> {
+  // 1. Try the credential store first.
+  try {
+    const value = await getCredential('anthropic-key');
+    if (value) {
+      cachedAnthropicClient = new Anthropic({ apiKey: value });
+      return true;
+    }
+  } catch {
+    // Fall through to legacy migration.
+  }
+
+  // 2. Legacy migration from .env if the user upgraded.
+  const legacy = process.env.ANTHROPIC_API_KEY;
+  if (legacy) {
+    try {
+      await setCredential('anthropic-key', legacy);
+      console.log('[NerdAlert] Migrated ANTHROPIC_API_KEY from .env to credential store — the .env line can now be safely removed');
+      cachedAnthropicClient = new Anthropic({ apiKey: legacy });
+      return true;
+    } catch (err) {
+      console.warn('[NerdAlert] Could not migrate legacy ANTHROPIC_API_KEY to credential store:', err);
+    }
+  }
+
+  // 3. No credential available.
+  cachedAnthropicClient = null;
+  return false;
+}
+
+/**
+ * Lazy resolver for the OpenRouter key. If the cache is empty,
+ * attempt one keychain read; if that still fails, return null.
+ *
+ * Used inside callOpenRouter / streamOpenRouter so a missed boot
+ * init doesn't permanently break the request path — the next
+ * request will trigger the read instead. Mirrors the lazy fallback
+ * inside getWazuhWallState() in src/server/soc-clients/wazuh.ts.
+ */
+async function resolveOpenRouterKey(): Promise<string | null> {
+  if (cachedOpenRouterKey) return cachedOpenRouterKey;
+  await initOpenRouterKey();
+  return cachedOpenRouterKey;
+}
 
 // ── Determine provider from model string ──────────────────────
 //
@@ -349,16 +501,17 @@ export function getLLMConfig(): LLMConfig {
   const modelString = resolveModelString(activeModel, provider);
 
   if (provider === 'anthropic') {
-    if (!ANT_KEY) {
+    if (!cachedAnthropicClient) {
       console.warn(
-        '[NerdAlert] MODEL is set to Anthropic but ANTHROPIC_API_KEY is missing in .env.\n' +
-        '            Set ANTHROPIC_API_KEY or switch MODEL to an OpenRouter model.'
+        '[NerdAlert] MODEL is set to Anthropic but anthropic-key is not configured.\n' +
+        '            Open http://localhost:3773/setup and add your Anthropic API key,\n' +
+        '            or switch MODEL to ollama/* or an OpenRouter model.'
       );
     }
     return {
       provider,
       model:           modelString,
-      anthropicClient: new Anthropic({ apiKey: ANT_KEY }),
+      anthropicClient: cachedAnthropicClient,
     };
   }
 
@@ -377,10 +530,11 @@ export function getLLMConfig(): LLMConfig {
   }
 
   // OpenRouter (default)
-  if (!OR_KEY) {
+  if (!cachedOpenRouterKey) {
     console.warn(
-      '[NerdAlert] OPENROUTER_API_KEY is missing in .env.\n' +
-      '            Get a free key at https://openrouter.ai and add it to .env.'
+      '[NerdAlert] openrouter-key is not configured in the keychain.\n' +
+      '            Open http://localhost:3773/setup and add your OpenRouter API key.\n' +
+      '            (Get a free key at https://openrouter.ai if you don\'t have one.)'
     );
   }
   return {
@@ -390,14 +544,34 @@ export function getLLMConfig(): LLMConfig {
   };
 }
 
-// ── OpenRouter / Ollama message types ────────────────────────
+// ── OpenRouter / Ollama message types ─────────────────────────
 //
 // Both use OpenAI-compatible message format.
-// Content is always a string at this level. Tools are handled separately.
+//
+// `content` is usually a plain string — system prompts, assistant
+// turns, and most user messages. The OpenAI Chat Completions wire
+// format also accepts an array of content parts on user turns when
+// the message carries non-text input (image_url today; audio in
+// the near future). The union type below mirrors that flexibility:
+// existing call sites that build text-only messages keep working
+// unchanged because `string` is still part of the union.
+//
+// Image-bearing user turns get built in server/ui-routes.ts when
+// the active model is vision-capable; the same content array is
+// then forwarded through streamOllama() and runOpenAIAdapter()
+// to the OpenAI-compat /v1 endpoint, which interprets it natively.
+// The pseudo-tool adapter only ever sees text-only content because
+// the capability gate blocks images on every provider that lands
+// on it (text-only OpenRouter free tier).
+
+/** A single content part on a user turn. Mirrors OpenAI's wire format. */
+export type OpenAIContentPart =
+  | { type: 'text';      text: string }
+  | { type: 'image_url'; image_url: { url: string } };
 
 export interface ORMessage {
   role:    'system' | 'user' | 'assistant';
-  content: string;
+  content: string | OpenAIContentPart[];
 }
 
 // ── callOpenRouter ────────────────────────────────────────────
@@ -427,6 +601,19 @@ export async function callOpenRouter(
   model: string
 ): Promise<string> {
 
+  // Pull the OpenRouter key from the cache (or attempt one keychain
+  // read if the boot init missed). Throwing here surfaces a clear
+  // "key not configured" path back to agent.ts → the chat handler
+  // → the SSE error event the user sees, instead of the opaque 401
+  // we'd otherwise get from OpenRouter on an empty Bearer token.
+  const orKey = await resolveOpenRouterKey();
+  if (!orKey) {
+    throw new Error(
+      'OpenRouter key is not configured. Open http://localhost:3773/setup ' +
+      'and add your openrouter-key, or switch MODEL to ollama/* in .env.'
+    );
+  }
+
   // Prepend system prompt as the first message.
   // OpenRouter expects system messages in the messages array,
   // not as a separate parameter like Anthropic does.
@@ -439,7 +626,7 @@ export async function callOpenRouter(
     method:  'POST',
     headers: {
       'Content-Type':  'application/json',
-      'Authorization': `Bearer ${OR_KEY}`,
+      'Authorization': `Bearer ${orKey}`,
       'HTTP-Referer':  'https://nerdalert.local', // OpenRouter asks for a referrer
       'X-Title':       'NerdAlert',               // shows up in OpenRouter dashboard
     },
@@ -447,6 +634,21 @@ export async function callOpenRouter(
       model,
       messages:   fullMessages,
       max_tokens: 1024,
+      // Reasoning OFF on every OpenRouter request. Our models in
+      // the dropdown (Nemotron Super, Nano 12B v2 VL) treat
+      // reasoning as opt-in, not default — so this is harmless
+      // for them and saves the latency cost of generating
+      // reasoning tokens we'd discard anyway (our pseudo-tool
+      // adapter reads only `delta.content`).
+      //
+      // HISTORICAL NOTE: we briefly tried Nemotron 3 Nano Omni
+      // Reasoning here — a model whose operating mode IS
+      // reasoning. Flipping this toggle in either direction on
+      // that model produced either babbling (OFF) or empty
+      // content (ON). We replaced the model rather than the
+      // toggle; see model-capabilities.ts for the full writeup.
+      // https://openrouter.ai/docs/use-cases/reasoning-tokens
+      reasoning:  { enabled: false },
     }),
   });
 
@@ -479,6 +681,18 @@ export async function* streamOpenRouter(
   model: string
 ): AsyncGenerator<string> {
 
+  // Same lazy-resolve pattern as callOpenRouter — see comments there.
+  // Throwing inside an async generator surfaces as a rejection on the
+  // first .next() call; the consumer in ui-routes.ts catches it and
+  // emits an 'error' SSE event so the user sees the missing-key text.
+  const orKey = await resolveOpenRouterKey();
+  if (!orKey) {
+    throw new Error(
+      'OpenRouter key is not configured. Open http://localhost:3773/setup ' +
+      'and add your openrouter-key, or switch MODEL to ollama/* in .env.'
+    );
+  }
+
   const fullMessages: ORMessage[] = [
     { role: 'system', content: systemPrompt },
     ...messages,
@@ -488,7 +702,7 @@ export async function* streamOpenRouter(
     method:  'POST',
     headers: {
       'Content-Type':  'application/json',
-      'Authorization': `Bearer ${OR_KEY}`,
+      'Authorization': `Bearer ${orKey}`,
       'HTTP-Referer':  'https://nerdalert.local',
       'X-Title':       'NerdAlert',
     },
@@ -497,6 +711,11 @@ export async function* streamOpenRouter(
       messages:   fullMessages,
       max_tokens: 1024,
       stream:     true,   // enables SSE streaming from OpenRouter
+      // Reasoning OFF — see callOpenRouter for the rationale and
+      // history. Short version: our OR models treat reasoning as
+      // opt-in; disabling here is a no-op for them and avoids
+      // generating tokens our parser ignores.
+      reasoning:  { enabled: false },
     }),
   });
 

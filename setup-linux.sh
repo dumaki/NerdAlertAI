@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # setup-linux.sh
-# NerdAlert setup for Ubuntu/Linux (Sherman's PC)
+# NerdAlert setup for Ubuntu/Linux (Optiplex / production box)
 #
 # Run this once on the Linux machine:
 #   bash setup-linux.sh
@@ -9,13 +9,23 @@
 # What it does:
 #   1. Checks Node.js version (18+ required)
 #   2. npm install
-#   3. Generates a server auth token
-#   4. Creates .env with all required values
-#   5. Prompts for Telegram bot token + chat ID
-#   6. Prompts for model provider (Anthropic or OpenRouter)
+#   3. Probes credential-store backend (keytar vs file fallback)
+#   4. Writes a minimal .env with NON-SECRET config only
+#      (port, MODEL string, optional Telegram chat ID)
+#   5. Prompts for the Telegram chat ID (not a secret — it's an
+#      identifier that locks the bot to one user)
+#   6. Prompts for model provider preference (writes MODEL=...)
 #   7. Installs systemd service so the bot starts on boot
 #   8. Builds TypeScript
 #   9. Starts the service
+#
+# What it does NOT do (post credential-store migration):
+#   - It does NOT generate or write SERVER_AUTH_TOKEN. The
+#     server auto-generates this on first boot and stores it
+#     in the keychain (or chmod-600 file fallback).
+#   - It does NOT prompt for OpenRouter, Anthropic, OpenClaw,
+#     or Telegram bot tokens. Add those via /setup after starting
+#     the server. All four are stored in the OS keychain.
 # ============================================================
 
 set -e
@@ -33,7 +43,7 @@ echo "  ██║╚██╗██║██╔══╝  ██╔══██�
 echo "  ██║ ╚████║███████╗██║  ██║██████╔╝██║  ██║███████╗███████╗██║  ██║   ██║   "
 echo "  ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝   ╚═╝   "
 echo ""
-echo "  Linux Setup // Sherman's PC"
+echo "  Linux Setup"
 echo ""
 
 # ── 1. Node version check ─────────────────────────────────────
@@ -60,39 +70,95 @@ cd "$NERDALERT_DIR"
 npm install --silent
 echo "  ✓ Dependencies installed"
 
-# ── 3. Check for existing .env ────────────────────────────────
+# ── 3. Probe credential-store backend ─────────────────────────
+# On a headless Linux box without an unlocked GNOME Keyring
+# session, keytar will fall through to file storage at
+# ~/.nerdalert/secrets/<name>.json (chmod 600). Either backend
+# works fine for the credential store; we run the probe here
+# so the user knows up front which one they'll be using.
+echo ""
+echo "→ Testing credential store..."
+mkdir -p "$HOME/.nerdalert"
+chmod 700 "$HOME/.nerdalert"
+
+PROBE_SCRIPT="$NERDALERT_DIR/.keychain-probe.js"
+cat > "$PROBE_SCRIPT" <<'PROBE_EOF'
+(async () => {
+  let keytar;
+  try { keytar = require('keytar'); }
+  catch (e) {
+    console.log('RESULT=file');
+    console.log('REASON=keytar load failed: ' + (e && e.message ? e.message : 'unknown'));
+    process.exit(0);
+  }
+  const SERVICE = 'nerdalert';
+  const KEY = '__probe__';
+  const VAL = 'probe-' + Date.now();
+  try {
+    await keytar.setPassword(SERVICE, KEY, VAL);
+    const got = await keytar.getPassword(SERVICE, KEY);
+    await keytar.deletePassword(SERVICE, KEY);
+    if (got === VAL) {
+      console.log('RESULT=keychain');
+    } else {
+      console.log('RESULT=file');
+      console.log('REASON=probe round-trip mismatch');
+    }
+  } catch (e) {
+    console.log('RESULT=file');
+    console.log('REASON=' + (e && e.message ? e.message : 'unknown'));
+  }
+})();
+PROBE_EOF
+
+PROBE_OUTPUT=$(cd "$NERDALERT_DIR" && node "$PROBE_SCRIPT" 2>&1)
+rm -f "$PROBE_SCRIPT"
+
+BACKEND=$(echo "$PROBE_OUTPUT" | grep '^RESULT=' | head -1 | cut -d= -f2)
+
+if [ "$BACKEND" = "keychain" ]; then
+  echo "  ✓ Keychain (libsecret/GNOME Keyring) available"
+  echo "keychain" > "$HOME/.nerdalert/credential-backend.txt"
+  chmod 600 "$HOME/.nerdalert/credential-backend.txt"
+else
+  echo "  ✓ Using file backend at ~/.nerdalert/secrets/ (expected on headless boxes)"
+  echo "file" > "$HOME/.nerdalert/credential-backend.txt"
+  chmod 600 "$HOME/.nerdalert/credential-backend.txt"
+  mkdir -p "$HOME/.nerdalert/secrets"
+  chmod 700 "$HOME/.nerdalert/secrets"
+fi
+
+# ── 4. Check for existing .env ────────────────────────────────
 echo ""
 if [ -f ".env" ]; then
-  echo "→ Existing .env found — skipping token generation"
-  echo "  (Delete .env and re-run setup if you want to reset)"
+  echo "→ Existing .env found — leaving it alone"
+  echo "  (Delete .env and re-run setup if you want to start fresh)"
 else
-  echo "→ Creating .env..."
+  echo "→ Creating .env (non-secret config only)..."
 
-  # Generate server auth token
-  SERVER_TOKEN=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")
-
-  cat > .env << EOF
-# NerdAlert configuration
-# Generated by setup-linux.sh on $(date)
-
-# Server auth token — keep this private
-SERVER_AUTH_TOKEN=${SERVER_TOKEN}
+  cat > .env << 'EOF'
+# ============================================================
+# NerdAlert configuration (non-secret)
+# ============================================================
+# This file holds NON-SECRET configuration only. Secrets live in
+# the OS keychain (or chmod-600 files at ~/.nerdalert/secrets/)
+# via the /setup panel — http://localhost:3773/api/setup/panel.
+#
+# The server bearer token (SERVER_AUTH_TOKEN) is auto-generated
+# on first boot and stored in the credential store. It is NOT
+# written to this file.
 
 # Model — uncomment one:
 # MODEL=anthropic/claude-sonnet-4-6
 MODEL=nvidia/llama-3.1-nemotron-70b-instruct:free
 
-# API keys — fill in what you're using:
-OPENROUTER_API_KEY=
-ANTHROPIC_API_KEY=
-
-# Telegram bot — required for alerts and two-way chat
-TELEGRAM_BOT_TOKEN=
+# Telegram chat ID (NOT a secret — it's an identifier that locks
+# the bot to one user). The bot TOKEN goes through /setup, not
+# this file.
 TELEGRAM_CHAT_ID=
 
-# OpenClaw gateway (for SOC tools) — set if running OpenClaw
+# OpenClaw gateway URL (the URL is config; the TOKEN goes in /setup)
 OPENCLAW_URL=
-OPENCLAW_TOKEN=
 
 # Gmail (optional)
 # GMAIL_CONFIG_PATH=~/.nerdalert/secrets/email-gmail.json
@@ -102,71 +168,82 @@ EOF
   echo "  ✓ .env created"
 fi
 
-# ── 4. Telegram setup ─────────────────────────────────────────
+# ── 5. Telegram chat ID ───────────────────────────────────────
+# Chat ID stays in .env because it's not a secret — it's an
+# identifier that locks the bot to one user. The bot TOKEN is
+# entered via the /setup panel after the server starts.
 echo ""
-echo "→ Telegram setup"
+echo "→ Telegram chat ID"
 echo ""
 
-# Check if already set
-EXISTING_TOKEN=$(grep "^TELEGRAM_BOT_TOKEN=" .env | cut -d= -f2)
-if [ -z "$EXISTING_TOKEN" ]; then
-  echo "  You need a Telegram bot token from @BotFather."
-  echo "  1. Open Telegram and message @BotFather"
-  echo "  2. Send /newbot and follow the prompts"
-  echo "  3. Copy the token it gives you"
-  echo ""
-  read -rp "  Paste your bot token: " BOT_TOKEN
-  sed -i "s|^TELEGRAM_BOT_TOKEN=.*|TELEGRAM_BOT_TOKEN=${BOT_TOKEN}|" .env
-  echo "  ✓ Bot token saved"
-else
-  echo "  ✓ Bot token already set"
-fi
-
-echo ""
 EXISTING_CHAT=$(grep "^TELEGRAM_CHAT_ID=" .env | cut -d= -f2)
 if [ -z "$EXISTING_CHAT" ]; then
+  echo "  The chat ID locks the bot to one user (you). The bot"
+  echo "  silently ignores messages from any other chat."
+  echo ""
   echo "  To get your chat ID:"
-  echo "  1. Start a conversation with your bot in Telegram"
-  echo "  2. Send any message to it"
+  echo "  1. Add your bot via /setup AFTER this script finishes:"
+  echo "     http://localhost:3773/api/setup/panel  →  telegram-bot-token"
+  echo "  2. Start a conversation with your bot in Telegram, send any message"
   echo "  3. Visit: https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates"
   echo "  4. Find 'chat':{'id': XXXXXXX} in the response"
   echo ""
-  read -rp "  Paste your chat ID: " CHAT_ID
-  sed -i "s|^TELEGRAM_CHAT_ID=.*|TELEGRAM_CHAT_ID=${CHAT_ID}|" .env
-  echo "  ✓ Chat ID saved"
+  read -rp "  Paste your chat ID (or skip and edit .env later): " CHAT_ID
+  if [ -n "$CHAT_ID" ]; then
+    sed -i "s|^TELEGRAM_CHAT_ID=.*|TELEGRAM_CHAT_ID=${CHAT_ID}|" .env
+    echo "  ✓ Chat ID saved"
+  else
+    echo "  ⚠ Skipped — set TELEGRAM_CHAT_ID in .env before starting Telegram"
+  fi
 else
   echo "  ✓ Chat ID already set"
 fi
 
-# ── 5. Model / API key setup ──────────────────────────────────
+# ── 6. Model selection (config only — keys go in /setup) ──────
 echo ""
-echo "→ Model setup"
+echo "→ Model selection"
 echo ""
-echo "  Which model do you want to use?"
-echo "  1) Nemotron 70B (free, OpenRouter) — recommended for this machine"
-echo "  2) Claude Sonnet 4.6 (Anthropic API key required)"
+echo "  Which model do you want as the default?"
+echo "  1) Nemotron 70B (free, OpenRouter)"
+echo "  2) Claude Sonnet 4.6 (Anthropic)"
+echo "  3) Mistral Small 3.2 (local Ollama)"
 echo ""
-read -rp "  Choice [1/2]: " MODEL_CHOICE
+echo "  This only sets the MODEL string in .env. The actual API key"
+echo "  goes through /setup in your browser after the server starts."
+echo ""
+read -rp "  Choice [1/2/3]: " MODEL_CHOICE
 
-if [ "$MODEL_CHOICE" = "2" ]; then
-  read -rp "  Paste your Anthropic API key: " ANT_KEY
-  sed -i "s|^MODEL=.*|MODEL=anthropic/claude-sonnet-4-6|" .env
-  sed -i "s|^ANTHROPIC_API_KEY=.*|ANTHROPIC_API_KEY=${ANT_KEY}|" .env
-  echo "  ✓ Claude configured"
-else
-  read -rp "  Paste your OpenRouter API key (free at openrouter.ai): " OR_KEY
-  sed -i "s|^MODEL=.*|MODEL=nvidia/llama-3.1-nemotron-70b-instruct:free|" .env
-  sed -i "s|^OPENROUTER_API_KEY=.*|OPENROUTER_API_KEY=${OR_KEY}|" .env
-  echo "  ✓ Nemotron configured"
-fi
+case "$MODEL_CHOICE" in
+  2)
+    sed -i "s|^MODEL=.*|MODEL=anthropic/claude-sonnet-4-6|" .env
+    echo "  ✓ MODEL set to anthropic/claude-sonnet-4-6"
+    echo "  → Add your anthropic-key via /setup before chatting"
+    ;;
+  3)
+    sed -i "s|^MODEL=.*|MODEL=ollama/mistral-small3.2|" .env
+    echo "  ✓ MODEL set to ollama/mistral-small3.2"
+    echo "  → Make sure OLLAMA_HOST is set in .env (e.g. http://192.168.10.100:11434)"
+    if ! grep -q "^OLLAMA_HOST=" .env; then
+      echo "" >> .env
+      echo "# Local Ollama instance" >> .env
+      echo "OLLAMA_HOST=" >> .env
+      echo "  → Added empty OLLAMA_HOST line to .env — set the URL there"
+    fi
+    ;;
+  *)
+    sed -i "s|^MODEL=.*|MODEL=nvidia/llama-3.1-nemotron-70b-instruct:free|" .env
+    echo "  ✓ MODEL set to nvidia/llama-3.1-nemotron-70b-instruct:free"
+    echo "  → Add your openrouter-key via /setup before chatting"
+    ;;
+esac
 
-# ── 6. Build TypeScript ───────────────────────────────────────
+# ── 7. Build TypeScript ───────────────────────────────────────
 echo ""
 echo "→ Building TypeScript..."
 npm run build
 echo "  ✓ Build complete"
 
-# ── 7. Shell alias (bashrc) ───────────────────────────────────
+# ── 8. Shell aliases ──────────────────────────────────────────
 echo ""
 echo "→ Adding shell aliases to ~/.bashrc..."
 
@@ -185,7 +262,7 @@ else
   echo "  ✓ Aliases already present"
 fi
 
-# ── 8. systemd service ────────────────────────────────────────
+# ── 9. systemd service ────────────────────────────────────────
 echo ""
 echo "→ Installing systemd service..."
 
@@ -206,10 +283,21 @@ echo ""
 echo "  ══════════════════════════════════════════"
 echo "  Setup complete."
 echo ""
+echo "  Next steps:"
+echo "  1. Open http://localhost:3773/api/setup/panel in a browser"
+echo "     (or via the host that can reach this box)"
+echo "  2. Add your credentials — all live in the OS keychain:"
+echo "        • telegram-bot-token  (required for Telegram bot)"
+echo "        • openrouter-key  or  anthropic-key  (whichever model you chose)"
+echo "        • openclaw-token  (if running OpenClaw + SOC tools)"
+echo "        • wazuh-indexer-password, crowdsec-* tokens, etc. as needed"
+echo ""
+echo "  The server bearer token was auto-generated on first boot"
+echo "  and stored in the credential store — the browser UI will"
+echo "  pick it up automatically when you open http://localhost:3773"
+echo ""
 echo "  Check status:  nerd-status"
 echo "  View logs:     nerd-logs"
 echo "  Restart:       nerd-restart"
-echo ""
-echo "  Test Telegram by sending a message to your bot."
 echo "  ══════════════════════════════════════════"
 echo ""

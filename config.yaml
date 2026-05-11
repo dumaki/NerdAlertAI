@@ -28,10 +28,103 @@ server:
   port: 3773               # Overridden by SERVER_PORT in .env if set
   local_only: true         # Never accept connections from outside localhost
 
+# --- TOOL GROUPS ---
+# Many tools belong to a service (Wazuh has 5 tools, Pi-hole has 6, etc.).
+# A group's enabled/trust_level applies to every tool whose .name starts
+# with the group's prefix.
+#
+# To disable an entire service:  set its group enabled: false.
+# To override a single tool:      add it under `tools:` below — per-tool
+#                                 entries always win over a group match.
+#
+# trust_level here is a floor-raise: it can RAISE the requirement above
+# a tool's compiled minimum, but never lower it. Resolution lives in
+# src/tools/registry.ts (resolveToolPolicy).
+tool_groups:
+  wazuh:
+    prefix: "wazuh_"
+    enabled: false
+    trust_level: 1
+
+  pihole:
+    prefix: "pihole_"
+    enabled: false
+    trust_level: 1
+
+  crowdsec:
+    prefix: "crowdsec_"
+    enabled: false
+    trust_level: 1
+
+  pfsense:
+    prefix: "pfsense_"
+    enabled: false
+    trust_level: 1
+
+  fail2ban:
+    prefix: "fail2ban_"
+    enabled: false
+    trust_level: 1
+
+  ntopng:
+    prefix: "ntopng_"
+    enabled: false
+    trust_level: 1
+
+  nmap:
+    prefix: "nmap_"
+    enabled: false       # Active probes — opt in deliberately
+    trust_level: 2       # Compiled minimum for nmap_* tools
+
+  loki:
+    prefix: "loki_"
+    enabled: false
+    trust_level: 1
+
+  influxdb:
+    prefix: "influxdb_"
+    enabled: false
+    trust_level: 1
+
 # --- TOOLS ---
+# Per-tool overrides, keyed by exact tool.name. Wins over tool_groups above.
 # enabled: true/false controls whether the agent can see/use the tool at all
-# trust_level: minimum trust level required to call this tool
+# trust_level: minimum trust level required to call this tool (floor-raise)
 tools:
+  calculate:
+    enabled: true
+    trust_level: 0         # Pure CPU, no network, no credentials — safe at all
+                           # trust levels. Prevents arithmetic hallucinations.
+
+  wikipedia:
+    enabled: true
+    trust_level: 1         # Outbound HTTP to en.wikipedia.org, no auth.
+                           # Same trust profile as weather and web tools.
+
+  currency:
+    enabled: true
+    trust_level: 1         # Outbound HTTP to api.frankfurter.dev, no auth.
+                           # ECB reference rates, daily updates. Same trust
+                           # profile as wikipedia / weather / maps.
+
+  reminders:
+    enabled: true
+    trust_level: 1         # Writes to data/reminders.db and fires via Telegram.
+                           # No external system access beyond Telegram (itself L1).
+                           # One-shot only — recurring schedules belong to cron_manager.
+
+  maps:
+    enabled: true
+    trust_level: 1         # Outbound HTTP to Nominatim + OSRM, no auth.
+                           # Same trust profile as wikipedia and weather.
+
+  memory:
+    enabled: true
+    trust_level: 1         # Read at L1; write actions live in the wrapper at L1
+                           # too (capture/supersede are not gated server-side
+                           # because the engine has supersede/decay for recovery).
+                           # Per-action gating is a v0.7 follow-up.
+
   weather:
     enabled: true
     trust_level: 1
@@ -75,18 +168,6 @@ tools:
   radarr:
     enabled: false
     trust_level: 4
-
-  soc_wazuh:
-    enabled: false
-    trust_level: 1
-
-  soc_pihole:
-    enabled: false
-    trust_level: 1
-
-  soc_grafana:
-    enabled: false
-    trust_level: 1
 
   ssh:
     enabled: false         # Level 5 — never on by default, session-unlock only

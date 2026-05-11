@@ -517,6 +517,159 @@
     }
 
     /* ==========================================================
+       TOPBAR DROPDOWNS — v0.5.16 Phase 2a
+       ==========================================================
+       Two identity/context selectors between the logo and the
+       status indicator. Personality on the left (who you're
+       talking to), model on the right (what's answering).
+
+       Trigger button has the existing nav-btn aesthetic plus a
+       chevron and a wider label area. Menu opens below on
+       click and closes on outside-click or after selection.
+       Z-index 200 sits above the topbar (100) but below the
+       onboarding overlay (10000).
+       ========================================================== */
+
+    .topbar-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: 8px;
+    }
+
+    .topbar-dropdown {
+      position: relative;
+    }
+
+    .topbar-dropdown-trigger {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 10px 5px 12px;
+      min-width: 130px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text);
+      background: transparent;
+      border: 1px solid var(--border-mid);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      border-radius: 1px;
+    }
+
+    .topbar-dropdown-trigger:hover,
+    .topbar-dropdown.open .topbar-dropdown-trigger {
+      color: var(--cyan);
+      border-color: var(--cyan-mid);
+      background: var(--cyan-dim);
+      text-shadow: 0 0 6px var(--cyan);
+    }
+
+    .topbar-dropdown-trigger .dropdown-label {
+      flex: 1;
+      text-align: left;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 180px;
+    }
+
+    .topbar-dropdown-trigger .dropdown-chev {
+      font-size: 8px;
+      color: var(--text-dim);
+      transition: transform var(--transition-fast);
+    }
+
+    .topbar-dropdown.open .topbar-dropdown-trigger .dropdown-chev {
+      transform: rotate(180deg);
+      color: var(--cyan);
+    }
+
+    .topbar-dropdown-menu {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      min-width: 240px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--cyan-mid);
+      border-radius: 1px;
+      padding: 4px;
+      display: none;
+      z-index: 200;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6),
+                  0 0 12px var(--cyan-glow);
+    }
+
+    .topbar-dropdown.open .topbar-dropdown-menu {
+      display: block;
+    }
+
+    .topbar-dropdown-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      font-family: var(--font-mono);
+      cursor: pointer;
+      border-radius: 1px;
+      transition: background var(--transition-fast);
+    }
+
+    .topbar-dropdown-item:hover {
+      background: var(--cyan-dim);
+    }
+
+    .topbar-dropdown-item.active {
+      background: var(--cyan-dim);
+    }
+
+    .topbar-dropdown-item .item-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .topbar-dropdown-item-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .topbar-dropdown-item-name {
+      font-family: var(--font-display);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      color: var(--text);
+    }
+
+    .topbar-dropdown-item-sub {
+      font-size: 9px;
+      color: var(--text-dim);
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Active + hover bump the subtitle one step brighter so the
+       selected option is clearly readable. Non-active items stay
+       at --text-dim so the hierarchy (name dominant, subtitle
+       supporting) is preserved. */
+    .topbar-dropdown-item:hover .topbar-dropdown-item-sub,
+    .topbar-dropdown-item.active .topbar-dropdown-item-sub {
+      color: var(--text);
+    }
+
+    .topbar-dropdown-item-check {
+      font-size: 10px;
+      color: var(--cyan);
+      flex-shrink: 0;
+    }
+
+    /* ==========================================================
        SIDEBAR
        ========================================================== */
 
@@ -652,6 +805,266 @@
       height: 1px;
       background: var(--border);
       margin: 4px 0;
+    }
+
+    /* ==========================================================
+       SIDEBAR — v0.5.16 Phase 2b additions
+       ==========================================================
+       Search input, past-chats list, and module dock. The list
+       gets flex: 1 so it consumes whatever vertical space the
+       agent card + search + host + cron don't take. The dock
+       sticks to the bottom via being the last flex child.
+       ========================================================== */
+
+    .sidebar-search {
+      padding: 10px 12px 4px;
+    }
+
+    .sidebar-search input {
+      width: 100%;
+      background: var(--bg-base);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 5px 8px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      border-radius: 1px;
+      outline: none;
+      transition: border-color var(--transition-fast);
+    }
+    .sidebar-search input:focus {
+      border-color: var(--cyan-mid);
+    }
+    .sidebar-search input::placeholder {
+      color: var(--text-muted);
+    }
+
+    /* Past chats container — flex: 1 to absorb remaining space.
+       min-height: 0 is critical: without it, the flex child won't
+       shrink below its content size, and the inner scroll never
+       activates.
+
+       The border-top here is what gives Scheduled Jobs its "boxed"
+       look — it serves as the visual bottom of the cron-panel
+       above. Matches the same pattern host-panel uses against
+       cron-panel. */
+    .past-chats-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+      border-top: 1px solid var(--border);
+      margin-top: 8px;
+    }
+
+    .past-chats-list {
+      flex: 1;
+      overflow-y: auto;
+      padding-bottom: 6px;
+    }
+
+    .past-chat-group {
+      padding: 10px 12px 4px;
+      font-size: 8px;
+      color: var(--text-muted);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+
+    .past-chat-item {
+      padding: 7px 12px 7px 14px;
+      cursor: pointer;
+      border-left: 2px solid transparent;
+      transition: all var(--transition-fast);
+      line-height: 1.35;
+    }
+    .past-chat-item:hover {
+      background: rgba(255,255,255,0.02);
+      border-left-color: var(--cyan-mid);
+    }
+    .past-chat-item.active {
+      background: var(--cyan-dim);
+      border-left-color: var(--cyan);
+    }
+
+    .past-chat-title {
+      font-size: 11px;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .past-chat-item.active .past-chat-title {
+      color: var(--cyan);
+      text-shadow: 0 0 6px var(--cyan-glow);
+    }
+
+    .past-chat-meta {
+      display: flex;
+      gap: 5px;
+      margin-top: 2px;
+      font-size: 9px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .past-chat-meta .meta-dot {
+      color: var(--text-muted);
+    }
+
+    .past-chat-empty {
+      padding: 14px 14px;
+      font-size: 10px;
+      color: var(--text-muted);
+      font-style: italic;
+      line-height: 1.5;
+    }
+
+    /* Past-chats header row — holds the section label and the
+       "+ NEW" button on a single row. */
+    .past-chats-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-right: 8px;
+    }
+    .past-chats-header .sidebar-section {
+      /* v0.5.16 Phase 2c polish: match the cron-panel-header /
+         host-panel-header typography so "Past chats" reads as
+         a peer category on the panel, not a smaller subheader.
+         Same size, weight, letter-spacing, and padding as the
+         collapsible card headers above it. */
+      padding: 6px 16px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+    }
+
+    .new-chat-btn {
+      font-family: var(--font-mono);
+      font-size: 8px;
+      letter-spacing: 1.5px;
+      color: var(--cyan);
+      background: transparent;
+      border: 1px solid var(--cyan-dim);
+      padding: 3px 8px;
+      cursor: pointer;
+      border-radius: 1px;
+      transition: all var(--transition-fast);
+    }
+    .new-chat-btn:hover {
+      background: var(--cyan-dim);
+      border-color: var(--cyan-mid);
+      box-shadow: 0 0 6px var(--cyan-glow);
+    }
+
+    /* Module dock — small icon buttons at the very bottom of the
+       sidebar. Each one switches a view. Active state mirrors the
+       cyan-dim treatment the topbar dropdowns use, for visual
+       consistency across the two nav surfaces. */
+    .module-dock {
+      border-top: 1px solid var(--border);
+      padding: 8px 10px;
+      display: flex;
+      gap: 6px;
+      background: var(--bg-base);
+      flex-shrink: 0;
+    }
+
+    .dock-icon {
+      flex: 1;
+      height: 34px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      cursor: pointer;
+      border-radius: 1px;
+      transition: all var(--transition-fast);
+      font-family: var(--font-mono);
+      font-size: 14px;
+      position: relative;
+      padding: 0;
+    }
+    .dock-icon:hover {
+      color: var(--cyan);
+      border-color: var(--cyan-mid);
+      background: var(--cyan-dim);
+    }
+    .dock-icon.active {
+      color: var(--cyan);
+      border-color: var(--cyan);
+      background: var(--cyan-dim);
+      text-shadow: 0 0 6px var(--cyan);
+    }
+
+    .dock-icon-glyph {
+      line-height: 1;
+    }
+
+    /* Notification dot on dock icons — reuses email-badge / soc-badge
+       IDs from the old sidebar items so any future wiring lands here
+       unchanged. */
+    .dock-icon .dock-badge {
+      position: absolute;
+      top: 3px;
+      right: 3px;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--amber);
+      box-shadow: 0 0 4px var(--amber);
+    }
+    .dock-icon .dock-badge.alert {
+      background: var(--red);
+      box-shadow: 0 0 4px var(--red);
+      animation: pulse 1.5s infinite;
+    }
+
+    /* Module toggle hides the dock icon entirely. Module backend
+       (cron jobs, poll loops, etc.) keeps running — this is
+       purely a visibility decision controlled by Settings.
+       v0.5.17 pre3. */
+    .dock-icon-hidden {
+      display: none;
+    }
+
+    /* Dock tooltip — themed replacement for the browser's native
+       title attribute popup (which is slow, unstyled, and clashes
+       with the rest of the UI). Pulls its label from aria-label
+       (which also remains the accessibility label for screen
+       readers, so this is a pure upgrade over title=).
+
+       v0.5.17 pre4 used a CSS-only ::after pseudo-element, but
+       the sidebar's overflow:hidden (needed by past-chats flex
+       layout in Phase 2b) clipped the tooltip whenever it
+       extended past the sidebar's right edge — most visibly on
+       the Settings icon. Fix: lift the tooltip out of the sidebar
+       entirely by making it position:fixed and appending a single
+       shared element to document.body. setupDockTooltips wires the
+       hover positioning. */
+    .dock-tooltip {
+      position: fixed;
+      padding: 4px 8px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--cyan);
+      background: var(--bg-deepest);
+      border: 1px solid var(--cyan-mid);
+      border-radius: 1px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity var(--transition-fast);
+      z-index: 9999;
+      text-shadow: 0 0 4px var(--cyan-glow);
+      transform: translate(-50%, -100%);
     }
 
     /* ==========================================================
@@ -1011,6 +1424,75 @@
     }
     .upload-chip-x:hover {
       color: var(--red);
+    }
+
+    /* Image-chip variant. Replaces the 📎 text icon with a 18×18
+       thumbnail of the image itself (drawn from a data: URL, no
+       network round-trip), and uses the cyan colorway for the
+       border so users can tell at a glance which chips are bound
+       for the model (image-chip, with picture) versus the project
+       inbox (default chip, with paperclip). */
+    .upload-chip.image-chip .upload-chip-icon {
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      border-radius: 2px;
+      border: 1px solid var(--cyan-mid);
+    }
+    .upload-chip.image-chip .upload-chip-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    /* Vision-required card — appears inline in chat when the user
+       attaches an image to a non-vision-capable model. The button
+       switches model and auto-resends with images intact. After the
+       click resolves, the card grays out as a record of the
+       redirection. */
+    .vision-required-card {
+      margin: 4px 0;
+      padding: 12px 14px;
+      background: var(--cyan-dim);
+      border: 1px solid var(--cyan-mid);
+      border-left: 2px solid var(--cyan);
+      border-radius: 2px;
+      font-size: 11px;
+      color: var(--cyan);
+      line-height: 1.5;
+    }
+    .vision-required-card .vision-required-msg {
+      margin-bottom: 10px;
+    }
+    .vision-switch-btn {
+      padding: 6px 12px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--cyan);
+      background: transparent;
+      border: 1px solid var(--cyan);
+      cursor: pointer;
+      border-radius: 1px;
+      transition: all var(--transition-fast);
+    }
+    .vision-switch-btn:hover:not(:disabled) {
+      background: var(--cyan-glow);
+      text-shadow: 0 0 6px var(--cyan);
+    }
+    .vision-switch-btn:disabled {
+      opacity: 0.5;
+      cursor: wait;
+    }
+    .vision-required-card.resolved {
+      opacity: 0.4;
+      pointer-events: none;
     }
 
     /* ==========================================================
@@ -1450,84 +1932,71 @@
       margin-bottom: 8px;
     }
 
-    .settings-agent-list {
+    /* ── Trust levels list ── v0.5.17 pre6
+       Expanded display: all 6 levels (L0–L5) visible with the
+       full title + description for each. Active level gets a
+       cyan border + cyan-dim background + CURRENT badge so it's
+       obvious which one is in effect. Replaces the single-line
+       .settings-trust-display from earlier versions. */
+    .trust-levels-list {
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 4px;
     }
-
-    .settings-agent-card {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 8px 10px;
-      border-radius: 2px;
-      cursor: pointer;
-      transition: all var(--transition-fast);
-      background: var(--bg-base);
-    }
-
-    .settings-agent-card:hover {
-      background: var(--bg-elevated);
-    }
-
-    .settings-agent-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-
-    .settings-agent-info {
-      flex: 1;
-      min-width: 0;
-    }
-
-    .settings-agent-name {
-      font-family: var(--font-display);
-      font-size: 9px;
-      font-weight: 700;
-      letter-spacing: 2px;
-    }
-
-    .settings-agent-title {
-      font-size: 9px;
-      color: var(--text-muted);
-      margin-top: 2px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .settings-agent-check {
-      font-size: 10px;
-      color: var(--cyan);
-      flex-shrink: 0;
-    }
-
-    .settings-trust-display {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 8px 10px;
+    .trust-level-row {
+      padding: 6px 10px;
       background: var(--bg-base);
       border: 1px solid var(--border);
-      border-radius: 2px;
+      border-radius: 1px;
+      font-family: var(--font-mono);
     }
-
-    .settings-trust-value {
-      font-family: var(--font-display);
+    .trust-level-row.active {
+      background: var(--cyan-dim);
+      border-color: var(--cyan);
+    }
+    .trust-level-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
       font-size: 9px;
-      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+    }
+    .trust-level-id {
       color: var(--cyan);
-      letter-spacing: 2px;
+      font-weight: 700;
       flex-shrink: 0;
     }
-
-    .settings-trust-note {
+    .trust-level-title {
+      color: var(--text);
+    }
+    .trust-level-row.active .trust-level-title {
+      color: var(--cyan);
+    }
+    .trust-level-current {
+      margin-left: auto;
+      font-size: 8px;
+      color: var(--cyan);
+      letter-spacing: 2px;
+      text-shadow: 0 0 4px var(--cyan-glow);
+      flex-shrink: 0;
+    }
+    .trust-level-desc {
+      margin-top: 3px;
+      font-size: 9px;
+      line-height: 1.5;
+      color: var(--text-dim);
+    }
+    .trust-level-row.active .trust-level-desc {
+      color: var(--text);
+    }
+    .trust-levels-note {
+      margin-top: 8px;
       font-size: 9px;
       color: var(--text-muted);
+      letter-spacing: 1px;
       line-height: 1.4;
+      text-align: center;
     }
 
     .settings-clear-btn {
@@ -1550,36 +2019,265 @@
       border-color: var(--red);
     }
 
-    /* ── Model selector ── */
-    .settings-model-select {
+    /* ── Quick action buttons ── v0.5.17 pre5
+       Stacked full-width buttons in the Settings QUICK ACTIONS
+       section. Visually distinct from .settings-clear-btn (which
+       is red/destructive) — these are cyan/neutral, the same
+       "action that does something useful" treatment as the
+       export-panel buttons. Full width per button (rather than
+       flex-row side-by-side) so longer labels like SETUP
+       CREDENTIALS don't get squeezed at the default sidebar
+       width of 320px. */
+    .settings-actions-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .settings-action-btn {
+      width: 100%;
+      padding: 9px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      text-align: center;
+      color: var(--cyan);
+      background: transparent;
+      border: 1px solid var(--cyan-mid);
+      border-radius: 1px;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .settings-action-btn:hover {
+      background: var(--cyan-dim);
+      border-color: var(--cyan);
+    }
+
+    /* ── Module toggles ── v0.5.17 pre3
+       Each row is the module's literal label. Click flips the
+       state: bright accent text + phosphor glow when ON, dim
+       text when OFF. The actual hide/show happens in JS by
+       toggling .dock-icon-hidden on the matching dock icon. */
+    .settings-modules-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .settings-module-row {
+      display: block;
       width: 100%;
       padding: 8px 10px;
       font-family: var(--font-mono);
       font-size: 10px;
-      letter-spacing: 1px;
-      color: var(--cyan);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      text-align: left;
       background: var(--bg-base);
+      border: 1px solid var(--border);
+      border-radius: 1px;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .settings-module-row:hover {
+      border-color: var(--cyan-mid);
+      background: var(--bg-elevated);
+    }
+    .settings-module-row.on {
+      color: var(--cyan);
+      text-shadow: 0 0 4px var(--cyan-glow);
+    }
+    .settings-module-row.off {
+      color: var(--text-dim);
+    }
+
+    /* ── About section ── v0.5.17 pre2
+       Lives at the bottom of the Settings panel. Three lines:
+       version (from window.NERDALERT_CONFIG.version, originally
+       package.json), repo link (opens in new tab), and a storage
+       readout (refreshed on every Settings open via loadPastChats).
+    */
+    .settings-about {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 8px 10px;
+      background: var(--bg-base);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      line-height: 1.6;
+    }
+    .settings-about-version {
+      color: var(--text-bright);
+      letter-spacing: 1px;
+    }
+    .settings-about-link {
+      color: var(--cyan);
+      text-decoration: none;
+      letter-spacing: 0.5px;
+      transition: text-shadow var(--transition-fast);
+      word-break: break-all;
+    }
+    .settings-about-link:hover {
+      text-shadow: 0 0 6px var(--cyan-glow);
+    }
+    .settings-about-storage {
+      color: var(--text-muted);
+      letter-spacing: 0.5px;
+    }
+
+    /* ==========================================================
+       EXPORT PANEL — v0.5.16 Phase 3
+       Right-panel view for downloading or copying the active
+       session as markdown. Lives next to Settings as a peer
+       utility view. Backend route is
+       GET /api/sessions/:id/export?format=md (already wired
+       up by pre1).
+       ========================================================== */
+
+    .export-panel-tabs {
+      display: flex;
+      gap: 4px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 12px;
+    }
+
+    .export-panel-tab {
+      flex: 1;
+      padding: 8px 4px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .export-panel-tab:hover { color: var(--text); }
+    .export-panel-tab.active {
+      color: var(--cyan);
+      border-bottom-color: var(--cyan);
+      text-shadow: 0 0 6px var(--cyan-glow);
+    }
+
+    .export-panel-content {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .export-preview {
+      width: 100%;
+      min-height: 220px;
+      max-height: 50vh;
+      margin: 0;
+      padding: 10px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      line-height: 1.5;
+      color: var(--text);
+      background: var(--bg-base);
+      border: 1px solid var(--border);
+      border-radius: 1px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .export-btn-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .export-btn {
+      flex: 1;
+      padding: 9px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--cyan);
+      background: transparent;
       border: 1px solid var(--cyan-mid);
       border-radius: 1px;
       cursor: pointer;
-      appearance: none;
-      -webkit-appearance: none;
-      margin-bottom: 6px;
+      transition: all var(--transition-fast);
     }
-    .settings-model-select:focus { outline: none; border-color: var(--cyan); }
-    .settings-model-select option { background: var(--bg-raised); color: var(--text); }
-    .settings-model-note {
-      font-size: 9px;
+    .export-btn:hover {
+      background: var(--cyan-dim);
+      border-color: var(--cyan);
+    }
+    .export-btn:disabled {
       color: var(--text-muted);
-      letter-spacing: 0.5px;
-      margin-bottom: 4px;
+      border-color: var(--border);
+      cursor: not-allowed;
     }
-    .settings-model-flash {
-      font-size: 9px;
-      color: var(--cyan);
-      letter-spacing: 1px;
+
+    .export-flash {
       min-height: 14px;
-      transition: opacity 0.4s;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 1px;
+      color: var(--cyan);
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .export-flash.visible { opacity: 1; }
+
+    .export-empty {
+      padding: 24px 12px;
+      text-align: center;
+      color: var(--text-dim);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 1px;
+      line-height: 1.6;
+    }
+    .export-empty button {
+      margin-top: 14px;
+      padding: 8px 16px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--cyan);
+      background: transparent;
+      border: 1px solid var(--cyan-mid);
+      border-radius: 1px;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .export-empty button:hover {
+      background: var(--cyan-dim);
+      border-color: var(--cyan);
+    }
+
+    .export-coming-soon {
+      padding: 32px 16px;
+      text-align: center;
+      font-family: var(--font-mono);
+    }
+    .export-coming-soon .coming-soon-label {
+      display: inline-block;
+      margin-bottom: 12px;
+      padding: 4px 12px;
+      font-size: 8px;
+      letter-spacing: 3px;
+      color: var(--amber);
+      border: 1px solid var(--amber);
+      border-radius: 1px;
+      background: var(--amber-dim);
+    }
+    .export-coming-soon .coming-soon-body {
+      max-width: 280px;
+      margin: 0 auto;
+      font-size: 10px;
+      line-height: 1.7;
+      color: var(--text-dim);
     }
 
     /* ==========================================================
@@ -1955,7 +2653,15 @@
   display: none;
   padding: 4px 0;
 }
-.cron-job-list.open { display: block; }
+.cron-job-list.open {
+  /* v0.5.16 Phase 2c polish: cap the open list so a heavy cron
+     setup can't push past-chats out of view. ~5 cards (each
+     ~30px) fit cleanly; beyond that the list scrolls inside
+     its own container, leaving the past-chats area intact. */
+  display: block;
+  max-height: 170px;
+  overflow-y: auto;
+}
 .cron-job-card {
   display: flex;
   align-items: center;
@@ -2158,15 +2864,28 @@
     <span class="logo">NERDALERT</span>
     <span class="logo-sub">/// AGENT INTERFACE</span>
 
-    <nav class="topbar-nav">
-      <button class="nav-btn active" id="nav-chat"  onclick="switchView('chat', this)">CHAT</button>
-      <button class="nav-btn"        id="nav-email" onclick="switchView('email', this)">
-        EMAIL <span class="dot" id="email-dot" style="display:none"></span>
-      </button>
-      <button class="nav-btn"        id="nav-soc"   onclick="switchView('soc', this)">
-        SOC <span class="dot alert" id="soc-dot" style="display:none"></span>
-      </button>
-    </nav>
+    <!-- v0.5.16 Phase 2a: identity + context dropdowns.
+         Personality and model selectors live here as the
+         "what's active right now" indicators. The old
+         CHAT / EMAIL / SOC nav-btn row was removed; those
+         affordances move to the left-rail module dock in 2b. -->
+    <div class="topbar-controls">
+      <div class="topbar-dropdown" id="personality-dropdown">
+        <button class="topbar-dropdown-trigger" id="personality-trigger" onclick="toggleTopbarDropdown('personality', event)">
+          <span class="dropdown-label" id="personality-label">SHERMAN</span>
+          <span class="dropdown-chev">▾</span>
+        </button>
+        <div class="topbar-dropdown-menu" id="personality-menu"></div>
+      </div>
+
+      <div class="topbar-dropdown" id="model-dropdown">
+        <button class="topbar-dropdown-trigger" id="model-trigger" onclick="toggleTopbarDropdown('model', event)">
+          <span class="dropdown-label" id="model-label">CLAUDE SONNET 4.6</span>
+          <span class="dropdown-chev">▾</span>
+        </button>
+        <div class="topbar-dropdown-menu" id="model-menu"></div>
+      </div>
+    </div>
 
     <div class="topbar-status">
       <div class="status-indicator">
@@ -2196,38 +2915,21 @@
       </div>
     </div>
 
-    <!-- Navigation items -->
-    <div class="sidebar-section">Session</div>
-
-    <div class="sidebar-item active" id="sb-chat" onclick="switchView('chat', null)">
-      <span class="item-icon">⬡</span> Chat
+    <!-- v0.5.16 Phase 2b: search → host → cron → past chats → module dock.
+         The four old sidebar-item nav rows (Chat / Email / SOC / Memory)
+         and the Settings row at the bottom collapse into the module
+         dock at the very bottom. Past chats becomes the primary
+         scrolling content (flex: 1). The host + cron cards remain
+         where they were, between search and past chats. -->
+    <div class="sidebar-search">
+      <input
+        type="text"
+        id="chat-search"
+        placeholder="search chats…"
+        autocomplete="off"
+        spellcheck="false"
+      />
     </div>
-
-    <div class="sidebar-item" id="sb-email" onclick="switchView('email', null)">
-      <span class="item-icon">✉</span> Email
-      <span class="sidebar-badge" id="email-badge" style="display:none">0</span>
-    </div>
-
-    <div class="sidebar-item" id="sb-soc" onclick="switchView('soc', null)">
-      <span class="item-icon">⚠</span> SOC
-      <span class="sidebar-badge alert" id="soc-badge" style="display:none">!</span>
-    </div>
-
-    <div class="sidebar-item" id="sb-memory" onclick="switchView('memory', null)">
-      <span class="item-icon">◈</span> Memory
-    </div>
-
-    <div class="cron-panel">
-  <div class="cron-panel-header" id="cronPanelHeader">
-    <span>Scheduled Jobs</span>
-    <span class="cron-collapse-icon">▾</span>
-  </div>
-  <div class="cron-job-list" id="cronJobList">
-    <div style="padding: 8px 16px; font-size: 12px; color: var(--text-muted);">
-      Loading...
-    </div>
-  </div>
-</div>
 
     <div class="host-panel">
       <div class="host-panel-header" id="hostPanelHeader">
@@ -2242,12 +2944,49 @@
       </div>
     </div>
 
-    <!-- Push settings to bottom -->
-    <div class="sidebar-spacer"></div>
-    <div class="sidebar-divider"></div>
+    <div class="cron-panel">
+      <div class="cron-panel-header" id="cronPanelHeader">
+        <span>Scheduled Jobs</span>
+        <span class="cron-collapse-icon">▾</span>
+      </div>
+      <div class="cron-job-list" id="cronJobList">
+        <div style="padding: 8px 16px; font-size: 12px; color: var(--text-muted);">
+          Loading...
+        </div>
+      </div>
+    </div>
 
-    <div class="sidebar-item" id="sb-settings" onclick="switchView('settings', null)">
-      <span class="item-icon">⚙</span> Settings
+    <div class="past-chats-container">
+      <div class="past-chats-header">
+        <div class="sidebar-section">Past chats</div>
+        <button class="new-chat-btn" onclick="newChat()" title="Start a new chat">+ NEW</button>
+      </div>
+      <div class="past-chats-list" id="past-chats-list">
+        <div class="past-chat-empty">Loading…</div>
+      </div>
+    </div>
+
+    <div class="module-dock" id="module-dock">
+      <button class="dock-icon active" data-view="chat" onclick="switchView('chat', null)" aria-label="Chat">
+        <span class="dock-icon-glyph">⬡</span>
+      </button>
+      <button class="dock-icon" data-view="email" onclick="switchView('email', null)" aria-label="Email">
+        <span class="dock-icon-glyph">✉</span>
+        <span class="dock-badge" id="email-badge" style="display:none"></span>
+      </button>
+      <button class="dock-icon" data-view="soc" onclick="switchView('soc', null)" aria-label="SOC">
+        <span class="dock-icon-glyph">⚠</span>
+        <span class="dock-badge alert" id="soc-badge" style="display:none"></span>
+      </button>
+      <button class="dock-icon" data-view="memory" onclick="switchView('memory', null)" aria-label="Memory">
+        <span class="dock-icon-glyph">◈</span>
+      </button>
+      <button class="dock-icon" data-view="export" onclick="switchView('export', null)" aria-label="Export">
+        <span class="dock-icon-glyph">⤓</span>
+      </button>
+      <button class="dock-icon" data-view="settings" onclick="switchView('settings', null)" aria-label="Settings">
+        <span class="dock-icon-glyph">⚙</span>
+      </button>
     </div>
 
   </aside>
@@ -2365,6 +3104,7 @@
     agentName:  'Sherman',
     trustLevel: 1,
     port:       3773,
+    version:    'unknown',
   };
 
   const BASE_URL = `http://localhost:${CFG.port}`;
@@ -2420,6 +3160,22 @@
   let approvalShownThisSession = new Set();
   let activeAgentName    = CFG.agentName ?? 'Sherman';
   let currentModel       = CFG.model     ?? 'nvidia/nemotron-3-super-120b-a12b:free';
+
+  // ── Vision input state ───────────────────────────────────
+  // Pending image attachments waiting to ride out with the next
+  // user message. Populated by setupUpload (paste, drag, paperclip)
+  // and drained by sendMessage's `done` handler. Survives a
+  // `vision_required` SSE event so the user can click the switch-
+  // model card and have the same images auto-resent under the new
+  // model. Image attachment is locked while isStreaming is true so
+  // an in-flight request's `done` handler can't sweep up an image
+  // a user pasted in the gap between turns.
+  let pendingImages = [];   // [{mediaType, data, name, chipEl}]
+  const MAX_IMAGES_PER_MESSAGE = 5;
+  const VISION_IMAGE_MIMES = new Set([
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp',
+  ]);
+  const VISION_MAX_BYTES = 5 * 1024 * 1024;   // matches server cap
 
   // ============================================================
   // ONBOARDING
@@ -2489,6 +3245,23 @@
       overlay.classList.add('fade-out');
       setTimeout(() => overlay.remove(), 500);
     }
+
+    // v0.5.16 Phase 2a: refresh the top-bar dropdowns so the
+    // personality label flips to the just-selected agent and
+    // the checkmark in the menu lands on the right row. The
+    // initial setupTopbarDropdowns() call at DOMContentLoaded
+    // ran before the user picked, so its labels were either
+    // "SELECT AGENT" (first boot) or the previously-saved
+    // agent (returning visit) — either way we need a refresh
+    // after a fresh pick.
+    syncTopbarLabels();
+    renderPersonalityMenu();
+
+    // v0.5.16 Phase 2b: refresh the past-chats list so the
+    // active-session highlight moves to this agent's session
+    // (if any). New agents with no prior session land with no
+    // active highlight — the list still shows everyone's chats.
+    loadPastChats();
 
     const greeting = isCustom
       ? "I don't have a preset personality yet — tell me what you're looking for. Give me a name, a vibe, a voice. We'll build it together."
@@ -2564,15 +3337,39 @@
   // ============================================================
 
   async function restoreSessionFromServer() {
-    const agentId = localStorage.getItem('nerdalert_agent') ?? 'sherman';
+    const agentId       = localStorage.getItem('nerdalert_agent')          ?? 'sherman';
+    const savedSession  = localStorage.getItem('nerdalert_active_session');
+
     try {
+      // v0.5.16 Phase 2c: prefer the explicit session ID stored in
+      // localStorage. The legacy /api/session/restore path stays as
+      // a fallback for first boot and for users whose stored ID
+      // points to a session that was deleted on the server.
+      if (savedSession) {
+        const res  = await fetch(`${BASE_URL}/api/sessions/${encodeURIComponent(savedSession)}`, {
+          headers: { 'Authorization': `Bearer ${CFG.token}` },
+        });
+        const data = await res.json();
+        if (data.ok && data.session) {
+          conversationHistory = data.session.messages || [];
+          PAST_CHATS_STATE.activeSessionId = data.session.id;
+          console.log(`[Session] Restored ${conversationHistory.length} messages from session ${data.session.id}`);
+          if (conversationHistory.length > 0) renderRestoredHistory(conversationHistory);
+          return;
+        }
+        // Saved ID is stale (deleted, missing). Drop it and fall
+        // through to the legacy restore path.
+        console.warn(`[Session] Stored session ${savedSession} not found, falling back`);
+        localStorage.removeItem('nerdalert_active_session');
+      }
+
       const res  = await fetch(`${BASE_URL}/api/session/restore?agentId=${agentId}`, {
         headers: { 'Authorization': `Bearer ${CFG.token}` },
       });
       const data = await res.json();
       if (data.ok && data.messages.length > 0) {
         conversationHistory = data.messages;
-        console.log(`[Session] Restored ${data.messages.length} messages for agent "${agentId}"`);
+        console.log(`[Session] Restored ${data.messages.length} messages for agent "${agentId}" (legacy)`);
         renderRestoredHistory(data.messages);
       }
     } catch (err) {
@@ -2581,16 +3378,30 @@
   }
 
   async function saveSessionToServer() {
-    const agentId = localStorage.getItem('nerdalert_agent') ?? 'sherman';
+    const agentId   = localStorage.getItem('nerdalert_agent') ?? 'sherman';
+    const sessionId = PAST_CHATS_STATE.activeSessionId || undefined;
     try {
-      await fetch(`${BASE_URL}/api/session/save`, {
+      const res  = await fetch(`${BASE_URL}/api/session/save`, {
         method:  'POST',
         headers: {
           'Content-Type':  'application/json',
           'Authorization': `Bearer ${CFG.token}`,
         },
-        body: JSON.stringify({ agentId, messages: conversationHistory }),
+        body: JSON.stringify({ agentId, sessionId, messages: conversationHistory }),
       });
+      // v0.5.16 Phase 2c: capture the session summary the server
+      // returns. On a first save (no sessionId sent), this is how
+      // the UI learns which session it's now living in.
+      const data = await res.json();
+      if (data.ok && data.session && data.session.id) {
+        if (PAST_CHATS_STATE.activeSessionId !== data.session.id) {
+          setActiveSession(data.session.id);
+        }
+      }
+      // v0.5.16 Phase 2b: refresh the past-chats list so the
+      // just-saved session reflects in the sidebar with the
+      // new updatedAt (and freshly-derived title on first save).
+      loadPastChats();
     } catch (err) {
       console.warn('[Session] Save failed:', err);
     }
@@ -2607,6 +3418,9 @@
         },
         body: JSON.stringify({ agentId }),
       });
+      // v0.5.16 Phase 2b: refresh after the active session is
+      // gone so the past-chats list drops the deleted entry.
+      loadPastChats();
     } catch (err) {
       console.warn('[Session] Clear failed:', err);
     }
@@ -2615,15 +3429,42 @@
   // Render restored messages as chat bubbles without re-sending them.
   // Skips tool result turns (content arrays) since those render
   // as tool blocks that aren't meaningful out of context.
-  function renderRestoredHistory(messages) {
-    clearEmptyState();
+  //
+  // v0.5.16 Phase 2c: clears the container first so this can also
+  // be used to swap one session's transcript out for another's. An
+  // empty messages array yields the empty-state placeholder. The
+  // optional banner argument lets callers customise the divider
+  // text ("RESUMED <title>" vs "SESSION RESTORED"). Passing null
+  // suppresses the banner entirely — used by newChat() and
+  // resumeAgentMostRecent() when there's nothing to resume.
+  function renderRestoredHistory(messages, bannerText) {
     const container = document.getElementById('chat-messages');
+    if (!container) return;
 
-    // Add a faint session-restored banner
-    const banner = document.createElement('div');
-    banner.style.cssText = 'text-align:center;font-size:9px;color:var(--text-muted);letter-spacing:2px;padding:8px 0 4px;';
-    banner.textContent   = '── SESSION RESTORED ──';
-    container.appendChild(banner);
+    // Reset to empty state when there are no messages to render.
+    if (!messages || messages.length === 0) {
+      container.innerHTML = `
+        <div class="empty-state" id="empty-state">
+          <div class="empty-state-logo">NERDALERT</div>
+          <div class="empty-state-sub" id="empty-state-sub">${activeAgentName.toUpperCase()} ONLINE</div>
+        </div>
+      `;
+      return;
+    }
+
+    // Wipe the container (empty state, prior transcript, banners)
+    // before laying out the restored messages. Without this, a
+    // session switch would stack new bubbles on top of the old ones.
+    container.innerHTML = '';
+
+    // Banner is optional. Default text covers the page-load case;
+    // loadPastChat passes a custom "RESUMED <title>" banner.
+    if (bannerText !== null) {
+      const banner = document.createElement('div');
+      banner.style.cssText = 'text-align:center;font-size:9px;color:var(--text-muted);letter-spacing:2px;padding:8px 0 4px;';
+      banner.textContent   = bannerText || '── SESSION RESTORED ──';
+      container.appendChild(banner);
+    }
 
     for (const msg of messages) {
       if (typeof msg.content !== 'string') continue; // skip tool result arrays
@@ -2661,6 +3502,17 @@
     checkOnboarding();
     cronInit();
     hostMetricsInit();
+    setupTopbarDropdowns();
+    setupSidebarSearch();
+    setupPastChatsClicks();
+    setupDockTooltips();
+    loadPastChats();
+
+    // v0.5.17 pre3: apply the user's saved module-disabled set
+    // to the dock icons. Reads localStorage.nerdalert_disabled_modules
+    // and hides any matching dock icons. Idempotent and cheap —
+    // safe to call here even before the user opens Settings.
+    applyDisabledModules();
 
     // Set trust level pips
     for (let i = 1; i <= 5; i++) {
@@ -2772,6 +3624,575 @@
 
 
   // ============================================================
+  // TOPBAR DROPDOWNS — v0.5.16 Phase 2a
+  // ============================================================
+  // Personality + model selectors live in the top bar so the
+  // active context is always one click away. Click-outside
+  // closes any open menu; clicking another trigger swaps which
+  // one is open. Selection routes through the same accent /
+  // localStorage / server-config plumbing the Settings panel
+  // uses, so all the side effects (accent color, label
+  // updates, /api/config/model roundtrip) work unchanged.
+  // ============================================================
+
+  // Friendly model labels for the top-bar dropdown. Mirrors
+  // the <select> in the Settings panel; both will collapse
+  // into one source of truth in a later phase if a third
+  // consumer shows up.
+  const MODEL_OPTIONS = [
+    {
+      id:    'anthropic/claude-sonnet-4-6',
+      label: 'CLAUDE SONNET 4.6',
+      sub:   'Full ReAct loop',
+    },
+    {
+      id:    'ollama/mistral-small3.2',
+      label: 'MISTRAL SMALL 3.2',
+      sub:   'Local · prefetch + narration',
+    },
+    {
+      id:    'nvidia/nemotron-3-super-120b-a12b:free',
+      label: 'NEMOTRON 3 SUPER 120B',
+      sub:   'Free tier · prefetch + narration',
+    },
+  ];
+
+  function setupTopbarDropdowns() {
+    renderPersonalityMenu();
+    renderModelMenu();
+    syncTopbarLabels();
+
+    // Close any open dropdown when clicking outside. The
+    // dropdown's own click handlers stopPropagation before
+    // this fires, so menu clicks don't accidentally close
+    // the menu they're inside of.
+    document.addEventListener('click', (e) => {
+      document.querySelectorAll('.topbar-dropdown.open').forEach(dd => {
+        if (!dd.contains(e.target)) dd.classList.remove('open');
+      });
+    });
+  }
+
+  function toggleTopbarDropdown(which, event) {
+    if (event) event.stopPropagation();
+    const target = document.getElementById(`${which}-dropdown`);
+    if (!target) return;
+    const wasOpen = target.classList.contains('open');
+    // Close everything first so opening one always closes the
+    // other — no two menus visible at once.
+    document.querySelectorAll('.topbar-dropdown').forEach(dd => dd.classList.remove('open'));
+    if (!wasOpen) target.classList.add('open');
+  }
+
+  function renderPersonalityMenu() {
+    const menu = document.getElementById('personality-menu');
+    if (!menu) return;
+    const currentId = localStorage.getItem('nerdalert_agent');
+
+    menu.innerHTML = CHARACTERS.map(char => {
+      const isActive = char.id === currentId;
+      return `
+        <div class="topbar-dropdown-item ${isActive ? 'active' : ''}"
+             onclick="topbarSelectPersonality('${char.id}')">
+          <div class="item-dot" style="background:${char.accent};box-shadow:0 0 6px ${char.accentGlow}"></div>
+          <div class="topbar-dropdown-item-info">
+            <div class="topbar-dropdown-item-name" style="color:${char.accent}">${char.name.toUpperCase()}</div>
+            <div class="topbar-dropdown-item-sub">${char.title}</div>
+          </div>
+          ${isActive ? '<span class="topbar-dropdown-item-check">✓</span>' : ''}
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderModelMenu() {
+    const menu = document.getElementById('model-menu');
+    if (!menu) return;
+
+    menu.innerHTML = MODEL_OPTIONS.map(m => {
+      const isActive = m.id === currentModel;
+      return `
+        <div class="topbar-dropdown-item ${isActive ? 'active' : ''}"
+             onclick="topbarSelectModel('${m.id}')">
+          <div class="topbar-dropdown-item-info">
+            <div class="topbar-dropdown-item-name">${m.label}</div>
+            <div class="topbar-dropdown-item-sub">${m.sub}</div>
+          </div>
+          ${isActive ? '<span class="topbar-dropdown-item-check">✓</span>' : ''}
+        </div>
+      `;
+    }).join('');
+  }
+
+  async function topbarSelectPersonality(id) {
+    // Close the dropdown immediately for snappy UX. Subsequent
+    // re-render below leaves it closed; the next click reopens.
+    document.getElementById('personality-dropdown')?.classList.remove('open');
+
+    const character = CHARACTERS.find(c => c.id === id);
+    if (!character) return;
+
+    // Avoid a redundant resume + transcript flicker when the user
+    // re-selects the personality they're already on.
+    if (character.id === localStorage.getItem('nerdalert_agent')) return;
+
+    applyPersonality(character);
+
+    // v0.5.16 Phase 2c: switching personality from the top bar
+    // resumes that agent's most recent chat (or clears the
+    // transcript if they have none). Either way the user lands
+    // in a coherent state — the on-screen chat always matches
+    // the active accent + agent name.
+    await resumeAgentMostRecent(id);
+  }
+
+  async function topbarSelectModel(id) {
+    document.getElementById('model-dropdown')?.classList.remove('open');
+
+    // Optimistic local update so the label flips before the
+    // server roundtrip lands. switchModel returns silently on
+    // success or failure now that the Settings flash element is
+    // gone (v0.5.17 pre1 removed the Settings model picker);
+    // failures only surface via the browser console. Adding a
+    // topbar-side flash for switchModel feedback is a separate
+    // UX polish, not in scope here. The optimistic local change
+    // stays even on rejection because re-reverting mid-stream
+    // is jarring.
+    currentModel = id;
+    syncTopbarLabels();
+    renderModelMenu();
+    await switchModel(id);
+  }
+
+  function syncTopbarLabels() {
+    const pLabel = document.getElementById('personality-label');
+    const mLabel = document.getElementById('model-label');
+
+    const currentId = localStorage.getItem('nerdalert_agent');
+    const char = CHARACTERS.find(c => c.id === currentId);
+    if (pLabel) pLabel.textContent = char ? char.name.toUpperCase() : 'SELECT AGENT';
+
+    const model = MODEL_OPTIONS.find(m => m.id === currentModel);
+    if (mLabel) mLabel.textContent = model ? model.label : (currentModel || '').toUpperCase();
+  }
+
+
+  // ============================================================
+  // PAST CHATS — v0.5.16 Phase 2b
+  // ============================================================
+  // Renders the list of conversation sessions in the left rail,
+  // grouped by date. Wires the search input above it for local
+  // filtering by title or agent. Clicks are NOT wired here — that
+  // arrives in Phase 2c (session switching). For now this is a
+  // visual surface: it shows the user what's there and which one
+  // is active, so they can verify the multi-session backend before
+  // we hand control over.
+  //
+  // The list refreshes on:
+  //   - page load
+  //   - after each saveSessionToServer (so updatedAt + freshly-
+  //     derived titles reflect immediately)
+  //   - clearConversation (the cleared session disappears)
+  //   - agent switch (the active-session highlight moves)
+  // ============================================================
+
+  const PAST_CHATS_STATE = {
+    sessions:        [],   // full list from /api/sessions
+    filtered:        [],   // sessions after applying searchQuery
+    activeSessionId: null, // best-guess active session for current agent
+    searchQuery:     '',
+    totalBytes:      0,
+  };
+
+  async function loadPastChats() {
+    try {
+      const res  = await fetch(`${BASE_URL}/api/sessions`, {
+        headers: { 'Authorization': `Bearer ${CFG.token}` },
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        console.warn('[Past Chats] Load failed:', data.error);
+        return;
+      }
+      PAST_CHATS_STATE.sessions   = Array.isArray(data.sessions) ? data.sessions : [];
+      PAST_CHATS_STATE.totalBytes = data.totalBytes || 0;
+
+      // v0.5.16 Phase 2c: activeSessionId is no longer derived from
+      // the list. It's owned by localStorage (restore on load),
+      // loadPastChat (click), newChat (button), and saveSessionToServer
+      // (server-assigned on first save). If nothing has set it yet,
+      // it stays null and no highlight shows — that's correct.
+
+      applyPastChatsFilter();
+    } catch (err) {
+      console.warn('[Past Chats] Load failed:', err);
+    }
+  }
+
+  function applyPastChatsFilter() {
+    const q = PAST_CHATS_STATE.searchQuery.toLowerCase().trim();
+    // v0.5.16 Phase 2c: drop empty sessions from the displayed list.
+    // "New chat" creates a session immediately so /chat/stream has
+    // somewhere to land, but until the first message arrives it
+    // would clutter the sidebar as "Untitled chat". The activeSession
+    // highlight handles "current chat that's still empty" via the
+    // bordered chat input area itself, not via a list entry.
+    const nonEmpty = PAST_CHATS_STATE.sessions.filter(s => (s.messageCount || 0) > 0);
+    if (q) {
+      PAST_CHATS_STATE.filtered = nonEmpty.filter(s =>
+        (s.title || '').toLowerCase().includes(q) ||
+        (s.agentId || '').toLowerCase().includes(q),
+      );
+    } else {
+      PAST_CHATS_STATE.filtered = nonEmpty;
+    }
+    renderPastChats();
+  }
+
+  function renderPastChats() {
+    const list = document.getElementById('past-chats-list');
+    if (!list) return;
+
+    const sessions = PAST_CHATS_STATE.filtered;
+    if (sessions.length === 0) {
+      const empty = PAST_CHATS_STATE.searchQuery
+        ? 'No chats match your search.'
+        : 'No past chats yet. Start a conversation!';
+      list.innerHTML = `<div class="past-chat-empty">${empty}</div>`;
+      return;
+    }
+
+    const groups = groupSessionsByDate(sessions);
+    const labels = {
+      today:     'Today',
+      yesterday: 'Yesterday',
+      thisWeek:  'This week',
+      older:     'Older',
+    };
+
+    let html = '';
+    for (const key of ['today', 'yesterday', 'thisWeek', 'older']) {
+      const items = groups[key];
+      if (!items || items.length === 0) continue;
+      html += `<div class="past-chat-group">${labels[key]}</div>`;
+      for (const s of items) {
+        const char        = CHARACTERS.find(c => c.id === s.agentId);
+        const agentName   = char?.name || (s.agentId.charAt(0).toUpperCase() + s.agentId.slice(1));
+        const agentColor  = char?.accent || 'var(--text-dim)';
+        const isActive    = s.id === PAST_CHATS_STATE.activeSessionId;
+        const titleHtml   = escapeHTML(s.title || 'Untitled chat');
+        html += `
+          <div class="past-chat-item ${isActive ? 'active' : ''}" data-session-id="${escapeHTML(s.id)}" title="${titleHtml}">
+            <div class="past-chat-title">${titleHtml}</div>
+            <div class="past-chat-meta">
+              <span style="color:${agentColor}">${escapeHTML(agentName)}</span>
+              <span class="meta-dot">·</span>
+              <span>${escapeHTML(formatChatTime(s.updatedAt))}</span>
+            </div>
+          </div>
+        `;
+      }
+    }
+    list.innerHTML = html;
+  }
+
+  // Date-grouping helpers — today/yesterday/thisWeek/older.
+  // All thresholds are anchored to the start of "today" so the
+  // groups stay stable across the day (e.g. an 11pm chat doesn't
+  // jump from Today to Yesterday at midnight while the user is
+  // mid-conversation — it stays Today until the next page load).
+  function groupSessionsByDate(sessions) {
+    const now       = new Date();
+    const today     = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today.getTime() -      24 * 60 * 60 * 1000);
+    const weekAgo   = new Date(today.getTime() - 7  * 24 * 60 * 60 * 1000);
+
+    const groups = { today: [], yesterday: [], thisWeek: [], older: [] };
+    for (const s of sessions) {
+      const updated = new Date(s.updatedAt);
+      if      (updated >= today)     groups.today.push(s);
+      else if (updated >= yesterday) groups.yesterday.push(s);
+      else if (updated >= weekAgo)   groups.thisWeek.push(s);
+      else                           groups.older.push(s);
+    }
+    return groups;
+  }
+
+  function formatChatTime(updatedAt) {
+    const d         = new Date(updatedAt);
+    const now       = new Date();
+    const today     = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today.getTime() -      24 * 60 * 60 * 1000);
+    const weekAgo   = new Date(today.getTime() - 7  * 24 * 60 * 60 * 1000);
+
+    if (d >= yesterday) {
+      // Today or Yesterday — show clock time (e.g. "12:14p")
+      return d.toLocaleTimeString('en-US', {
+        hour:     'numeric',
+        minute:   '2-digit',
+        hour12:   true,
+      }).toLowerCase().replace(' ', '');
+    }
+    if (d >= weekAgo) {
+      // Within a week — weekday name ("Tue")
+      return d.toLocaleDateString('en-US', { weekday: 'short' });
+    }
+    // Older — short date ("May 8")
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  function setupSidebarSearch() {
+    const input = document.getElementById('chat-search');
+    if (!input) return;
+    input.addEventListener('input', (e) => {
+      PAST_CHATS_STATE.searchQuery = e.target.value || '';
+      applyPastChatsFilter();
+    });
+  }
+
+
+  // ============================================================
+  // SESSION SWITCHING — v0.5.16 Phase 2c
+  // ============================================================
+  // Click a past chat → load that session, auto-switch personality
+  // if it belongs to a different agent, rehydrate the transcript.
+  // "+ New chat" → POST /api/sessions/new, reset UI, become the
+  // active session for subsequent /chat/stream requests.
+  //
+  // localStorage.nerdalert_active_session is the source of truth
+  // for "which session is open". It survives page reloads. Every
+  // /chat/stream request now carries sessionId so saves land in
+  // the right session file regardless of what the server's
+  // active.json thinks.
+  // ============================================================
+
+  // Single point of truth for "set the active session":
+  //   - update PAST_CHATS_STATE
+  //   - mirror to localStorage so it survives reloads
+  //   - re-render the past-chats list so the highlight moves
+  function setActiveSession(sessionId) {
+    PAST_CHATS_STATE.activeSessionId = sessionId || null;
+    if (sessionId) {
+      localStorage.setItem('nerdalert_active_session', sessionId);
+    } else {
+      localStorage.removeItem('nerdalert_active_session');
+    }
+    renderPastChats();
+  }
+
+  // Apply a personality without resuming a session or opening a
+  // panel. Extracted from topbarSelectPersonality so loadPastChat()
+  // can switch personality when loading a chat from a different
+  // agent without re-triggering the chat-resume side effects of
+  // the top-bar path.
+  function applyPersonality(character) {
+    localStorage.setItem('nerdalert_agent', character.id);
+    localStorage.setItem('nerdalert_accent', JSON.stringify({
+      accent:     character.accent,
+      accentGlow: character.accentGlow,
+      accentDim:  character.accentDim,
+      accentMid:  character.accentMid,
+    }));
+    applyAccentColor(character);
+    activeAgentName = character.name;
+
+    const agentNameEl  = document.getElementById('agent-name');
+    const agentTitleEl = document.getElementById('agent-title');
+    const statusTextEl = document.getElementById('status-text');
+    if (agentNameEl)  agentNameEl.textContent  = character.name.toUpperCase();
+    if (agentTitleEl) agentTitleEl.textContent = character.fullName + ' · ' + character.title;
+    if (statusTextEl) statusTextEl.textContent = `${character.name.toUpperCase()} ONLINE // LVL ${CFG.trustLevel}`;
+
+    syncTopbarLabels();
+    renderPersonalityMenu();
+  }
+
+  // Load a past chat by session ID. Switches personality if the
+  // session belongs to a different agent than the one currently
+  // active. Replaces conversationHistory and re-renders the chat
+  // transcript. Idempotent — clicking the already-active session
+  // is a no-op.
+  async function loadPastChat(sessionId) {
+    if (!sessionId) return;
+    if (sessionId === PAST_CHATS_STATE.activeSessionId) {
+      // Already loaded — just make sure we're in the chat view.
+      if (currentView !== 'chat') switchView('chat', null);
+      return;
+    }
+
+    try {
+      const res  = await fetch(`${BASE_URL}/api/sessions/${encodeURIComponent(sessionId)}`, {
+        headers: { 'Authorization': `Bearer ${CFG.token}` },
+      });
+      const data = await res.json();
+      if (!data.ok || !data.session) {
+        console.warn('[Past Chats] Load failed:', data.error || 'unknown');
+        return;
+      }
+      const session = data.session;
+
+      // Switch personality if this session belongs to a different
+      // agent. The accent color, agent name, and topbar dropdown
+      // all need to match the chat being shown — mixed signals
+      // ("reading Brett's chat while wearing Sherman's accent")
+      // are jarring and easy to avoid.
+      const currentAgentId = localStorage.getItem('nerdalert_agent');
+      if (session.agentId !== currentAgentId) {
+        const character = CHARACTERS.find(c => c.id === session.agentId);
+        if (character) applyPersonality(character);
+      }
+
+      // Reset in-flight chat state. Approval cards and pending
+      // images don't carry across session boundaries.
+      conversationHistory = session.messages || [];
+      approvalShownThisSession.clear();
+      clearPendingImages();
+
+      setActiveSession(session.id);
+      renderRestoredHistory(conversationHistory, '── RESUMED ' + (session.title || 'chat').toUpperCase() + ' ──');
+      if (currentView !== 'chat') switchView('chat', null);
+
+      console.log(`[Past Chats] Loaded session ${session.id} (${conversationHistory.length} messages)`);
+    } catch (err) {
+      console.warn('[Past Chats] Load failed:', err);
+    }
+  }
+
+  // Create a fresh session and make it active. Empty sessions are
+  // filtered out of the past-chats list (see renderPastChats), so
+  // the new chat won't appear in the sidebar until the user sends
+  // their first message and messageCount becomes 1.
+  async function newChat() {
+    const agentId = localStorage.getItem('nerdalert_agent') ?? 'sherman';
+    try {
+      const res  = await fetch(`${BASE_URL}/api/sessions/new`, {
+        method:  'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${CFG.token}`,
+        },
+        body: JSON.stringify({ agentId }),
+      });
+      const data = await res.json();
+      if (!data.ok || !data.session) {
+        console.warn('[Past Chats] New chat failed:', data.error || 'unknown');
+        return;
+      }
+
+      // Reset chat state and the UI to empty.
+      conversationHistory = [];
+      approvalShownThisSession.clear();
+      clearPendingImages();
+
+      setActiveSession(data.session.id);
+      renderRestoredHistory([], null);
+      if (currentView !== 'chat') switchView('chat', null);
+
+      // Refresh past-chats list — the new empty session won't show
+      // (filtered out), but if there was a previously-active empty
+      // session for this agent we want activeSessionId tracking to
+      // shift cleanly. loadPastChats() re-reads the server view.
+      loadPastChats();
+
+      console.log(`[Past Chats] New chat created: ${data.session.id}`);
+    } catch (err) {
+      console.warn('[Past Chats] New chat failed:', err);
+    }
+  }
+
+  // After a personality switch (from top-bar or Settings panel),
+  // load that agent's most recent NON-EMPTY session. If they
+  // don't have any past chats yet, clear the transcript and
+  // leave activeSessionId null — the first message will create
+  // a new session via newChat-equivalent flow on the server.
+  async function resumeAgentMostRecent(agentId) {
+    const mine = PAST_CHATS_STATE.sessions
+      .filter(s => s.agentId === agentId && (s.messageCount || 0) > 0);
+
+    if (mine.length > 0) {
+      // Sessions list is already sorted updatedAt desc by the server.
+      await loadPastChat(mine[0].id);
+    } else {
+      conversationHistory = [];
+      approvalShownThisSession.clear();
+      clearPendingImages();
+      setActiveSession(null);
+      renderRestoredHistory([], null);
+    }
+  }
+
+  // Wire click delegation on the past-chats list. The list HTML
+  // is rebuilt on every renderPastChats() call, so we attach to
+  // the stable container and walk up from e.target to find the
+  // .past-chat-item that was clicked.
+  function setupPastChatsClicks() {
+    const list = document.getElementById('past-chats-list');
+    if (!list) return;
+    list.addEventListener('click', (e) => {
+      const item = e.target.closest('.past-chat-item');
+      if (!item) return;
+      const sessionId = item.dataset.sessionId;
+      if (sessionId) loadPastChat(sessionId);
+    });
+  }
+
+  // ── Dock tooltips ── v0.5.17 pre4 (revised)
+  //
+  // Floating themed tooltip for dock icons. Originally a pure-CSS
+  // ::after pseudo-element on the icon itself, but that put the
+  // tooltip inside the sidebar's overflow:hidden box — the right
+  // edge clipped any tooltip that extended past the sidebar.
+  //
+  // This revision creates a single shared tooltip element on
+  // document.body (position:fixed escapes every overflow:hidden
+  // ancestor) and positions it via getBoundingClientRect on each
+  // hover. mouseenter/mouseleave (not mouseover/mouseout) so child
+  // elements like the badge dot don't retrigger the handlers.
+  //
+  // The tooltip label is read from aria-label — same source CSS
+  // attr() would have used, so adding a new dock icon with an
+  // aria-label and re-running setupDockTooltips on a refresh is
+  // enough to get a tooltip on it.
+  function setupDockTooltips() {
+    // Create the singleton tooltip if it doesn't already exist.
+    // Idempotent so re-calls (future code that adds icons later)
+    // don't duplicate it.
+    let tooltip = document.getElementById('dock-tooltip');
+    if (!tooltip) {
+      tooltip = document.createElement('div');
+      tooltip.className = 'dock-tooltip';
+      tooltip.id = 'dock-tooltip';
+      document.body.appendChild(tooltip);
+    }
+
+    document.querySelectorAll('.dock-icon[aria-label]').forEach(icon => {
+      // Skip icons we've already wired (in case of re-call).
+      if (icon.dataset.tooltipWired === 'true') return;
+      icon.dataset.tooltipWired = 'true';
+
+      icon.addEventListener('mouseenter', () => {
+        const label = icon.getAttribute('aria-label');
+        if (!label) return;
+        tooltip.textContent = label;
+        const rect = icon.getBoundingClientRect();
+        // Anchor at the horizontal center, 8px above the icon's top.
+        // The CSS transform: translate(-50%, -100%) on .dock-tooltip
+        // then shifts the tooltip up by its own height and left by
+        // half its width — net effect: bottom-center of tooltip
+        // sits 8px above the icon's top edge.
+        tooltip.style.left = `${rect.left + rect.width / 2}px`;
+        tooltip.style.top  = `${rect.top - 8}px`;
+        tooltip.style.opacity = '1';
+      });
+
+      icon.addEventListener('mouseleave', () => {
+        tooltip.style.opacity = '0';
+      });
+    });
+  }
+
+
+  // ============================================================
   // VIEW SWITCHING
   // Switches between Chat (center only), Email (center + panel),
   // SOC (center + panel), and Memory (center + panel).
@@ -2784,23 +4205,28 @@
     // Always shut down the SOC wall SSE when switching views.
     closeSOCStream();
 
-    // Update nav button active state
+    // Legacy nav-btn handling (removed in Phase 2a; querySelectorAll
+    // is a safe no-op when the elements don't exist).
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-    if (navBtn) navBtn.classList.add('active');
-    else {
-      const btn = document.getElementById(`nav-${view}`);
-      if (btn) btn.classList.add('active');
+    if (navBtn && navBtn.classList && navBtn.classList.contains('nav-btn')) {
+      navBtn.classList.add('active');
+    } else {
+      document.getElementById(`nav-${view}`)?.classList.add('active');
     }
 
-    // Update sidebar active state
+    // Legacy sidebar-item handling (removed in Phase 2b; safe no-op).
     document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
-    const sbItem = document.getElementById(`sb-${view}`);
-    if (sbItem) sbItem.classList.add('active');
+    document.getElementById(`sb-${view}`)?.classList.add('active');
+
+    // v0.5.16 Phase 2b: module dock is the live active-state surface.
+    document.querySelectorAll('.dock-icon').forEach(i => i.classList.remove('active'));
+    document.querySelector(`.dock-icon[data-view="${view}"]`)?.classList.add('active');
 
     // Open or close the panel based on view
     if (view === 'email')    { openPanel('email'); loadEmailPanel(); return; }
     if (view === 'soc')      { openPanel('soc'); loadSOCWall(); return; }
     if (view === 'memory')   { openPanel('memory');   return; }
+    if (view === 'export')   { openPanel('export');   return; }
     if (view === 'settings') { openPanel('settings'); return; }
     if (view === 'chat')     { closePanel(); }
   }
@@ -2827,11 +4253,23 @@
     } else if (type === 'memory') {
       title.textContent = 'MEMORY ENGINE';
       body.innerHTML = getMemoryPanelHTML();
+    } else if (type === 'export') {
+      title.textContent = 'EXPORT';
+      body.innerHTML = getExportPanelHTML();
+      // Always start on the Markdown tab when the panel opens —
+      // the user should land on the primary view, not whichever
+      // tab they had open last session.
+      EXPORT_PANEL_STATE.activeTab = 'markdown';
+      openExportPanel();
     } else if (type === 'settings') {
       title.textContent = 'SETTINGS';
       body.innerHTML = getSettingsPanelHTML();
-      const sel = document.getElementById('model-select');
-      if (sel) sel.value = currentModel;
+      // Fire-and-forget refresh so the storage line reflects the
+      // latest server state. Handles cold-start (Settings opened
+      // before the first /api/sessions fetch returns) and the
+      // "sent a few messages since last open" case. Updates the
+      // storage line in place once the GET completes.
+      refreshSettingsStorage();
     }
   }
 
@@ -2839,9 +4277,12 @@
     closeSOCStream();
     document.getElementById('app').classList.remove('panel-open');
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById('nav-chat').classList.add('active');
+    document.getElementById('nav-chat')?.classList.add('active');
     document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
-    document.getElementById('sb-chat').classList.add('active');
+    document.getElementById('sb-chat')?.classList.add('active');
+    // v0.5.16 Phase 2b: dock state moves with closePanel back to chat.
+    document.querySelectorAll('.dock-icon').forEach(i => i.classList.remove('active'));
+    document.querySelector('.dock-icon[data-view="chat"]')?.classList.add('active');
     currentView = 'chat';
   }
 
@@ -2987,30 +4428,14 @@
     }
   }
 
-  function switchAgent(id) {
-    const character = CHARACTERS.find(c => c.id === id);
-    if (!character) return;
-
-    localStorage.setItem('nerdalert_agent',  character.id);
-    localStorage.setItem('nerdalert_accent', JSON.stringify({
-      accent:     character.accent,
-      accentGlow: character.accentGlow,
-      accentDim:  character.accentDim,
-      accentMid:  character.accentMid,
-    }));
-
-    applyAccentColor(character);
-    activeAgentName = character.name;
-    document.getElementById('agent-name').textContent  = character.name.toUpperCase();
-    document.getElementById('agent-title').textContent = character.fullName + ' · ' + character.title;
-    document.getElementById('status-text').textContent = `${character.name.toUpperCase()} ONLINE // LVL ${CFG.trustLevel}`;
-
-    openPanel('settings');
-  }
-
   function clearConversation() {
   conversationHistory = [];
   approvalShownThisSession.clear();
+  clearPendingImages();
+  // v0.5.16 Phase 2c: drop the active-session pointer so the
+  // next message-send creates a fresh session rather than
+  // re-populating the one the user just wiped.
+  setActiveSession(null);
   const container = document.getElementById('chat-messages');
   container.innerHTML = `
     <div class="empty-state" id="empty-state">
@@ -3021,54 +4446,515 @@
 }
 
   function getSettingsPanelHTML() {
-    const currentId = localStorage.getItem('nerdalert_agent');
-
-    const cards = CHARACTERS.map(char => {
-      const isActive = char.id === currentId;
-      const border   = isActive
-        ? `2px solid ${char.accent}`
-        : `1px solid var(--border)`;
-      const glow     = isActive
-        ? `box-shadow: 0 0 12px ${char.accentGlow};`
-        : '';
-      return `
-        <div class="settings-agent-card ${isActive ? 'active' : ''}"
-             style="border: ${border}; ${glow}"
-             onclick="switchAgent('${char.id}')">
-          <div class="settings-agent-dot" style="background:${char.accent};box-shadow:0 0 6px ${char.accentGlow}"></div>
-          <div class="settings-agent-info">
-            <div class="settings-agent-name" style="color:${char.accent}">${char.name.toUpperCase()}</div>
-            <div class="settings-agent-title">${char.title}</div>
-          </div>
-          ${isActive ? '<div class="settings-agent-check">✓</div>' : ''}
-        </div>
-      `;
-    }).join('');
-
     return `
-      <div class="settings-section-label">ACTIVE AGENT</div>
-      <div class="settings-agent-list">${cards}</div>
+      <div class="settings-section-label">TRUST LEVEL</div>
+      <div class="trust-levels-list">${renderTrustLevels()}</div>
+      <div class="trust-levels-note">Edit config.yaml + restart to change</div>
 
-      <div class="settings-section-label" style="margin-top:16px">TRUST LEVEL</div>
-      <div class="settings-trust-display">
-        <span class="settings-trust-value">LEVEL ${CFG.trustLevel}</span>
-        <span class="settings-trust-note">Edit config.yaml + restart to change</span>
+      <div class="settings-section-label" style="margin-top:16px">MODULES</div>
+      <div class="settings-modules-list" id="settings-modules-list">${renderModuleToggleRows()}</div>
+
+      <div class="settings-section-label" style="margin-top:16px">QUICK ACTIONS</div>
+      <div class="settings-actions-list">
+        <button class="settings-action-btn" onclick="openSetupPanel()">
+          SETUP CREDENTIALS
+        </button>
+        <button class="settings-action-btn" onclick="runHelpCommand()">
+          TOOL LIST
+        </button>
       </div>
-
-      <div class="settings-section-label" style="margin-top:16px">MODEL</div>
-      <select class="settings-model-select" id="model-select" onchange="switchModel(this.value)">
-        <option value="anthropic/claude-sonnet-4-6">Claude Sonnet 4.6 (Full ReAct)</option>
-        <option value="ollama/mistral-small3.2">Mistral Small 3.2 24B (Local)</option>
-        <option value="nvidia/nemotron-3-super-120b-a12b:free">Nemotron 120B (Free tier)</option>
-      </select>
-      <div class="settings-model-note">Anthropic = tool loop + SOC. Local/Free = single-turn with prefetch.</div>
-      <div class="settings-model-flash" id="model-flash"></div>
 
       <div class="settings-section-label" style="margin-top:16px">SESSION</div>
       <button class="settings-clear-btn" onclick="clearConversation()">
         CLEAR CONVERSATION
       </button>
+
+      <div class="settings-section-label" style="margin-top:16px">ABOUT</div>
+      <div class="settings-about">
+        <div class="settings-about-version">NerdAlertAI v${CFG.version}</div>
+        <a class="settings-about-link"
+           href="https://github.com/dumaki/NerdAlertAI"
+           target="_blank"
+           rel="noopener noreferrer">github.com/dumaki/NerdAlertAI</a>
+        <div class="settings-about-storage" id="settings-about-storage">${formatStorageDisplay()}</div>
+      </div>
     `;
+  }
+
+  // ── Trust levels ── v0.5.17 pre6
+  //
+  // The Settings TRUST LEVEL section lists all six levels (L0–L5)
+  // with title + description, highlighting the current one. The
+  // list is purely informational — the trust level still changes
+  // via config.yaml + restart, not from the UI. Showing the full
+  // ladder makes it obvious WHY the current level grants what it
+  // does and what the user would gain by moving up/down.
+  //
+  // Descriptions live in this single TRUST_LEVELS const so any
+  // wording tweak is a one-line change here. The render function
+  // reads CFG.trustLevel (coerced via Number() because config
+  // values can in theory be strings depending on YAML parsing).
+
+  const TRUST_LEVELS = [
+    { id: 0, title: 'Read & Reason',   desc: 'Reason, answer questions, explain concepts. No external connections.' },
+    { id: 1, title: 'Read External',   desc: 'Read-only access: view calendar, read emails, check GitHub, query SOC dashboards.' },
+    { id: 2, title: 'Draft & Suggest', desc: 'Everything in L1, plus: draft emails, propose commits, suggest rule changes. Nothing is sent without approval.' },
+    { id: 3, title: 'Act w/ Approval', desc: 'Everything in L2, plus: execute approved actions — send emails, push commits, apply changes. Every action logged.' },
+    { id: 4, title: 'Autonomous',      desc: 'Routine automations that are pre-approved by scope — Plex downloads, SOC alerts, scheduled tasks. Still fully logged.' },
+    { id: 5, title: 'Elevated Access', desc: 'SSH, filesystem exec, browser automation. Explicitly unlocked per session only. Highest audit requirement.' },
+  ];
+
+  function renderTrustLevels() {
+    const currentId = Number(CFG.trustLevel);
+    return TRUST_LEVELS.map(lvl => {
+      const isActive = lvl.id === currentId;
+      return `
+        <div class="trust-level-row ${isActive ? 'active' : ''}">
+          <div class="trust-level-header">
+            <span class="trust-level-id">L${lvl.id}</span>
+            <span class="trust-level-title">${lvl.title}</span>
+            ${isActive ? '<span class="trust-level-current">CURRENT</span>' : ''}
+          </div>
+          <div class="trust-level-desc">${lvl.desc}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+
+  // ── Quick actions ── v0.5.17 pre5
+  //
+  // The Settings QUICK ACTIONS section gives users a UI surface
+  // for two existing chat commands: /setup (credential panel)
+  // and /help (tool list). Product discovery matters — a tester
+  // might find Settings before they find the chat command list.
+  //
+  // Both handlers route through the SAME code paths the chat
+  // intercepts use, so behavior stays consistent regardless of
+  // entry point.
+
+  // Open the loopback setup panel in a new tab. Same URL the
+  // /setup chat intercept builds — single source of truth for
+  // the setup flow. We don't close Settings on click; the user
+  // is now in a new tab, and when they switch back the panel
+  // they were on stays put (least-surprising behaviour).
+  function openSetupPanel() {
+    const token = window.NERDALERT_CONFIG?.token || '';
+    const url = `${BASE_URL}/api/setup/panel#token=${encodeURIComponent(token)}`;
+    window.open(url, '_blank', 'noopener');
+  }
+
+  // Close Settings and run /help through the chat. We pass it
+  // through sendMessage() (which has a prefill arg) so the user
+  // message "/help" appears in the transcript exactly as if
+  // they'd typed it — and so the existing /help intercept
+  // inside sendMessage handles the render. closePanel() also
+  // resets currentView to 'chat', so we land where /help would
+  // expect to render.
+  function runHelpCommand() {
+    closePanel();
+    sendMessage('/help');
+  }
+
+
+  // ── Module toggles ── v0.5.17 pre3
+  //
+  // Stage 1 (this commit): UI-only hide. Disabled modules have
+  // their dock icon hidden via the .dock-icon-hidden class. The
+  // module backend (Email cron jobs, SOC SSE poll loop, etc.)
+  // continues running — this is purely a client-side visibility
+  // preference stored in localStorage.
+  //
+  // Stage 2 (deferred to v0.6+): a true config.yaml-backed
+  // disable that also stops the backend loops. Out of scope here.
+  //
+  // Why localStorage and not server state: per-browser UI
+  // preferences fit localStorage; they shouldn't roam across
+  // devices and shouldn't survive a re-install. If we want
+  // synced preferences later, we add a server endpoint then.
+
+  const DISABLED_MODULES_KEY = 'nerdalert_disabled_modules';
+
+  // The toggleable module list. Chat, Memory, Export, and
+  // Settings are intentionally NOT here — Chat is core, Memory
+  // and Export are utility surfaces (not modules in the
+  // removable sense), and Settings can't lock itself out. List
+  // grows as new modules ship; each id must match the dock
+  // icon's data-view attribute so applyDisabledModules can find it.
+  const MODULE_TOGGLE_LIST = [
+    { id: 'email', label: 'Email' },
+    { id: 'soc',   label: 'SOC'   },
+  ];
+
+  // Read the disabled set from localStorage. Wrapped in try/catch
+  // because a corrupted JSON value (manual edit gone wrong) would
+  // otherwise crash startup; we fall back to an empty set and
+  // let the user re-toggle.
+  function getDisabledModules() {
+    try {
+      const raw = localStorage.getItem(DISABLED_MODULES_KEY);
+      if (!raw) return new Set();
+      const arr = JSON.parse(raw);
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch (err) {
+      console.warn('[Modules] Failed to read disabled set:', err);
+      return new Set();
+    }
+  }
+
+  function setDisabledModules(set) {
+    try {
+      localStorage.setItem(DISABLED_MODULES_KEY, JSON.stringify([...set]));
+    } catch (err) {
+      console.warn('[Modules] Failed to persist disabled set:', err);
+    }
+  }
+
+  // Apply the current disabled state to the dock icons. Called
+  // at startup (DOMContentLoaded) and after every toggle, so
+  // the dock always reflects the persisted state. Idempotent;
+  // safe to call any number of times.
+  function applyDisabledModules() {
+    const disabled = getDisabledModules();
+    for (const m of MODULE_TOGGLE_LIST) {
+      const icon = document.querySelector(`.dock-icon[data-view="${m.id}"]`);
+      if (!icon) continue;
+      if (disabled.has(m.id)) icon.classList.add('dock-icon-hidden');
+      else                    icon.classList.remove('dock-icon-hidden');
+    }
+  }
+
+  // Toggle a single module. If the user disables the module
+  // they're currently viewing, kick them back to chat first so
+  // they don't end up stranded on a hidden panel. The Settings
+  // panel stays open and just the modules list re-renders —
+  // avoids flickering the storage line or losing scroll position.
+  function toggleModule(id) {
+    const disabled = getDisabledModules();
+    if (disabled.has(id)) {
+      disabled.delete(id);
+    } else {
+      disabled.add(id);
+      if (currentView === id) {
+        switchView('chat', null);
+      }
+    }
+    setDisabledModules(disabled);
+    applyDisabledModules();
+    // Rebuild just the inner list so other Settings sections
+    // (storage line, About card) aren't disturbed.
+    const list = document.getElementById('settings-modules-list');
+    if (list) list.innerHTML = renderModuleToggleRows();
+  }
+
+  // Build the inner row markup for the MODULES section. Pulled
+  // out so toggleModule can rebuild just the row HTML without
+  // touching the outer container.
+  function renderModuleToggleRows() {
+    const disabled = getDisabledModules();
+    return MODULE_TOGGLE_LIST.map(m => {
+      const state = disabled.has(m.id) ? 'off' : 'on';
+      return `
+        <button class="settings-module-row ${state}"
+                onclick="toggleModule('${m.id}')">${m.label}</button>
+      `;
+    }).join('');
+  }
+
+
+  // ── Storage display helpers ── v0.5.17 pre2
+  //
+  // Used by the Settings ABOUT card to summarize on-disk session
+  // storage. Pulled from PAST_CHATS_STATE — which is the same
+  // source the past-chats sidebar reads from, so the numbers
+  // always line up with what the user sees in the sidebar.
+  //
+  // We count only non-empty sessions for the "X chats" label
+  // because empty placeholders are already hidden from the
+  // sidebar (Phase 2c filter); showing them in the count would
+  // contradict what's visible. totalBytes from the server
+  // includes everything on disk — honest disk usage.
+
+  function formatBytes(bytes) {
+    const n = Number(bytes) || 0;
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+    return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  }
+
+  function formatStorageDisplay() {
+    const sessions = (PAST_CHATS_STATE?.sessions || [])
+      .filter(s => (s?.messageCount ?? 0) > 0);
+    const bytes = PAST_CHATS_STATE?.totalBytes ?? 0;
+    const chatLabel = sessions.length === 1 ? 'chat' : 'chats';
+    return `Storage: ${formatBytes(bytes)} across ${sessions.length} ${chatLabel}`;
+  }
+
+  async function refreshSettingsStorage() {
+    await loadPastChats();
+    const el = document.getElementById('settings-about-storage');
+    if (el) el.textContent = formatStorageDisplay();
+  }
+
+
+  // ============================================================
+  // EXPORT PANEL — v0.5.16 Phase 3
+  //
+  // Right-panel view that lets the user download or copy the
+  // currently active session as markdown. Active session comes
+  // from PAST_CHATS_STATE.activeSessionId (the single source of
+  // truth set up in Phase 2c).
+  //
+  // Three tabs:
+  //   - Markdown: preview + "Download .md" button
+  //   - Copy:     same preview + "Copy to clipboard" button
+  //   - Share:    "Coming soon" placeholder (deferred — needs a
+  //               token-gated public read endpoint we haven't
+  //               written yet)
+  //
+  // Caching: openExportPanel fetches the markdown once per
+  // session and stashes it in EXPORT_PANEL_STATE. Tab switches,
+  // download and copy all read from memory — no extra round
+  // trips for the same chat.
+  // ============================================================
+
+  const EXPORT_PANEL_STATE = {
+    activeTab:        'markdown', // 'markdown' | 'copy' | 'share'
+    cachedMarkdown:   null,       // string of fetched md, or null
+    cachedSessionId:  null,       // session id the cache belongs to
+    cachedTitle:      null,       // title (for download filename)
+    isFetching:       false,
+    flashTimer:       null,
+  };
+
+  // Shape of the panel body — tabs across the top, content area
+  // below. The content area's innerHTML is repainted by
+  // renderExportPanel() once data is ready.
+  function getExportPanelHTML() {
+    return `
+      <div class="export-panel-tabs">
+        <button class="export-panel-tab active" data-tab="markdown"
+                onclick="setExportTab('markdown')">Markdown</button>
+        <button class="export-panel-tab" data-tab="copy"
+                onclick="setExportTab('copy')">Copy</button>
+        <button class="export-panel-tab" data-tab="share"
+                onclick="setExportTab('share')">Share link</button>
+      </div>
+      <div class="export-panel-content" id="export-panel-content">
+        <div class="export-empty">Loading…</div>
+      </div>
+    `;
+  }
+
+  // Called from openPanel('export'). Fetches the markdown if
+  // we don't already have it cached for the active session,
+  // then paints the content area.
+  async function openExportPanel() {
+    const sessionId = PAST_CHATS_STATE.activeSessionId;
+
+    // No active session — render the empty state immediately
+    // and skip the server hit entirely.
+    if (!sessionId) {
+      EXPORT_PANEL_STATE.cachedMarkdown  = null;
+      EXPORT_PANEL_STATE.cachedSessionId = null;
+      EXPORT_PANEL_STATE.cachedTitle     = null;
+      renderExportPanel();
+      return;
+    }
+
+    // Cache hit for this session — paint and stop.
+    if (EXPORT_PANEL_STATE.cachedSessionId === sessionId
+        && EXPORT_PANEL_STATE.cachedMarkdown !== null) {
+      renderExportPanel();
+      return;
+    }
+
+    // Fresh session (or first open) — fetch, then paint. The
+    // 'isFetching' flag makes renderExportPanel show a loading
+    // state if the user happens to tab-switch mid-fetch.
+    renderExportPanel();
+    await fetchSessionMarkdown(sessionId);
+    renderExportPanel();
+  }
+
+  // Fetch the markdown export and stash it in the cache. The
+  // backend returns text/markdown with Content-Disposition:
+  // attachment — that's fine, res.text() reads the body the
+  // same way either way.
+  async function fetchSessionMarkdown(sessionId) {
+    EXPORT_PANEL_STATE.isFetching = true;
+    try {
+      const res = await fetch(
+        `${BASE_URL}/api/sessions/${encodeURIComponent(sessionId)}/export?format=md`,
+        { headers: { 'Authorization': `Bearer ${CFG.token}` } },
+      );
+      if (!res.ok) {
+        console.warn('[Export] Fetch failed:', res.status);
+        EXPORT_PANEL_STATE.cachedMarkdown  = null;
+        EXPORT_PANEL_STATE.cachedSessionId = null;
+        return;
+      }
+      const text = await res.text();
+      EXPORT_PANEL_STATE.cachedMarkdown  = text;
+      EXPORT_PANEL_STATE.cachedSessionId = sessionId;
+      // Capture the title so the download filename is nicer
+      // than the server's generic "session-<id>.md".
+      const summary = PAST_CHATS_STATE.sessions.find(s => s.id === sessionId);
+      EXPORT_PANEL_STATE.cachedTitle = summary?.title ?? null;
+    } catch (err) {
+      console.warn('[Export] Fetch threw:', err);
+      EXPORT_PANEL_STATE.cachedMarkdown  = null;
+      EXPORT_PANEL_STATE.cachedSessionId = null;
+    } finally {
+      EXPORT_PANEL_STATE.isFetching = false;
+    }
+  }
+
+  // Switch active tab and repaint the content area. No fetch —
+  // we already have the markdown cached.
+  function setExportTab(tab) {
+    if (tab !== 'markdown' && tab !== 'copy' && tab !== 'share') return;
+    EXPORT_PANEL_STATE.activeTab = tab;
+    document.querySelectorAll('.export-panel-tab').forEach(el => {
+      el.classList.toggle('active', el.dataset.tab === tab);
+    });
+    renderExportPanel();
+  }
+
+  // Build a filesystem-safe filename from the session title.
+  // Lowercase, hyphen-separated, capped at 60 chars. Falls back
+  // to a generic name if title is missing or stripped to nothing.
+  function exportFilenameFor(title) {
+    const base = (title || 'nerdalert-session')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60);
+    return (base.length > 0 ? base : 'nerdalert-session') + '.md';
+  }
+
+  // Repaint the content area based on tab + cache + active session.
+  // Idempotent; safe to call from anywhere that changes state.
+  function renderExportPanel() {
+    const content = document.getElementById('export-panel-content');
+    if (!content) return;  // Panel was closed mid-fetch.
+
+    // Share tab is static — render the coming-soon block and stop.
+    if (EXPORT_PANEL_STATE.activeTab === 'share') {
+      content.innerHTML = `
+        <div class="export-coming-soon">
+          <div class="coming-soon-label">Coming soon</div>
+          <div class="coming-soon-body">
+            Shareable read-only links land in a later release.
+            They need a token-gated public endpoint on the server
+            side — on the roadmap, not in v0.5.16.
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    // Loading state takes precedence over empty — we're in flight.
+    if (EXPORT_PANEL_STATE.isFetching) {
+      content.innerHTML = `<div class="export-empty">Loading…</div>`;
+      return;
+    }
+
+    // No active session, or fetch came back empty → empty state
+    // with a + NEW CHAT button so the user has a path forward.
+    if (!PAST_CHATS_STATE.activeSessionId || EXPORT_PANEL_STATE.cachedMarkdown === null) {
+      content.innerHTML = `
+        <div class="export-empty">
+          No active chat to export.<br>
+          Send a message to start a session.
+          <br>
+          <button onclick="newChat(); closePanel();">+ NEW CHAT</button>
+        </div>
+      `;
+      return;
+    }
+
+    // We have markdown. Markdown and Copy tabs share the preview
+    // block — only the action button differs.
+    const md         = EXPORT_PANEL_STATE.cachedMarkdown;
+    const safeHTML   = escapeForPre(md);
+    const actionHTML = EXPORT_PANEL_STATE.activeTab === 'copy'
+      ? `<button class="export-btn" onclick="copyMarkdownToClipboard()">Copy to clipboard</button>`
+      : `<button class="export-btn" onclick="downloadMarkdown()">Download .md</button>`;
+
+    content.innerHTML = `
+      <pre class="export-preview">${safeHTML}</pre>
+      <div class="export-btn-row">${actionHTML}</div>
+      <div class="export-flash" id="export-flash"></div>
+    `;
+  }
+
+  // Minimal HTML escape for the <pre> preview. Only &, <, > matter
+  // inside a pre block — backticks and the rest of markdown pass
+  // through naturally so the preview reads like the file you'd get.
+  function escapeForPre(text) {
+    return String(text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  // Trigger a browser download of the cached markdown. Uses a blob
+  // URL + <a download> so we control the filename from the session
+  // title rather than the server's generic "session-<id>.md".
+  function downloadMarkdown() {
+    const md = EXPORT_PANEL_STATE.cachedMarkdown;
+    if (md === null) return;
+    const filename = exportFilenameFor(EXPORT_PANEL_STATE.cachedTitle);
+
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    // Slight delay before revoke — Safari needs the URL alive when
+    // the click event is processed.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+    flashExportMessage(`Downloaded ${filename}`);
+  }
+
+  // Copy the cached markdown to the system clipboard, then flash
+  // a brief confirmation under the action button.
+  async function copyMarkdownToClipboard() {
+    const md = EXPORT_PANEL_STATE.cachedMarkdown;
+    if (md === null) return;
+    try {
+      await navigator.clipboard.writeText(md);
+      flashExportMessage('Copied to clipboard');
+    } catch (err) {
+      // Browsers gate clipboard writes on HTTPS + user gesture; a
+      // button click qualifies, but localhost over plain HTTP can
+      // still trip some configs. Surface a hint rather than fail
+      // silently.
+      console.warn('[Export] Clipboard write failed:', err);
+      flashExportMessage('Copy failed — select the text manually');
+    }
+  }
+
+  // Show a short confirmation message under the action button.
+  // Auto-clears after ~2.5s. Re-entrant — a second call cancels
+  // the previous timer so rapid clicks don't desync.
+  function flashExportMessage(text) {
+    const el = document.getElementById('export-flash');
+    if (!el) return;
+    if (EXPORT_PANEL_STATE.flashTimer) {
+      clearTimeout(EXPORT_PANEL_STATE.flashTimer);
+    }
+    el.textContent = text;
+    el.classList.add('visible');
+    EXPORT_PANEL_STATE.flashTimer = setTimeout(() => {
+      el.classList.remove('visible');
+    }, 2500);
   }
 
 
@@ -3313,7 +5199,15 @@
       e.preventDefault();
       dragDepth = 0;
       inputBar.classList.remove('drag-active');
-      for (const file of e.dataTransfer.files) uploadFile(file);
+      // Branch by MIME — images go to the vision queue (sent inline
+      // with the next message), other files go to the inbox uploader.
+      // Image queueing is locked during streaming so a paste in the
+      // gap between turns can't be swept up by the in-flight `done`.
+      for (const file of e.dataTransfer.files) {
+        if (isStreaming) continue;
+        if (isVisionImage(file)) queueImage(file);
+        else                     uploadFile(file);
+      }
     });
 
     // Stop the browser's default "open this file as a tab" when a drop
@@ -3327,10 +5221,33 @@
       });
     });
 
-    // Paperclip handler — mirrors the drop path through uploadFile()
+    // Paperclip handler — same MIME branch as the drop handler.
     fileInput.addEventListener('change', () => {
-      for (const file of fileInput.files) uploadFile(file);
+      for (const file of fileInput.files) {
+        if (isStreaming) continue;
+        if (isVisionImage(file)) queueImage(file);
+        else                     uploadFile(file);
+      }
       fileInput.value = '';   // allow same file again immediately
+    });
+
+    // Clipboard paste — picks up screenshots and copied images
+    // pasted into the chat input. Non-image clipboard content is
+    // left alone so normal text paste still works (no preventDefault
+    // unless we're actually handling images).
+    chatInput.addEventListener('paste', async (ev) => {
+      if (isStreaming) return;
+      if (!ev.clipboardData || !ev.clipboardData.items) return;
+      const items = Array.from(ev.clipboardData.items);
+      const imageItems = items.filter(
+        (it) => it.kind === 'file' && VISION_IMAGE_MIMES.has(it.type),
+      );
+      if (imageItems.length === 0) return;
+      ev.preventDefault();
+      for (const item of imageItems) {
+        const file = item.getAsFile();
+        if (file) await queueImage(file);
+      }
     });
 
     function hasFiles(e) {
@@ -3438,6 +5355,131 @@
         chatInput.focus();
       });
     }
+
+    // ── Vision helpers (image-bound chips) ─────────────────────
+    //
+    // Image-bound chips are visually distinct from inbox-bound
+    // chips: they show a 18×18 thumbnail (via data: URL) instead
+    // of the 📎 icon, and they don't get the "click to fill
+    // `read <path>`" behavior since the bytes ride inline with
+    // the next message rather than living in the project inbox.
+
+    function isVisionImage(file) {
+      return !!(file && file.type && VISION_IMAGE_MIMES.has(file.type));
+    }
+
+    function fileToBase64(file) {
+      // FileReader.readAsDataURL produces "data:image/png;base64,XXXX".
+      // We only want the XXXX part — the server's wire format carries
+      // mediaType separately, not as a data: URL prefix.
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(reader.error || new Error('FileReader failed'));
+        reader.onload  = () => {
+          const result = String(reader.result || '');
+          const comma  = result.indexOf(',');
+          resolve(comma >= 0 ? result.slice(comma + 1) : result);
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function queueImage(file) {
+      if (!file || !file.type) return;
+
+      // Caps and MIME guard — server enforces these too; doing it
+      // here gives the user immediate feedback and saves a
+      // round-trip when something obviously won't fit.
+      if (pendingImages.length >= MAX_IMAGES_PER_MESSAGE) {
+        addChip({
+          name:    file.name || 'image',
+          error:   true,
+          message: `max ${MAX_IMAGES_PER_MESSAGE} images per message`,
+        });
+        return;
+      }
+      if (file.size > VISION_MAX_BYTES) {
+        const mb = (file.size / 1024 / 1024).toFixed(1);
+        addChip({
+          name:    file.name || 'image',
+          error:   true,
+          message: `${mb}MB exceeds ${VISION_MAX_BYTES / 1024 / 1024}MB cap`,
+        });
+        return;
+      }
+      if (!isVisionImage(file)) {
+        addChip({
+          name:    file.name || 'image',
+          error:   true,
+          message: 'unsupported image type',
+        });
+        return;
+      }
+
+      // Optimistic chip while we read the file. Looks like an
+      // inbox-bound upload (◐ spinner + 📎-shaped icon area) until
+      // base64 is ready, then morphs into an image-chip with the
+      // thumbnail. Visual transition reads as "loaded" rather than
+      // "changed".
+      const displayName = file.name || 'pasted image';
+      const chip = addChip({ name: displayName, uploading: true });
+
+      try {
+        const base64       = await fileToBase64(file);
+        const thumbnailUrl = `data:${file.type};base64,${base64}`;
+
+        pendingImages.push({
+          mediaType: file.type,
+          data:      base64,
+          name:      displayName,
+          chipEl:    chip,
+        });
+
+        finalizeImageChip(chip, displayName, thumbnailUrl);
+      } catch (err) {
+        markChipError(chip, displayName, (err && err.message) || 'failed to read');
+      }
+    }
+
+    function finalizeImageChip(chip, name, thumbnailUrl) {
+      chip.classList.remove('uploading');
+      chip.classList.add('image-chip');
+
+      const icon = chip.querySelector('.upload-chip-icon');
+      if (icon) {
+        icon.textContent = '';
+        const img = document.createElement('img');
+        img.src = thumbnailUrl;
+        img.alt = '';
+        icon.appendChild(img);
+      }
+
+      const nameEl = chip.querySelector('.upload-chip-name');
+      if (nameEl) nameEl.textContent = name;
+
+      const hintEl = chip.querySelector('.upload-chip-hint');
+      if (hintEl) hintEl.textContent = '';
+
+      chip.title = `Image attachment: ${name}`;
+
+      // Replace the existing ✕ click handler with one that ALSO
+      // pulls the image out of pendingImages. addChip() wires a
+      // simple chip.remove() on ✕ — for image chips we need that
+      // plus the array splice so a dismissed chip doesn't keep
+      // riding out on the next send.
+      const x = chip.querySelector('.upload-chip-x');
+      if (x) {
+        const fresh = x.cloneNode(true);
+        x.replaceWith(fresh);
+        fresh.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const idx = pendingImages.findIndex((p) => p.chipEl === chip);
+          if (idx >= 0) pendingImages.splice(idx, 1);
+          chip.remove();
+          if (tray.children.length === 0) tray.classList.remove('has-chips');
+        });
+      }
+    }
   })();
 
 
@@ -3454,7 +5496,8 @@
     }
   }
 
-  async function sendMessage(prefill) {
+  async function sendMessage(prefill, opts = {}) {
+    const { skipUserMessageRender = false } = opts;
     const input = document.getElementById('chat-input');
     const btn   = document.getElementById('send-button');
 
@@ -3496,9 +5539,21 @@
     btn.disabled  = false;
     btn.onclick   = stopStreaming;
 
-    appendUserMessage(text);
+    if (!skipUserMessageRender) {
+      appendUserMessage(text);
+    }
 
     const agentDiv = appendAgentMessage();
+
+    // Snapshot images for THIS request only. The wire format strips
+    // chipEl and any other client-only metadata. Cleared in the
+    // `done` handler after a successful send; left intact on
+    // vision_required and on errors so the user can retry without
+    // re-attaching.
+    const imagesForThisSend = pendingImages.map((img) => ({
+      mediaType: img.mediaType,
+      data:      img.data,
+    }));
 
     let fullText = '';
     let buffer   = '';
@@ -3517,6 +5572,8 @@
           conversationHistory: conversationHistory,
           agentId:             localStorage.getItem('nerdalert_agent') ?? 'sherman',
           agentName:           activeAgentName,
+          sessionId:           PAST_CHATS_STATE.activeSessionId || undefined,
+          images:              imagesForThisSend.length > 0 ? imagesForThisSend : undefined,
         }),
       });
 
@@ -3645,7 +5702,26 @@
 
             saveSessionToServer();
 
+            // Vision: drain pendingImages now that the message has
+            // shipped successfully. Skipped on `error` and
+            // `vision_required` so the user can retry or switch
+            // models without re-attaching.
+            clearPendingImages();
+
             parseForApprovals(parsed.text || fullText);
+          }
+
+          else if (eventType === 'vision_required') {
+            // Active model can't see images. Replace the empty
+            // agent bubble with a switch-card; clicking it switches
+            // model and auto-resends with images intact.
+            hideThinking();
+            if (agentDiv) agentDiv.remove();
+            renderVisionRequiredCard(
+              parsed.suggestedModel,
+              parsed.message,
+              text,
+            );
           }
 
           else if (eventType === 'error') {
@@ -3681,6 +5757,87 @@
     btn.onclick     = () => sendMessage();
     btn.disabled    = false;
     input.focus();
+  }
+
+
+  // ============================================================
+  // VISION INPUT HELPERS
+  // ============================================================
+  //
+  // clearPendingImages() drains the queue and yanks the chips from
+  // the upload tray. Called by sendMessage's `done` handler after
+  // a successful send and by clearConversation() on /clear.
+  //
+  // renderVisionRequiredCard() handles the SSE vision_required
+  // event by inserting an inline switch-card in the chat. The
+  // button switches model via the existing /api/config/model
+  // route, then re-enters sendMessage with skipUserMessageRender:true
+  // so the user's already-rendered message doesn't render twice.
+
+  function clearPendingImages() {
+    for (const img of pendingImages) {
+      if (img.chipEl && img.chipEl.parentNode) {
+        img.chipEl.remove();
+      }
+    }
+    pendingImages = [];
+    const tray = document.getElementById('upload-tray');
+    if (tray && tray.children.length === 0) {
+      tray.classList.remove('has-chips');
+    }
+  }
+
+  // Friendly labels for switch-card button text. Falls back to
+  // the raw model string if a label isn't defined here — the
+  // architecture is meant to outgrow this lookup as more models
+  // join, so it stays a small, additive thing rather than a
+  // central registry.
+  const FRIENDLY_MODEL_LABELS = {
+    'anthropic/claude-sonnet-4-6': 'Claude',
+    'ollama/mistral-small3.2':     'Mistral',
+  };
+
+  function renderVisionRequiredCard(suggestedModel, message, originalText) {
+    clearEmptyState();
+    const container = document.getElementById('chat-messages');
+    const friendly  = FRIENDLY_MODEL_LABELS[suggestedModel] || suggestedModel;
+
+    const div = document.createElement('div');
+    div.className = 'message agent';
+    div.innerHTML = `
+      <div class="message-label">${activeAgentName.toUpperCase()} // ${timestamp()}</div>
+      <div class="message-bubble">
+        <div class="vision-required-card">
+          <div class="vision-required-msg">${escapeHTML(message || "This model can't see images.")}</div>
+          <button class="vision-switch-btn">SWITCH TO ${escapeHTML(String(friendly).toUpperCase())} &amp; RESEND</button>
+        </div>
+      </div>
+    `;
+    container.appendChild(div);
+    scrollToBottom();
+
+    const card = div.querySelector('.vision-required-card');
+    const btn  = div.querySelector('.vision-switch-btn');
+    if (!btn || !card) return;
+
+    btn.addEventListener('click', async () => {
+      btn.disabled    = true;
+      btn.textContent = 'SWITCHING…';
+      try {
+        await switchModel(suggestedModel);
+      } catch (err) {
+        console.error('[Vision] switchModel failed:', err);
+        btn.disabled    = false;
+        btn.textContent = `SWITCH TO ${String(friendly).toUpperCase()} & RESEND`;
+        return;
+      }
+      card.classList.add('resolved');
+      // Auto-resend with the same text and (still-intact) images.
+      // skipUserMessageRender prevents a duplicate "YOU" bubble —
+      // the original user message is already on screen above this
+      // card from the first attempt.
+      sendMessage(originalText, { skipUserMessageRender: true });
+    });
   }
 
 

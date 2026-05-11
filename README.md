@@ -65,7 +65,19 @@ nerd-open
 
 Or just copy `http://localhost:3773` from the nerd-start tab and paste it into your browser directly.
 
-Pick your agent and start talking.
+---
+
+### Step 5 — Add your API keys
+
+First time only — visit:
+
+```
+http://localhost:3773/api/setup/panel
+```
+
+Paste your OpenRouter key (or Anthropic key, if you're running Claude) into the panel and click save. Credentials go straight to your OS keychain — never to `.env`, never through chat. The panel is loopback-only, so it only works in a browser on the same machine as the server.
+
+Once saved, you're ready to go. Pick your agent and start talking.
 
 ---
 

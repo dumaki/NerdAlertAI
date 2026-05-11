@@ -312,6 +312,23 @@ export const webTool: NerdAlertTool = {
   description: `
 Search the web or fetch the content of a URL.
 
+DEFAULT TO SPECIALIZED TOOLS FIRST. Only use this tool when no
+specialized tool covers the question. Specialized tools are
+authoritative for their domain — do not duplicate their work with
+an additional web search:
+  - Math, arithmetic, unit conversion  → calculate
+  - Encyclopedia facts (who/what/when is X)  → wikipedia
+  - Weather, temperature, forecast  → weather
+  - Current date or time  → get_datetime
+  - Local system metrics (CPU, memory, disk)  → host_metrics
+  - Email and calendar  → gmail / google_calendar
+  - Stored user context (name, location, preferences)  → memory
+
+USE WEB FOR: news, current events, specific URLs, CVE lookups,
+vendor documentation, project READMEs, breaking developments,
+GitHub issues, security advisories, anything not covered by a
+specialized tool above.
+
 Actions:
   search — Query DuckDuckGo for a topic. Returns a summary, key facts,
     and related results. Good for: looking up CVEs, checking what a

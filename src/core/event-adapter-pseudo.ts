@@ -46,6 +46,7 @@ import {
   streamOllama,
   streamOpenRouter,
 } from './llm-client';
+import { WebSuppressionTracker } from './web-suppression';
 import type { Source } from '../types/response.types';
 import type { NerdAlertTool } from '../types/response.types';
 
@@ -487,6 +488,14 @@ export async function runPseudoToolAdapter(
   const sourceSink: Source[] = [];
   let fullText = '';
 
+  // Per-turn web suppression tracker. Same role as in the other
+  // two adapters — prevents the model from stacking web on top
+  // of a specialized tool answer. The pseudo-tool path is what
+  // free-tier OpenRouter (Nemotron) and Mistral-via-fallback
+  // use, so this is the third place the v0.5.18.x convergence
+  // mattered. See src/core/web-suppression.ts.
+  const suppressionTracker = new WebSuppressionTracker();
+
   const lastUserMessage = [...initialMessages].reverse().find((m) => m.role === 'user');
   const lastUserText = typeof lastUserMessage?.content === 'string'
     ? lastUserMessage.content.toLowerCase()
@@ -632,10 +641,43 @@ export async function runPseudoToolAdapter(
 
     emit(turnComplete('tool_calls'));
 
+    // Execute each tool call. Web suppression check happens
+    // BEFORE the broker call — same shape as the Anthropic and
+    // OpenAI adapters. If a specialized tool already answered
+    // this turn, the web call is intercepted and replaced with
+    // a synthetic result that steers the model back to the
+    // existing answer.
     const resultBlocks: string[] = [];
     for (const call of pendingToolCalls) {
       emit(toolCallExecuting(call.id, call.name));
-      const result = await executeTool(call, brokerContext);
+
+      // ── Web suppression interception ────────────────────
+      // See src/core/web-suppression.ts. Free-tier Nemotron and
+      // Mistral-fallback both land here; both have shown the
+      // "specialized tool then web" stacking pattern.
+      let result: { output: string; error: boolean; sources: Source[] };
+      if (suppressionTracker.shouldSuppress(call.name)) {
+        const triggeredBy = suppressionTracker.succeededList();
+        console.log(
+          `[pseudo:web_suppressed] target=${call.name} ` +
+          `triggered_by=${triggeredBy.join(',')}`,
+        );
+        emit(meta('pseudo:web_suppressed', {
+          target:       call.name,
+          triggered_by: triggeredBy,
+        }));
+        result = {
+          output:  suppressionTracker.buildSuppressedResult(call.name),
+          error:   false,
+          sources: [],
+        };
+      } else {
+        result = await executeTool(call, brokerContext);
+      }
+
+      // Record for future suppression decisions in this turn.
+      suppressionTracker.recordResult(call.name, result.output, result.error);
+
       if (result.sources.length) sourceSink.push(...result.sources);
       emit(toolResult(
         call.id,

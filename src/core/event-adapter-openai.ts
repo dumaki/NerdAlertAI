@@ -78,7 +78,8 @@ import {
   type BrokerContext,
   executeTool,
 } from './permission-broker';
-import type { ORMessage } from './llm-client';
+import { WebSuppressionTracker } from './web-suppression';
+import type { ORMessage, OpenAIContentPart } from './llm-client';
 import type { Source } from '../types/response.types';
 
 // ── Typed capability error ───────────────────────────────────
@@ -158,7 +159,7 @@ interface OpenAIToolCall {
 }
 
 type OpenAIMessage =
-  | { role: 'system' | 'developer' | 'user'; content: string }
+  | { role: 'system' | 'developer' | 'user'; content: string | OpenAIContentPart[] }
   | { role: 'assistant'; content: string; tool_calls?: OpenAIToolCall[] }
   | { role: 'tool'; tool_call_id: string; content: string };
 
@@ -352,12 +353,26 @@ export async function runOpenAIAdapter(
   const systemRole = transport.systemRole ?? 'system';
 
   // Convert ORMessage[] history → OpenAIMessage[] (the wider shape).
-  // History is text-only; tool_calls only appear in turns we add inside
-  // the loop below.
-  const initialAsOpenAI: OpenAIMessage[] = initialMessages.map((m) => ({
-    role: m.role,
-    content: m.content,
-  }));
+  // Branched by role because OpenAIMessage's assistant case is string-
+  // content-only (assistant turns from history never carry images),
+  // while user/system cases accept the broader array form when the
+  // current request includes vision input. The defensive empty-string
+  // fallback for an assistant turn that somehow arrived with array
+  // content shouldn't happen at runtime — the client only ever pushes
+  // string-content turns into conversationHistory — but it satisfies
+  // the type narrowing without an unsafe cast.
+  const initialAsOpenAI: OpenAIMessage[] = initialMessages.map((m) => {
+    if (m.role === 'assistant') {
+      return {
+        role:    'assistant' as const,
+        content: typeof m.content === 'string' ? m.content : '',
+      };
+    }
+    return {
+      role:    m.role,
+      content: m.content,
+    };
+  });
 
   const messages: OpenAIMessage[] = [
     { role: systemRole, content: systemPrompt },
@@ -366,6 +381,14 @@ export async function runOpenAIAdapter(
 
   const sourceSink: Source[] = [];
   let fullText = '';
+
+  // Per-turn web suppression tracker. Same role as in the
+  // Anthropic adapter — mechanically intercepts web when a
+  // specialized tool has already answered. Mistral via Ollama
+  // is the primary motivator (v0.5.18.3 convergence) but every
+  // OpenAI-compatible provider gets the same protection.
+  // See src/core/web-suppression.ts.
+  const suppressionTracker = new WebSuppressionTracker();
 
   for (let iteration = 1; iteration <= maxIterations; iteration++) {
     console.log(
@@ -435,6 +458,12 @@ export async function runOpenAIAdapter(
 
       // Execute each call serially. Parallel execution is a future
       // optimization — needs tool-level concurrency-safety review first.
+      //
+      // Web suppression check happens BEFORE the broker call. If a
+      // specialized tool already answered this turn and the model
+      // is reaching for `web`, we substitute a synthetic tool_result
+      // and skip the live call entirely. Same shape as in the
+      // Anthropic adapter.
       for (const call of calls) {
         let parsedArgs: Record<string, unknown> = {};
         try {
@@ -452,9 +481,37 @@ export async function runOpenAIAdapter(
         emit(toolCallComplete(call.id, call.function.name, parsedArgs));
         emit(toolCallExecuting(call.id, call.function.name));
 
-        const result = await executeTool(
-          { id: call.id, name: call.function.name, args: parsedArgs },
-          brokerContext,
+        // ── Web suppression interception ────────────────────
+        // See src/core/web-suppression.ts. Mistral via Ollama is
+        // the entrenched failure case this protects against.
+        let result: { output: string; error: boolean; sources: Source[] };
+        if (suppressionTracker.shouldSuppress(call.function.name)) {
+          const triggeredBy = suppressionTracker.succeededList();
+          console.log(
+            `[openai-native:web_suppressed] target=${call.function.name} ` +
+            `triggered_by=${triggeredBy.join(',')}`,
+          );
+          emit(meta('openai:web_suppressed', {
+            target:       call.function.name,
+            triggered_by: triggeredBy,
+          }));
+          result = {
+            output:  suppressionTracker.buildSuppressedResult(call.function.name),
+            error:   false,
+            sources: [],
+          };
+        } else {
+          result = await executeTool(
+            { id: call.id, name: call.function.name, args: parsedArgs },
+            brokerContext,
+          );
+        }
+
+        // Record for future suppression decisions in this turn.
+        suppressionTracker.recordResult(
+          call.function.name,
+          result.output,
+          result.error,
         );
 
         if (result.sources.length) sourceSink.push(...result.sources);

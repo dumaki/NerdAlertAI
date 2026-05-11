@@ -102,6 +102,7 @@ const ALLOWED: Record<string, { description: string; minLen: number; maxLen: num
   'openclaw-token':         { description: 'OpenClaw gateway token',                            minLen: 16, maxLen: 200 },
   'openrouter-key':         { description: 'OpenRouter API key',                                minLen: 30, maxLen: 200 },
   'anthropic-key':          { description: 'Anthropic API key',                                 minLen: 30, maxLen: 200 },
+  'server-auth-token':      { description: 'NerdAlert server bearer token (auto-generated on first boot; rotate by entering a new value)', minLen: 16, maxLen: 128 },
   'wazuh-indexer-password':    { description: 'Wazuh Indexer password (OpenSearch on port 9200)',  minLen: 8,  maxLen: 200 },
   'crowdsec-machine-password': { description: 'CrowdSec machine password (LAPI, used for /v1/alerts)',  minLen: 8,  maxLen: 200 },
   'crowdsec-bouncer-api-key':  { description: 'CrowdSec bouncer API key (used for /v1/decisions)',     minLen: 30, maxLen: 64  },
@@ -169,6 +170,75 @@ export function mountSecurityRoutes(app: Express): void {
       const backend = await setCredential(name, trimmed);
       // Audit log: name and backend only. Never the value, never a fingerprint of it.
       console.log(`[security] credential set name=${name} backend=${backend} ts=${new Date().toISOString()}`);
+
+      // ── LLM provider keys ─────────────────────────────────────
+      // Refresh the in-memory cache in llm-client so the next chat
+      // request picks up the new key without a server restart.
+      // Without this, the user would set the key in /setup, send a
+      // message, and still get the "key not configured" error until
+      // they bounced the server.
+      if (name === 'openrouter-key') {
+        try {
+          const { initOpenRouterKey } = require('../core/llm-client');
+          await initOpenRouterKey();
+        } catch (e: any) {
+          console.warn('[security] openrouter cache refresh after credential write failed:', e?.message);
+        }
+      }
+
+      if (name === 'anthropic-key') {
+        try {
+          const { initAnthropicKey } = require('../core/llm-client');
+          await initAnthropicKey();
+        } catch (e: any) {
+          console.warn('[security] anthropic cache refresh after credential write failed:', e?.message);
+        }
+      }
+
+      // ── OpenClaw gateway token ────────────────────────────────
+      // Same pattern — refresh the cache in soc-client so the next
+      // agent-mediated SOC tool call (wazuh_get_alerts, pihole_summary,
+      // etc.) uses the new token. The wall is unaffected (it uses
+      // direct clients, not OpenClaw), so this only matters for the
+      // agent's tool-loop path.
+      if (name === 'openclaw-token') {
+        try {
+          const { initOpenclawCredential } = require('../tools/builtin/soc-client');
+          await initOpenclawCredential();
+        } catch (e: any) {
+          console.warn('[security] openclaw cache refresh after credential write failed:', e?.message);
+        }
+      }
+
+      // ── Server bearer token ────────────────────────────────
+      // Refresh the cache in auth.ts so the next request validates
+      // against the new value. This is the rotation path: a user can
+      // enter a new bearer token via /setup and it takes effect
+      // immediately. Existing browser sessions holding the old token
+      // will start getting 401s and need to reload GET / to pick up
+      // the new token from the HTML config injection.
+      if (name === 'server-auth-token') {
+        try {
+          const { initServerAuthToken } = require('./auth');
+          await initServerAuthToken();
+        } catch (e: any) {
+          console.warn('[security] server-auth-token cache refresh after credential write failed:', e?.message);
+        }
+      }
+
+      // ── Telegram bot token ───────────────────────────────
+      // Refresh the cache in src/telegram/credential.ts so the
+      // poll loop picks up the new token on its next iteration.
+      // No restart needed; the next getUpdates call uses the
+      // refreshed apiBase().
+      if (name === 'telegram-bot-token') {
+        try {
+          const { initTelegramCredential } = require('../telegram/credential');
+          await initTelegramCredential();
+        } catch (e: any) {
+          console.warn('[security] telegram-bot-token cache refresh after credential write failed:', e?.message);
+        }
+      }
 
       // If the gmail password was just set, refresh the in-memory cache so the
       // next loadGmailConfig() picks it up. Without this, the user would have to
