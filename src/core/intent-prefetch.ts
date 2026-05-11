@@ -53,6 +53,7 @@
 
 import { Source }            from '../types/response.types';
 import { executeTool, type BrokerContext } from './permission-broker';
+import * as chrono from 'chrono-node';
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -221,6 +222,200 @@ const INTENT_MAP: Record<string, IntentGroup> = {
         return { action: 'recent_failures', limit: 10 };
       }
       // Otherwise fall through to defaultParams (action=list).
+      return undefined;
+    },
+  },
+
+  // ── Reminders (one-shot) ──────────────────────────────
+  // Sibling of the cron group. Same motivation: without an entry
+  // here, Mistral fails to discover the reminders tool under the
+  // tool-list overload and the user's "remind me" never fires.
+  //
+  // PREFETCH ACTIONS
+  // ─────────────────────────────────────────────────
+  //   - list:   default. "my reminders", "what reminders do I have"
+  //   - set:    "remind me to X (when)", "set a reminder for (when): X"
+  //   - cancel: "cancel reminder <id>"
+  //
+  // CAPTURE-ON-PREFETCH FOR SET
+  // ─────────────────────────────────────────────────
+  // Setting a reminder via prefetch is a real side effect — same
+  // pattern memory uses for capture, documented under Pattern 19
+  // in v0.5.13.2. The reminder row is committed before the model
+  // speaks. False-positive risk is bounded by:
+  //   1. anchored keyword ("remind me" / "set a reminder")
+  //   2. chrono.parse must find a parseable time span; otherwise
+  //      the extractor returns undefined and the tool falls back
+  //      to the list action (read-only)
+  //   3. reminders are soft-cancellable via the cancel action
+  // The cost of getting it wrong (one accidental reminder, easily
+  // cancelled) is much lower than the cost of NOT setting it
+  // when the user clearly asked (every "remind me" on Mistral
+  // becoming a no-op).
+  //
+  // Distinct from cron's prefetch policy: cron writes a recurring
+  // job that runs forever until manually deleted — high stakes,
+  // so cron prefetch is read-only. Reminders are one-shot — low
+  // stakes, so write-on-prefetch is justified.
+  reminders: {
+    keywords: [
+      'remind me', 'remind me to',
+      'set a reminder', 'set reminder',
+      'reminders', 'reminder for',
+      'my reminders', 'list reminders', 'what reminders',
+      'cancel reminder', 'cancel my reminder',
+    ],
+    tools: ['reminders'],
+    defaultParams: { action: 'list' },
+    paramExtractor: (msg: string) => {
+      const lower = msg.toLowerCase();
+
+      // ── cancel ──────────────────────────────
+      // Match the reminder id shape produced by genId():
+      // rem-<base36 timestamp>-<5char suffix>. If no id is
+      // present, fall through to list — the user almost certainly
+      // wants to see ids before they cancel.
+      if (/\bcancel\b/.test(lower)) {
+        const idMatch = msg.match(/\b(rem-[a-z0-9]+-[a-z0-9]{5})\b/i);
+        if (idMatch) {
+          return { action: 'cancel', reminder_id: idMatch[1] };
+        }
+        return undefined;
+      }
+
+      // ── set ──────────────────────────────────
+      // Require a strong anchor before we commit to writing.
+      // "remind me to call mom in 20 minutes" → set
+      // "set a reminder for tomorrow at 9am: call the dentist" → set
+      if (/\b(remind\s+me|set\s+a?\s*reminder)\b/.test(lower)) {
+        let parsed;
+        try {
+          parsed = chrono.parse(msg, new Date());
+        } catch {
+          // chrono shouldn't throw, but if it does we fall through
+          // to list rather than guess at a write.
+          return undefined;
+        }
+        if (!parsed || parsed.length === 0) return undefined;
+
+        const timeSpan = parsed[0];
+        const when     = timeSpan.text;
+
+        // Split the message at the time span. The user's actual
+        // reminder text is either before or after the time phrase
+        // depending on phrasing:
+        //   "remind me to call mom IN 20 MINUTES"        → before
+        //   "set a reminder FOR TOMORROW: call mom"      → after
+        const before = msg.slice(0, timeSpan.index).trim();
+        const after  = msg.slice(timeSpan.index + timeSpan.text.length).trim();
+
+        // Strip the anchor prefix and any orphan connectives
+        // (colons, dashes, "that", "to", "for").
+        const stripAnchor = (s: string) => s
+          .replace(/^(?:please\s+)?remind\s+me\s+(?:to\s+|that\s+)?/i, '')
+          .replace(/^(?:please\s+)?set\s+a?\s*reminder\s+(?:to\s+|for\s+|that\s+)?/i, '')
+          .replace(/^[:\s\-,]+|[:\s\-,]+$/g, '')
+          .trim();
+
+        const beforeCleaned = stripAnchor(before);
+        const afterCleaned  = stripAnchor(after);
+
+        // Pick whichever side has actual content. If both do, take
+        // the longer — the message tends to dominate the time phrase.
+        const message =
+          afterCleaned.length > beforeCleaned.length
+            ? afterCleaned
+            : beforeCleaned;
+
+        if (!message) return undefined;
+
+        return { action: 'set', message, when };
+      }
+
+      // Otherwise fall through to defaultParams (action=list).
+      return undefined;
+    },
+  },
+
+  // ── Maps / location ('directions to', 'how far', 'address of') ──
+  // Geocoding (Nominatim) and routing (OSRM). Read-only; both
+  // actions are safe to commit on prefetch. Without this group,
+  // Mistral can't discover the maps tool under the tool-list
+  // overload — same shape as memory / cron / reminders.
+  //
+  // KEYWORD COLLISION
+  // ─────────────────────────────────────────────────
+  // Deliberately narrow keywords — avoiding generic 'where is' /
+  // 'find' because they're far broader than maps. We accept the
+  // trade-off that "where is the Empire State Building?" won't
+  // fire prefetch on Mistral (Sonnet can still call maps via
+  // the ReAct loop). Adding 'where is' here would cause every
+  // "where is the bug in my code" / "where is the file" query
+  // to burn a Nominatim call and return noise.
+  //
+  // Web's universal demotion already handles the case where a
+  // maps query also triggers web ("find directions to X"): web
+  // loses to any specific group, including maps.
+  maps: {
+    keywords: [
+      // Directions
+      'directions to', 'directions from',
+      'how far is', 'how far to', 'how far from',
+      'distance to', 'distance from', 'distance between',
+      'drive time', 'driving time', 'walk time', 'walking time',
+      'how long to drive', 'how long does it take to drive',
+      'route to', 'route from',
+      // Geocoding
+      'address of', 'address for',
+      'show on map', 'show on the map', 'on the map',
+      'geocode', 'geo code',
+      'coordinates of', 'coords of', 'gps for', 'lat lon for',
+    ],
+    tools: ['maps'],
+    paramExtractor: (msg: string) => {
+      // Order matters — most specific patterns first so "from A
+      // to B" doesn't get split incorrectly by a lone "to X"
+      // pattern.
+
+      // ── directions: "from A to B" ──────────────────────
+      // Greediness is controlled by requiring " to " in the
+      // middle. The first capture group becomes from, the second
+      // becomes to. Trailing punctuation stripped.
+      const fromTo = msg.match(/\bfrom\s+(.+?)\s+to\s+(.+?)[?.!]?\s*$/i);
+      if (fromTo) {
+        return {
+          action: 'directions',
+          from:   fromTo[1].trim(),
+          to:     fromTo[2].trim(),
+        };
+      }
+
+      // ── directions: "directions to X" / variants ──────────
+      // No 'from' — the maps tool falls back to memory's
+      // user.location automatically.
+      const toMatch =
+        msg.match(/\bdirections\s+to\s+(.+?)[?.!]?\s*$/i) ||
+        msg.match(/\bhow\s+far\s+(?:is\s+it\s+)?(?:to\s+)?(.+?)[?.!]?\s*$/i) ||
+        msg.match(/\bdistance\s+to\s+(.+?)[?.!]?\s*$/i) ||
+        msg.match(/\b(?:drive|driving|walk|walking)\s+time\s+to\s+(.+?)[?.!]?\s*$/i) ||
+        msg.match(/\broute\s+to\s+(.+?)[?.!]?\s*$/i);
+      if (toMatch) {
+        return { action: 'directions', to: toMatch[1].trim() };
+      }
+
+      // ── geocode: "address of X" / "X on the map" / etc ─────
+      const geocodeMatch =
+        msg.match(/\baddress\s+(?:of|for)\s+(.+?)[?.!]?\s*$/i) ||
+        msg.match(/\b(?:show|find)\s+(.+?)\s+on\s+(?:the\s+)?map[?.!]?\s*$/i) ||
+        msg.match(/\b(?:coordinates|coords|gps|lat\s+lon)\s+(?:of|for)\s+(.+?)[?.!]?\s*$/i) ||
+        msg.match(/\bgeocode\s+(.+?)[?.!]?\s*$/i);
+      if (geocodeMatch) {
+        return { action: 'geocode', query: geocodeMatch[1].trim() };
+      }
+
+      // No clean extraction. Return undefined so the broker calls
+      // the tool with no params; tool returns a usage error and
+      // the model narrates a graceful clarification request.
       return undefined;
     },
   },

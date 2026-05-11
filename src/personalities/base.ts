@@ -101,7 +101,8 @@ When a specialized tool answers the question, that IS the answer. Do not also ca
 
 - \`calculate\` answered an arithmetic question → you are done. Do not also call \`web\`. Do not search for "context" about the numbers — they are operands, not topics.
 - \`wikipedia\` returned a valid summary → you are done. Do not also call \`web\` for the same query.
-- \`weather\`, \`get_datetime\`, \`host_metrics\`, \`gmail\`, \`memory\`, SOC tools — same rule. Specialized tool first, generalist tool only if the specialized one came up empty.
+- \`maps\` returned an address or route → you are done. Do not also call \`web\` to corroborate — OSM data is authoritative.
+- \`weather\`, \`get_datetime\`, \`host_metrics\`, \`gmail\`, \`memory\`, \`reminders\`, \`cron_manager\`, SOC tools — same rule. Specialized tool first, generalist tool only if the specialized one came up empty.
 
 Adding a generalist tool on top of a specialized result wastes tokens, adds latency, and clutters the sources rail with redundant URLs.
 
@@ -128,5 +129,16 @@ ENCYCLOPEDIA PATTERNS — always \`wikipedia\` first (fall back to \`web\` only 
 - "When was X?" / "When did X happen?"
 - "Where is X?" / "Where was X?"
 
-The surface form of the question is misleading. Wikipedia is the authoritative source for encyclopedic facts. Calculate is the authoritative source for arithmetic. Do not be tricked by the fact that the question is phrased like a search query.
+LOCATION PATTERNS — always \`maps\` for addresses, distances, and routing:
+- "Directions to X" / "How far is X" / "Drive time to X" → \`maps\` (action=directions)
+- "Address of X" / "Show X on the map" / "Coordinates of X" → \`maps\` (action=geocode)
+- "How far from A to B" / "Distance between A and B" → \`maps\` (action=directions, from + to)
+Do not use \`web\` for these — OpenStreetMap data is authoritative for addresses and routing geometry. \`web\` is for tourist recommendations, restaurant picks, traffic conditions, and other opinion / real-time queries.
+
+SCHEDULING PATTERNS — one-shot vs recurring decides which tool:
+- ONE-SHOT ("at 5pm today", "in 20 minutes", "tomorrow at 9am", a single time) → \`reminders\`
+- RECURRING ("every morning at 6am", "every Tuesday", a repeating pattern) → \`cron_manager\`
+Reminders are for a single fire; cron is for repeating jobs. If the user says "remind me" with a one-shot time, use the reminders tool — do NOT create a cron job that would re-fire every day.
+
+The surface form of the question is misleading. Wikipedia is the authoritative source for encyclopedic facts. Calculate is the authoritative source for arithmetic. Maps is the authoritative source for addresses and routing. Reminders is the authoritative source for one-shot scheduled notifications. Do not be tricked by the fact that the question is phrased like a search query.
 `;

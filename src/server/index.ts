@@ -22,6 +22,7 @@ import { mountSecurityRoutes } from './security-routes';
 import { mountFilesRoutes, ensureProjectsRoot } from './files-routes';
 import { startTelegram } from '../telegram';
 import { startCron, stopCron, setCronStatusEmitter } from '../cron';
+import { startReminders, stopReminders } from '../reminders';
 import { initGmailCredential } from '../gmail/config';
 import { initOpenRouterKey, initAnthropicKey } from '../core/llm-client';
 import { initOpenclawCredential } from '../tools/builtin/soc-client';
@@ -252,14 +253,27 @@ startTelegram().catch((err: unknown) => {
     console.error('[Cron] Failed to start:', err);
   });
 
+  // ── Reminders engine ────────────────────────────────────────
+  // Starts the 30-second tick loop that fires due reminders. On
+  // first tick, any past-due reminders (server was down when they
+  // should have fired) get delivered with a delayed flag so the
+  // Telegram message includes a "delayed from HH:MM" tag. Separate
+  // module from cron because reminders are one-shot vs recurring
+  // — different table, different lifecycle, different UX.
+  startReminders().catch((err: unknown) => {
+    console.error('[Reminders] Failed to start:', err);
+  });
+
   process.on('SIGTERM', () => {
     console.log('[Server] SIGTERM received — shutting down...');
+    stopReminders();
     stopCron();
     process.exit(0);
   });
 
   process.on('SIGINT', () => {
     console.log('[Server] SIGINT received — shutting down...');
+    stopReminders();
     stopCron();
     process.exit(0);
   });

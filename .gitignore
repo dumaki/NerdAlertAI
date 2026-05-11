@@ -25,4 +25,9 @@ data/cron.db
 data/cron.db-wal
 data/cron.db-shm
 data/last_shutdown.txt
+
+#== REMINDERS FILES ==
+data/reminders.db
+data/reminders.db-wal
+data/reminders.db-shm
 .env*

@@ -18,6 +18,8 @@ import { config }        from '../config/loader';
 import datetimeTool    from './builtin/datetime';
 import calculatorTool  from './builtin/calculator-tool';
 import wikipediaTool   from './builtin/wikipedia-tool';
+import remindersTool   from './builtin/reminders-tool';
+import mapsTool        from './builtin/maps-tool';
 import memoryTool      from './builtin/memory-tool';
 import gmailTool       from './builtin/gmail-tool';
 import gmailSetupTool  from './builtin/gmail-setup';
@@ -51,6 +53,8 @@ const ALL_TOOLS: NerdAlertTool[] = [
   datetimeTool,
   calculatorTool,
   wikipediaTool,
+  remindersTool,
+  mapsTool,
   memoryTool,
   helpTool,
   weatherTool,
