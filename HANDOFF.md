@@ -1,127 +1,154 @@
 # NerdAlertAI — Handoff to next session
 
-**Generated:** 2026-05-10 (v0.5.20 shipped, chat starting to fill, fresh slate)
-**Branch:** dev — clean checkpoint, one commit ahead of v0.5.18.3
-**Spec:** `docs/NerdAlert_Spec_v0_5_20.md` is the latest canonical
-reference, covering the reminders + maps launch and the split-server
-delivery limitation observed in the smoke test
-**Repo state:** `tsc --noEmit` clean. `package.json` at 0.5.20.
-chrono-node@^2.9.1 added as a dep (MIT, zero runtime deps, 0
-vulnerabilities).
+**Generated:** 2026-05-11 (v0.5.23 shipped, voice TTS half complete)
+**Branch:** dev — four commits ahead of v0.5.22
+**Spec:** `docs/NerdAlert_Spec_v0_5_23.md` is the latest canonical
+reference, covering the Voice module TTS half (Slices 1+2) and the
+AVClub planning artifact for v0.7+.
+**Repo state:** `tsc --noEmit` clean. `package.json` bumped to 0.5.23.
+No new runtime dependencies; Piper TTS is a system-level Python
+package (`pip install piper-tts`) not an npm dep.
 
-## What was just shipped (v0.5.20)
+## What was just shipped (v0.5.23)
 
-Single commit on `dev`:
+Four commits on `dev`:
 
 | SHA | Title |
 |---|---|
-| `60342b2` | v0.5.20: reminders + maps tools |
+| `8f99c08` | docs: AVClub module spec block (v0.7+ phased delivery) |
+| `481e0a9` | docs: Voice module spec block (Q2 STT + TTS via local pipelines) |
+| `cb3b12f` | feat(voice): Slice 1 - Piper TTS backend + /api/tts route |
+| `2494d77` | feat(voice): Slice 2 - UI speaker icon + auto-play toggle |
 
-Full breakdown in `docs/NerdAlert_Spec_v0_5_20.md`. The short
-version:
+Full breakdown in `docs/NerdAlert_Spec_v0_5_23.md`. The short version:
 
-**reminders** (L1) — new module at `src/reminders/` (store /
-dispatcher / engine / index) mirroring `src/cron/`'s shape, plus
-a tool at `src/tools/builtin/reminders-tool.ts` exposing
-`set` / `list` / `cancel`. One-shot scheduled notifications,
-chrono-node NL time parsing, SQLite at `data/reminders.db`,
-30s tick, past-due catch-up on startup. Distinct from cron
-(which is for recurring schedules).
+**Voice module Slice 1 (TTS backend)** — new `src/voice/piper-client.ts`
+(direct subprocess wrapper, typed errors, 10s watchdog, temp-file
+output pattern) plus `src/server/voice-routes.ts` (POST `/api/tts`,
+conditional mount via `config.voice.enabled`). Personality type gains
+a typed `voices?` field; Sherman and Brett get `voices.piper` configs
+pointing at `<id>/voice.onnx`. Repo never carries voice binaries —
+ONNX files live at `~/.nerdalert/voices/<id>/voice.onnx`. License-
+clean docs in `voices.example/README.md`.
 
-**maps** (L1) — single tool at `src/tools/builtin/maps-tool.ts`
-with `geocode` / `directions` actions. Nominatim (1 rps
-throttled, descriptive UA) + OSRM. Single-chokepoint pattern
-preserved for future offline / self-hosted swap. Memory-backed
-origin fallback (reads `user.location` like the weather tool).
-OSM attribution via the existing sources rail.
+**Voice module Slice 2 (UI integration)** — capability-discovery
+endpoint `GET /api/voice/personalities` returns which personalities
+have voice config + ONNX-on-disk. UI fetches at boot, renders speaker
+button next to agent messages whose personality is in the set. New
+VOICE section in Settings panel with AUTO-PLAY toggle. Hidden
+`<audio id="tts-player">` for playback; single shared element so new
+clips naturally interrupt prior ones.
 
-Intent-prefetch groups added for both, with capture-on-prefetch
-for `reminders.set` (anchored on "remind me" / "set a reminder"
-+ a chrono-parseable time span). Personalities/base.ts gained
-LOCATION and SCHEDULING pattern blocks routing the agent to
-maps and reminders.
+**Two planning artifacts** — `docs/avclub_module_block.md` (v0.7+
+media generation with image/audio/video sub-tools) and
+`docs/voice_module_block.md` (full five-slice voice plan). Both
+follow the `v0_7_milestone_block.md` planning-artifact pattern.
 
-## Smoke test results from end of v0.5.20
+## Smoke test results
 
 Confirmed working on Mac dev server:
 
-- **Maps**: routed correctly. `[NerdAlert] Intent detected: maps`
-  → `[NerdAlert] Prefetch results: maps=ok`.
-- **Reminders fire engine**: confirmed firing on schedule.
-  `[Reminders] Firing 1 reminder(s)` for a "go to bed" reminder.
+- **`piper-tts` installed via** `pip install piper-tts` (anaconda
+  environment, binary at `/opt/anaconda3/bin/piper`).
+- **ONNX files dropped** at `~/.nerdalert/voices/sherman/voice.onnx`
+  and `~/.nerdalert/voices/brett/voice.onnx` plus matching
+  `.onnx.json` configs.
+- **Direct piper invocation** produces valid WAV. afplay confirms
+  Sherman's voice.
+- **`/api/tts` end-to-end**: HTTP 200, valid WAV bytes (non-zero
+  length), afplay plays Sherman. Same for Brett.
+- **UI click-to-play**: speaker button appears below agent
+  messages, click plays the audio inline.
+- **Auto-play**: toggling in Settings → VOICE → AUTO-PLAY · ON
+  causes freshly-streamed messages to play automatically when
+  done. Does NOT fire on history restore (deliberate).
+- **Voiceless personalities** (Kenny, Toshi, etc.) correctly
+  show no speaker icons — capability endpoint filters them out
+  because they have no `voices.piper` config.
 
-**Found one real issue**: split-server Telegram delivery (see
-below). Reminders fire on the Mac but can't deliver because the
-Mac has no `telegram-bot-token` configured (Telegram lives on the
-Optiplex). Working as designed in the dispatcher's "drop one
-rather than spam ten" fallback, but the user-visible UX is poor:
-you ask the Mac for a reminder, get a confirmation, never hear
-about it.
+## Three things worth knowing for the next session
 
-Full cross-model phrasing matrix (Sonnet / Mistral) was NOT
-run end-of-session — pick that up in the new chat.
+### 1. The piper subprocess temp-file workaround (Pattern 24)
 
-## The split-server reminder delivery problem
+The Python `piper-tts` (OHF-Voice/piper1-gpl) does NOT reliably
+stream WAV to stdout despite the help text suggesting otherwise.
+Both `--output_file -` (C++ piper convention) and omitting the
+flag entirely produce 0-byte stdout. The reliable pattern is:
 
-Mac dev server and Optiplex production server are independent
-NerdAlert processes with independent SQLite stores. Reminders
-set on the Mac fire on the Mac (no Telegram → logged warning).
-Reminders set on the Optiplex fire on the Optiplex (Telegram
-configured → delivered).
+```typescript
+const tmpPath = path.join(
+  os.tmpdir(),
+  `nerdalert-tts-${process.pid}-${Date.now()}-${randomSuffix}.wav`,
+);
+spawn('piper', ['--model', modelPath, '--output_file', tmpPath]);
+// ... on close, fs.promises.readFile(tmpPath), then unlink
+```
 
-Spec `docs/NerdAlert_Spec_v0_5_20.md` "Known limitation"
-section lists four candidate fixes ranked by cost:
+Same pattern will apply to whisper.cpp in Slice 3 if its stdout
+behavior turns out to be similarly version-dependent. Worth probing
+during the first manual `whisper.cpp` invocation in the next session.
 
-1. **Configure Telegram on the Mac too** (same bot token, same
-   chat id). Cheapest fix. Probably the first thing to try in
-   the new chat.
-2. **Chat injection as a Mac-side delivery channel.** New SSE
-   event the UI surfaces as an in-chat notification. Composes
-   with #1 for full coverage. Mentioned as a future channel in
-   the dispatcher header comment already.
-3. Shared reminders.db across servers. Big architectural
-   commitment, only worth it if memory/cron/sessions also share.
-4. Cross-server forwarding webhook. Adds inter-server coupling
-   the project has avoided.
+### 2. Mac keychain access pattern for testing
 
-User's call which path to take. My read: do #1 immediately (it's
-a /setup paste on the Mac), then evaluate whether #2 is worth
-building for the in-chat UX win.
+The auth token lives in the macOS keychain via keytar. For curl
+testing, the retrieval command is:
+
+```bash
+TOKEN=$(security find-generic-password -s nerdalert -a server-auth-token -w)
+```
+
+Service is `nerdalert`, account is the credential name. Same pattern
+works for any credential the keychain holds (`anthropic-key`,
+`openrouter-key`, etc.).
+
+### 3. License-clean voice-file handling is a stable pattern
+
+Voice files (ONNX + matching .json) live OUTSIDE the repo at
+`~/.nerdalert/voices/<id>/voice.onnx`. The repo ships
+`voices.example/README.md` documenting the layout, the Piper training
+pipeline, and the license chain (Lessac base = Blizzard research-only;
+LibriTTS / LJ Speech = commercially redistributable; espeak-ng GPL
+caveat). `.gitignore` blocks `*.onnx`, `*.onnx.json`, `*.wav`, `*.mp3`,
+`*.ogg`, `*.flac` as a safety net.
+
+When Slice 3 lands whisper.cpp models, the same pattern applies:
+models in `~/.nerdalert/whisper-models/`, with a `whisper.example/README.md`
+documenting download URLs (or relying on `whisper.cpp`'s built-in
+`download-ggml-model.sh` script).
 
 ## What the new chat is for
 
 Pick one or more of:
 
-1. **Split-server reminder delivery fix** — likely #1 + #2 from
-   the candidate list. #1 is /setup paste, no code. #2 is the
-   real work: new SSE event in the wire format, dispatcher
-   gains a second channel, UI gains a notification surface.
-   Probably a v0.5.21 release.
+1. **Voice Slices 3 + 4 — STT half.** The paired ship. Slice 3 is
+   the backend: whisper.cpp install on Optiplex (or LAN GPU box if
+   we want faster inference), `src/voice/whisper-client.ts` with
+   the ffmpeg → whisper.cpp pipeline, `POST /api/stt` endpoint.
+   Slice 4 is the UI: mic button next to send, MediaRecorder
+   integration, recording state visuals, auto-populate the input
+   bar on transcribe. Full spec in `docs/voice_module_block.md`.
 
-2. **v0.5.19 adapter-level web suppression** — the deferred work
-   from the v0.5.18.3 patch arc. Full design at the bottom of
-   `docs/NerdAlert_Spec_v0_5_18_3.md`. Sketch: track succeeded
-   specialized tools per turn in the three adapters; intercept
-   subsequent `web` calls within the same turn; return synthetic
-   tool result steering the model away. ~30 lines per adapter
-   plus a shared helper. Doesn't touch `core/agent.ts`.
+2. **Optiplex deploy verification for Slices 1+2.** Pull dev on
+   prod, install piper-tts there, copy voice files, confirm
+   `/api/tts` works under systemd PATH (the predicted risk: piper
+   might not be on systemd's minimal PATH, even though it's on the
+   user's shell PATH). Low-risk, useful info, ~30 min.
 
-3. **Cross-model phrasing matrix for v0.5.20** — verify both
-   tools route correctly on Sonnet (Brett) and Mistral (Kenny).
-   The capture-on-prefetch for `reminders.set` is the most
-   interesting case — if Mistral commits accidental reminders
-   on edge phrasings, the keyword anchor needs tightening (and
-   the soft-cancel via list+cancel is the recovery path).
-   Quick session, mostly observational.
+3. **Continue Q1 backlog** — `q1-units` and `q1-imagegen` are the
+   remaining items not paired with v0.6/v0.7 work. Currency
+   already covers most of `q1-units`; the unit-conversion piece
+   could be folded into the calculate tool's mathjs unit support.
+   `q1-imagegen` is bigger and pairs with AVClub Slice 1.
 
-4. **Continue Q1 backlog** — see table below. Most attractive
-   next picks are probably q1-past-chats (sessions persist
-   already; needs a sidebar UI) or q1-export (markdown / copy /
-   share-link).
+4. **Split-server reminder delivery fix (still pending from
+   v0.5.20).** Configure Telegram on the Mac (`telegram-bot-token`
+   into Mac keychain) + add chat-injection delivery channel as
+   second route. Reminders set on the Mac currently fire but
+   don't deliver. Smaller scope than the voice STT work.
 
-User's call on order in the new chat.
+User's call on order.
 
-## Q1 backlog after v0.5.20
+## Q1 backlog after v0.5.23
 
 From `nerdalert-checklist.html`, remaining tool items:
 
@@ -133,160 +160,136 @@ From `nerdalert-checklist.html`, remaining tool items:
 | q1-maps | Maps / location lookup | ✅ shipped v0.5.20 |
 | q1-file-upload | Drag-and-drop into chat | ✅ shipped |
 | q1-vision | Image input for vision models | ✅ shipped |
-| q1-past-chats | Past-conversation sidebar | **next chat candidate** |
-| q1-export | Conversation export (md / copy / share-link) | **next chat candidate** |
-| q1-units | Currency + unit conversion | partially covered by calculator's mathjs unit support; "units" is really live FX rates now |
-| q1-imagegen | Image generation = AVClub at L2 | paired with AVClub personality work, larger scope |
-| q1-voice-browser | Web Speech API STT/TTS | content-channel extension, biggest unlock + biggest scope |
+| q1-past-chats | Past-conversation sidebar | ✅ shipped |
+| q1-export | Conversation export | ✅ shipped |
+| q1-voice-browser | Web Speech / mic + TTS | **TTS half ✅ shipped v0.5.23; STT half pending (Slices 3+4)** |
+| q1-units | Currency + unit conversion | mostly covered by currency tool + calculate's mathjs units |
+| q1-imagegen | Image generation = AVClub at L2 | deferred to v0.7+ AVClub Slice 1 |
 
-## Reminders module — design notes that landed (for reference)
+## Voice module — design notes that landed
 
-Documented for future operators reading this in 6 months:
+### File structure
 
-**File structure**:
 ```
-src/reminders/store.ts        SQLite layer, data/reminders.db
-src/reminders/dispatcher.ts   Telegram channel chokepoint
-src/reminders/engine.ts       30s tick, past-due catch-up
-src/reminders/index.ts        public interface
-src/tools/builtin/reminders-tool.ts   L1 tool (set/list/cancel)
+src/voice/piper-client.ts        Subprocess wrapper, typed errors, watchdog
+src/server/voice-routes.ts       POST /api/tts, GET /api/voice/personalities
+voices.example/README.md         Layout + license chain docs (in repo)
+~/.nerdalert/voices/<id>/        Actual voice files (OUTSIDE repo)
+  voice.onnx                       Piper model
+  voice.onnx.json                  Piper config (auto-discovered)
 ```
 
-**Trust level**: L1. The tool creates persistent state and
-fires via Telegram (itself L1). No higher trust needed.
+### Trust posture
 
-**ID format**: `rem-<base36 timestamp>-<5char base36 suffix>` —
-e.g. `rem-mp0n9ip5-gy3up`. Short, sortable, prefix makes them
-easy to spot in logs alongside cron's uuids.
+`/api/tts`, `/api/voice/personalities`, and the future `/api/stt` all
+sit at the **transport layer**, not the tool layer. They transform
+text↔audio and take no action. No trust gating beyond the standard
+`server-auth-token` middleware. Endpoints are loopback/LAN only.
 
-**Tick cadence**: 30s (vs cron's 60s). Reminders are more time-
-sensitive; the higher cadence keeps "in 20 minutes" accurate
-to ±30s rather than ±60s. Each tick is one indexed SQL query;
-cost is negligible.
+### Per-personality voice config — multi-provider from day one
 
-**Past-due catch-up**: on startup, first tick passes
-`catchUp: true`. Anything overdue gets delivered immediately
-with the dispatcher's `delayed: true` option set (Telegram
-message includes "delayed from HH:MM, N hours late"). No
-shutdown-marker file needed — comparing `fire_at` to current
-time is robust enough.
+```typescript
+voices?: {
+  piper?: { model: string; config?: string };
+  // elevenlabs?: { voiceId: string };   // reserved for AVClub Slice 3
+}
+```
 
-**Capture-on-prefetch policy**: `reminders.set` writes on
-prefetch when (a) the anchor phrase matches and (b) chrono can
-locate a parseable time span. Different from cron's prefetch
-policy (read-only) because reminders are one-shot and soft-
-cancellable. See spec §"Pattern 22 — Capture-on-prefetch
-policy by stake".
+Same field, two routing paths. Voice module reads `voices.piper`
+today; AVClub Slice 3 will read `voices.elevenlabs` later. No
+personality migration required when AVClub ships.
 
-**Delivery channel: Telegram only**. Dispatcher chokepoint
-makes adding more channels (chat injection, email, desktop)
-a single-branch change. No engine or store changes required.
+### Capability discovery as a stable pattern (Pattern 25)
 
-## Maps tool — design notes that landed (for reference)
+`GET /api/voice/personalities` returns which personalities can speak
+*right now* — config present AND ONNX on disk. UI fetches at boot,
+uses the result to decide whether to render speaker icons. This is
+the chokepoint that keeps the UI from showing dead controls when a
+user has voice enabled but no model files installed yet. Same
+pattern will apply to AVClub providers, future voice provider
+selection, etc.
 
-**File structure**: single tool at `src/tools/builtin/maps-tool.ts`.
-No module needed — read-only stateless HTTP calls.
+### Module isolation verification
 
-**Three chokepoint functions** (all internal, all exported for
-future external test scaffolding):
-- `fetchGeocode(query)` → `GeocodeHit | null`
-- `fetchReverseGeocode(lat, lon)` → `GeocodeHit | null`
-- `fetchDirections(from, to, mode)` → `RouteResult | null`
+- `voice.enabled: false` → no routes mount, UI gets 404 on
+  `/api/voice/personalities`, `voiceablePersonalities` Set stays
+  empty, no speaker icons anywhere.
+- `ensureVoicesDir()` is a no-op when disabled (no mystery
+  directories appear in `$HOME`).
+- Personalities without `voices.piper` are filtered out of the
+  capability endpoint response — no speakers on their messages,
+  no UI errors.
 
-Same Kiwix-style pattern wikipedia uses. When a future offline
-Photon-on-Pi tile server lands, those three functions become
-thin routers and nothing else changes.
-
-**Nominatim 1 rps throttle**: enforced via in-process
-`lastNominatimAt` timestamp + sleep before each call (50ms
-safety margin = 1.1s gap). Two-geocode directions queries
-therefore take ~2.2s minimum. Acceptable for the user-facing
-latency budget.
-
-**OSRM coordinate order trap**: OSRM endpoint expects
-`lon,lat` — the opposite of human convention. Conversion
-happens inside `fetchDirections()` so callers can't get it
-wrong. This is the #1 silent-failure mode for maps tools;
-worth a comment when you read the code.
-
-**Memory-backed origin fallback**: `directions` reads
-`user.location` from memory when no `from` is given, same
-pattern weather uses. Sanitizer is a deliberately smaller
-subset of weather's (Nominatim is more flexible about address
-shape than Open-Meteo's bare-city geocoder).
-
-**Keyword narrowness**: maps keywords are intentionally narrow
-("directions to", "how far", "address of") rather than broad
-("where is", "find"). Pattern 23 in the spec documents why.
-
-## Cross-cutting reminders (unchanged from previous handoff)
+## Cross-cutting reminders (carried forward)
 
 - **Branch policy**: `dev` for all active work; `main` only on
-  explicit user confirmation. v0.5.17 + v0.5.18.x + v0.5.20
-  have not been merged to main yet — separate decision when
-  user is ready.
+  explicit user confirmation. v0.5.17 through v0.5.23 have not
+  been merged to main yet — separate decision when ready.
 - **Commit messages with special chars**: write to
-  `.git/COMMIT_<filename>.txt`, use `git commit -F .git/<file>`
-  pattern. v0.5.20 used `.git/COMMIT_v0_5_20.txt`. Pattern
-  required for em-dashes / angle brackets / section symbols
-  in zsh.
+  `.git/COMMIT_<name>.txt`, use `git commit -F .git/<file>`.
+  v0.5.23 used three: `COMMIT_AVCLUB.txt`, `COMMIT_VOICE.txt`,
+  `COMMIT_VOICE_S1.txt`, `COMMIT_VOICE_S2.txt`.
+- **`git add -A` is dangerous** — Slice 1's first commit
+  accidentally swept up a stray `sherman.wav` that piper-tts had
+  left in the repo root during stdout-debugging. Cleaned up with
+  a soft-reset + force-push to dev. Use explicit paths
+  (`git add src/voice/piper-client.ts ...`) when possible.
+  `.gitignore` now blocks audio file extensions as a safety net.
 - **TypeScript check**: `./node_modules/.bin/tsc --noEmit` from
-  project root with `export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH`
-  prefix in the osascript environment.
+  project root. In osascript environments, wrap in
+  `bash -lc '...'` to inherit the user's PATH.
 - **TS changes need ts-node restart** — user runs `nerd-start`.
 - **No server restart needed for UI changes** — `ui-routes.ts`
   reads `index.html` fresh on every `GET /`. Hard refresh in
   browser is enough.
 - **Package version bump cadence**: `package.json` bumps on each
-  minor version (e.g. 0.5.18 → 0.5.20). Pre-commits and patches
-  within a minor share the same version. v0.5.19 stayed reserved
-  for the deferred adapter-level web suppression work.
+  minor version. v0.5.22 → v0.5.23 for the voice TTS half.
+  Next bump (likely v0.5.24 or v0.6.0) lands with whatever
+  ships next.
 
 ## Key state to carry into the new chat
 
-- `package.json` version is `0.5.20`. Next minor (v0.5.21 split-
-  server delivery fix, or v0.5.19 web suppression, or whatever
-  user picks) bumps it.
-- `chrono-node@^2.9.1` is a runtime dependency. Used by both
-  the reminders tool and the intent-prefetch reminders group.
-- Reminders tool: `src/tools/builtin/reminders-tool.ts` — L1,
-  chrono-node 2.9.1 dependency, soft-cancel via SQLite
-  `cancelled` flag. Reference for any new L1 tool with persistent
-  state + dispatcher.
-- Reminders module: `src/reminders/` — first new module since
-  cron. Mirrors cron's shape exactly (store / dispatcher / engine
-  / index). Reference for future modules with similar lifecycle.
-- Maps tool: `src/tools/builtin/maps-tool.ts` — L1, no module
-  (stateless), single-chokepoint pattern. Reference for any new
-  L1 outbound-HTTP tool needing rate-limit compliance.
-- Telegram credential lives in keychain via /setup as
-  `telegram-bot-token`. Reminders dispatcher reads it via
-  `getTelegramBotToken()` from `src/telegram/credential.ts`.
-  This is the chokepoint that needs to know "is Telegram
-  configured" for any future delivery-channel work.
-- Intent-prefetch policy for write-on-prefetch is now documented
-  as Pattern 22 in the v0.5.20 spec. Memory + reminders write;
-  cron does not. The rule is recoverability vs blast radius.
+- `package.json` version is `0.5.23`. Next minor version bumps
+  it.
+- `piper-tts` (Python) is a SYSTEM dependency, not an npm dep.
+  Installed via `pip install piper-tts`. On Mac dev: present in
+  anaconda env at `/opt/anaconda3/bin/piper`. **Optiplex prod
+  has not yet been verified** — see "what the new chat is for"
+  option 2.
+- Voice files Sherman/Brett are at `~/.nerdalert/voices/<id>/voice.onnx`.
+  Both have matching `.onnx.json` configs. **Origin/license:
+  unknown which base checkpoint they were fine-tuned from.**
+  If Lessac (Blizzard license), they're personal-use only and
+  cannot ship with a public distribution. Decision to retrain
+  on LibriTTS or LJ Speech base lives in the user's hands when
+  public-distribution work begins.
+- New canonical patterns: Pattern 24 (subprocess output via temp
+  file, not stdout) and Pattern 25 (capability discovery
+  endpoint). Both documented in
+  `docs/NerdAlert_Spec_v0_5_23.md` and reusable for whisper.cpp
+  in Slice 3.
+- AVClub remains entirely planning-only. Multi-tool media
+  generation module spec lives at
+  `docs/avclub_module_block.md`. Implementation deferred until
+  v0.7+ after project storage primitive lands.
 
 ## Files to read first in the new chat
 
-1. `docs/NerdAlert_Spec_v0_5_20.md` — full v0.5.20 context,
-   especially the "Known limitation" section that frames the
-   next-chat agenda.
-2. `src/reminders/dispatcher.ts` — header comment explains the
-   future-channels architecture. If picking the chat-injection
-   fix, this is where the new channel branch lands.
-3. `src/telegram/bot.ts` and `src/telegram/credential.ts` — for
-   any Telegram-on-Mac /setup work.
+1. `docs/NerdAlert_Spec_v0_5_23.md` — full v0.5.23 context.
+2. `docs/voice_module_block.md` — Slices 3+4 design if STT is
+   the next push.
+3. `src/voice/piper-client.ts` — the subprocess pattern, the
+   template for `src/voice/whisper-client.ts`.
+4. `src/server/voice-routes.ts` — where `/api/stt` will mount
+   alongside the existing routes.
 
 ## What NOT to touch
 
-- `core/agent.ts` — core loop invariant, untouched by every
-  v0.5.x ship including v0.5.20. v0.5.19's planned web
-  suppression also doesn't touch this file (lives in the
-  adapters).
+- `core/agent.ts` — core loop invariant, untouched by everything
+  v0.5.x including v0.5.23.
 - `core/permission-broker.ts` — the chokepoint. Untouched.
 - The three adapters (`core/event-adapter-{anthropic,openai,pseudo}.ts`)
-  — only modified by v0.5.19 work, not by anything else.
+  — voice work doesn't go through the agent loop, so adapters are
+  unaffected.
 - `.env` — secrets never live here. All secrets in keychain via
   /setup. Env-self-check at boot flags violations.
