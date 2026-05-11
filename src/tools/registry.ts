@@ -16,6 +16,8 @@ import { config }        from '../config/loader';
 // ── Imports ──────────────────────────────────────────────────
 
 import datetimeTool    from './builtin/datetime';
+import calculatorTool  from './builtin/calculator-tool';
+import wikipediaTool   from './builtin/wikipedia-tool';
 import memoryTool      from './builtin/memory-tool';
 import gmailTool       from './builtin/gmail-tool';
 import gmailSetupTool  from './builtin/gmail-setup';
@@ -47,6 +49,8 @@ import {
 const ALL_TOOLS: NerdAlertTool[] = [
   // Core tools
   datetimeTool,
+  calculatorTool,
+  wikipediaTool,
   memoryTool,
   helpTool,
   weatherTool,

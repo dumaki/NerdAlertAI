@@ -91,6 +91,16 @@ tool_groups:
 # enabled: true/false controls whether the agent can see/use the tool at all
 # trust_level: minimum trust level required to call this tool (floor-raise)
 tools:
+  calculate:
+    enabled: true
+    trust_level: 0         # Pure CPU, no network, no credentials — safe at all
+                           # trust levels. Prevents arithmetic hallucinations.
+
+  wikipedia:
+    enabled: true
+    trust_level: 1         # Outbound HTTP to en.wikipedia.org, no auth.
+                           # Same trust profile as weather and web tools.
+
   memory:
     enabled: true
     trust_level: 1         # Read at L1; write actions live in the wrapper at L1
