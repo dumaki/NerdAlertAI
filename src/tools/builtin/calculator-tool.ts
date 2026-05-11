@@ -130,6 +130,11 @@ const calculatorTool = {
     'anything beyond trivial single-digit operations. Always call ' +
     'this tool for the user-facing answer. ' +
     '\n\n' +
+    'AUTHORITATIVE — the result is exact. DO NOT also call the web ' +
+    'tool to verify or cross-reference an arithmetic answer. That ' +
+    'is noise, not corroboration. One calculate call is the whole ' +
+    'answer. ' +
+    '\n\n' +
     'Examples of valid expressions:\n' +
     '  47 * 53\n' +
     '  (1 + 0.07)^30\n' +

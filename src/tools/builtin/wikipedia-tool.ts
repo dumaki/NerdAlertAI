@@ -251,7 +251,16 @@ const wikipediaTool = {
     'and 1-2 paragraphs of extract. The article URL is attached as a ' +
     'source — the sources rail in the UI will render it automatically. ' +
     'DO NOT quote the extract verbatim at length — summarize naturally ' +
-    'and let the user click through if they want the full article.',
+    'and let the user click through if they want the full article.' +
+    '\n\n' +
+    'AUTHORITATIVE FOR ENCYCLOPEDIA QUERIES — when this tool returns ' +
+    'a valid summary, DO NOT also call the web tool for the same ' +
+    'query. Wikipedia is the source of truth for encyclopedia-style ' +
+    'facts and the sources rail already cites the article. Adding a ' +
+    'web search on top is noise, not corroboration. The only reason ' +
+    'to call web after wikipedia is if the wikipedia result was a ' +
+    'disambiguation page or empty AND the user\'s question genuinely ' +
+    'needs a broader search.',
 
   trustLevel: 1,
 
