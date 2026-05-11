@@ -1033,6 +1033,40 @@
       display: none;
     }
 
+    /* Dock tooltip — themed replacement for the browser's native
+       title attribute popup (which is slow, unstyled, and clashes
+       with the rest of the UI). Pulls its label from aria-label
+       (which also remains the accessibility label for screen
+       readers, so this is a pure upgrade over title=).
+
+       v0.5.17 pre4 used a CSS-only ::after pseudo-element, but
+       the sidebar's overflow:hidden (needed by past-chats flex
+       layout in Phase 2b) clipped the tooltip whenever it
+       extended past the sidebar's right edge — most visibly on
+       the Settings icon. Fix: lift the tooltip out of the sidebar
+       entirely by making it position:fixed and appending a single
+       shared element to document.body. setupDockTooltips wires the
+       hover positioning. */
+    .dock-tooltip {
+      position: fixed;
+      padding: 4px 8px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--cyan);
+      background: var(--bg-deepest);
+      border: 1px solid var(--cyan-mid);
+      border-radius: 1px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity var(--transition-fast);
+      z-index: 9999;
+      text-shadow: 0 0 4px var(--cyan-glow);
+      transform: translate(-50%, -100%);
+    }
+
     /* ==========================================================
        CHAT AREA — center column
        ========================================================== */
@@ -2857,24 +2891,24 @@
     </div>
 
     <div class="module-dock" id="module-dock">
-      <button class="dock-icon active" data-view="chat" onclick="switchView('chat', null)" title="Chat">
+      <button class="dock-icon active" data-view="chat" onclick="switchView('chat', null)" aria-label="Chat">
         <span class="dock-icon-glyph">⬡</span>
       </button>
-      <button class="dock-icon" data-view="email" onclick="switchView('email', null)" title="Email">
+      <button class="dock-icon" data-view="email" onclick="switchView('email', null)" aria-label="Email">
         <span class="dock-icon-glyph">✉</span>
         <span class="dock-badge" id="email-badge" style="display:none"></span>
       </button>
-      <button class="dock-icon" data-view="soc" onclick="switchView('soc', null)" title="SOC">
+      <button class="dock-icon" data-view="soc" onclick="switchView('soc', null)" aria-label="SOC">
         <span class="dock-icon-glyph">⚠</span>
         <span class="dock-badge alert" id="soc-badge" style="display:none"></span>
       </button>
-      <button class="dock-icon" data-view="memory" onclick="switchView('memory', null)" title="Memory">
+      <button class="dock-icon" data-view="memory" onclick="switchView('memory', null)" aria-label="Memory">
         <span class="dock-icon-glyph">◈</span>
       </button>
-      <button class="dock-icon" data-view="export" onclick="switchView('export', null)" title="Export">
+      <button class="dock-icon" data-view="export" onclick="switchView('export', null)" aria-label="Export">
         <span class="dock-icon-glyph">⤓</span>
       </button>
-      <button class="dock-icon" data-view="settings" onclick="switchView('settings', null)" title="Settings">
+      <button class="dock-icon" data-view="settings" onclick="switchView('settings', null)" aria-label="Settings">
         <span class="dock-icon-glyph">⚙</span>
       </button>
     </div>
@@ -3395,6 +3429,7 @@
     setupTopbarDropdowns();
     setupSidebarSearch();
     setupPastChatsClicks();
+    setupDockTooltips();
     loadPastChats();
 
     // v0.5.17 pre3: apply the user's saved module-disabled set
@@ -4022,6 +4057,61 @@
       if (!item) return;
       const sessionId = item.dataset.sessionId;
       if (sessionId) loadPastChat(sessionId);
+    });
+  }
+
+  // ── Dock tooltips ── v0.5.17 pre4 (revised)
+  //
+  // Floating themed tooltip for dock icons. Originally a pure-CSS
+  // ::after pseudo-element on the icon itself, but that put the
+  // tooltip inside the sidebar's overflow:hidden box — the right
+  // edge clipped any tooltip that extended past the sidebar.
+  //
+  // This revision creates a single shared tooltip element on
+  // document.body (position:fixed escapes every overflow:hidden
+  // ancestor) and positions it via getBoundingClientRect on each
+  // hover. mouseenter/mouseleave (not mouseover/mouseout) so child
+  // elements like the badge dot don't retrigger the handlers.
+  //
+  // The tooltip label is read from aria-label — same source CSS
+  // attr() would have used, so adding a new dock icon with an
+  // aria-label and re-running setupDockTooltips on a refresh is
+  // enough to get a tooltip on it.
+  function setupDockTooltips() {
+    // Create the singleton tooltip if it doesn't already exist.
+    // Idempotent so re-calls (future code that adds icons later)
+    // don't duplicate it.
+    let tooltip = document.getElementById('dock-tooltip');
+    if (!tooltip) {
+      tooltip = document.createElement('div');
+      tooltip.className = 'dock-tooltip';
+      tooltip.id = 'dock-tooltip';
+      document.body.appendChild(tooltip);
+    }
+
+    document.querySelectorAll('.dock-icon[aria-label]').forEach(icon => {
+      // Skip icons we've already wired (in case of re-call).
+      if (icon.dataset.tooltipWired === 'true') return;
+      icon.dataset.tooltipWired = 'true';
+
+      icon.addEventListener('mouseenter', () => {
+        const label = icon.getAttribute('aria-label');
+        if (!label) return;
+        tooltip.textContent = label;
+        const rect = icon.getBoundingClientRect();
+        // Anchor at the horizontal center, 8px above the icon's top.
+        // The CSS transform: translate(-50%, -100%) on .dock-tooltip
+        // then shifts the tooltip up by its own height and left by
+        // half its width — net effect: bottom-center of tooltip
+        // sits 8px above the icon's top edge.
+        tooltip.style.left = `${rect.left + rect.width / 2}px`;
+        tooltip.style.top  = `${rect.top - 8}px`;
+        tooltip.style.opacity = '1';
+      });
+
+      icon.addEventListener('mouseleave', () => {
+        tooltip.style.opacity = '0';
+      });
     });
   }
 
