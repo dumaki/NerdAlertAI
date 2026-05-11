@@ -78,6 +78,7 @@ import {
   type BrokerContext,
   executeTool,
 } from './permission-broker';
+import { WebSuppressionTracker } from './web-suppression';
 import type { ORMessage, OpenAIContentPart } from './llm-client';
 import type { Source } from '../types/response.types';
 
@@ -381,6 +382,14 @@ export async function runOpenAIAdapter(
   const sourceSink: Source[] = [];
   let fullText = '';
 
+  // Per-turn web suppression tracker. Same role as in the
+  // Anthropic adapter — mechanically intercepts web when a
+  // specialized tool has already answered. Mistral via Ollama
+  // is the primary motivator (v0.5.18.3 convergence) but every
+  // OpenAI-compatible provider gets the same protection.
+  // See src/core/web-suppression.ts.
+  const suppressionTracker = new WebSuppressionTracker();
+
   for (let iteration = 1; iteration <= maxIterations; iteration++) {
     console.log(
       `[openai-native:iter] ${iteration}/${maxIterations} ` +
@@ -449,6 +458,12 @@ export async function runOpenAIAdapter(
 
       // Execute each call serially. Parallel execution is a future
       // optimization — needs tool-level concurrency-safety review first.
+      //
+      // Web suppression check happens BEFORE the broker call. If a
+      // specialized tool already answered this turn and the model
+      // is reaching for `web`, we substitute a synthetic tool_result
+      // and skip the live call entirely. Same shape as in the
+      // Anthropic adapter.
       for (const call of calls) {
         let parsedArgs: Record<string, unknown> = {};
         try {
@@ -466,9 +481,37 @@ export async function runOpenAIAdapter(
         emit(toolCallComplete(call.id, call.function.name, parsedArgs));
         emit(toolCallExecuting(call.id, call.function.name));
 
-        const result = await executeTool(
-          { id: call.id, name: call.function.name, args: parsedArgs },
-          brokerContext,
+        // ── Web suppression interception ────────────────────
+        // See src/core/web-suppression.ts. Mistral via Ollama is
+        // the entrenched failure case this protects against.
+        let result: { output: string; error: boolean; sources: Source[] };
+        if (suppressionTracker.shouldSuppress(call.function.name)) {
+          const triggeredBy = suppressionTracker.succeededList();
+          console.log(
+            `[openai-native:web_suppressed] target=${call.function.name} ` +
+            `triggered_by=${triggeredBy.join(',')}`,
+          );
+          emit(meta('openai:web_suppressed', {
+            target:       call.function.name,
+            triggered_by: triggeredBy,
+          }));
+          result = {
+            output:  suppressionTracker.buildSuppressedResult(call.function.name),
+            error:   false,
+            sources: [],
+          };
+        } else {
+          result = await executeTool(
+            { id: call.id, name: call.function.name, args: parsedArgs },
+            brokerContext,
+          );
+        }
+
+        // Record for future suppression decisions in this turn.
+        suppressionTracker.recordResult(
+          call.function.name,
+          result.output,
+          result.error,
         );
 
         if (result.sources.length) sourceSink.push(...result.sources);

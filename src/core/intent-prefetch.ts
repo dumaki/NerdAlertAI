@@ -559,6 +559,133 @@ const INTENT_MAP: Record<string, IntentGroup> = {
     },
   },
 
+  // ── Calculator (arithmetic expressions) ──────────────────
+  // The prompt-layer v0.5.18.x patches couldn't keep Mistral from
+  // routing "What is 25+50?" to web — the phrase is literal Google
+  // search-box syntax and the model's training data points hard at
+  // search for it. The prefetch path has the same problem from the
+  // other side: 'what is' is one of web's keywords, so prefetch
+  // fires web first and the model narrates from "no results found"
+  // instead of from a real calculation. The v0.5.22 adapter-level
+  // suppression only helps once the model emits a tool call — on
+  // the prefetch path (free-tier Nemotron, Mistral via pseudo-tool)
+  // the model never gets that chance because prefetch already took
+  // the turn.
+  //
+  // This group fixes the prefetch side. Combined with v0.5.22's
+  // adapter-level web suppression, the failure case is covered on
+  // both paths.
+  //
+  // KEYWORD GATING
+  // ───────────────────────────────────
+  // Plain substring matching on '+' and '*' would fire on every
+  // math-flavored message, but also on every URL with '/' or every
+  // regex with '*'. The detectIntent special-case below requires a
+  // recognizable digit-operator-digit pattern in the message before
+  // this group can match. Keywords are documentation of the trigger
+  // shape; the gate in detectIntent is the actual guard.
+  //
+  // Why not include 'what is' / 'who is' as keywords here? Two
+  // reasons. First, those would steal queries from web's broad
+  // fallback role for any factual question. Second, the digit-
+  // operator-digit gate already catches "what is 25+50?" via the
+  // presence of the math expression — the 'what is' keyword would
+  // be redundant and risk over-firing on non-math queries.
+  calculate: {
+    keywords: [
+      // Operator characters. The digit-operator-digit gate in
+      // detectIntent is what actually decides if this group fires.
+      '+', '*', '/', '^',
+      // Verb-form arithmetic phrasings — testers actually type
+      // these for non-symbolic math.
+      'calculate', 'compute',
+      'plus', 'minus', 'times',
+      'divided by', 'multiplied by',
+    ],
+    tools: ['calculate'],
+    paramExtractor: (msg: string) => {
+      // Strip the common question prefix so the calculator sees a
+      // clean expression. "What is 25+50?" → "25+50".
+      const stripped = msg
+        .replace(/^\s*(?:please\s+)?(?:can\s+you\s+)?(?:tell\s+me\s+)?(?:what(?:'?s|\s+is)|how\s+much\s+is|calculate|compute)\s+/i, '')
+        .replace(/[?.!]+\s*$/, '')
+        .trim();
+
+      // Look for the first recognizable arithmetic expression in
+      // what's left. mathjs (inside the calculator tool) handles
+      // parentheses, decimals, percentages, even unit conversions —
+      // we just need to find the expression substring to pass through.
+      const arithRe = /\d+(?:\.\d+)?(?:\s*[+\-*/^()]\s*\d+(?:\.\d+)?\s*)+/;
+      const match = stripped.match(arithRe);
+      if (match) {
+        return { expression: match[0].trim() };
+      }
+      // Fallback: pass the stripped message verbatim. mathjs may
+      // still parse "5 plus 3" if its parser is in a forgiving mode.
+      // If it can't, the tool returns an error and the prefetch
+      // shows as Unavailable in the system-prompt block.
+      return { expression: stripped };
+    },
+  },
+
+  // ── Wikipedia (encyclopedia-style queries) ──────────────
+  // Mirror of the calculate group's purpose: gives the prefetch path
+  // a real Wikipedia summary for biographical / encyclopedia queries
+  // instead of letting them fall through to web's DDG search.
+  // Without this, "Who is Marie Curie?" matched only the web group
+  // (via 'who is') and prefetch returned a DDG result list — the
+  // model then narrated from those + its own priors, missing the
+  // clean Wikipedia summary the wikipedia tool would have given.
+  //
+  // KEYWORD SELECTION
+  // ───────────────────────────────────
+  // 'who is/was/were/are' and 'tell me about' are unambiguously
+  // encyclopedia-flavored. 'define' too. We deliberately do NOT
+  // include 'what is' / 'what's' here — those are too broad and
+  // would steal queries from legitimate web intent ("what is the
+  // latest news on CVE-X", "what is happening with X"). The residual
+  // gap ("What is Marie Curie?" still routes to web) is an accepted
+  // trade-off; most users phrase encyclopedia queries about people
+  // as "Who is X?" anyway. "Tell me about X" covers the non-person
+  // encyclopedia case.
+  //
+  // The 'who is' / 'who was' keywords are also web group keywords,
+  // so both groups match — and the existing web-demotion rule (web
+  // loses when anything else matches) drops web cleanly.
+  //
+  // NO SPECIAL GATE
+  // ───────────────────────────────────
+  // Unlike calculate, wikipedia doesn't need a regex gate in
+  // detectIntent — its keywords are narrow enough that plain
+  // substring matching is safe. One edge worth knowing: "who is
+  // 25+50" would technically match both wikipedia and calculate.
+  // Calculate's gate fires (digit-op-digit present), wikipedia
+  // matches via 'who is', so both prefetch. The wikipedia call
+  // returns nothing useful and renders as Unavailable. Acceptable
+  // noise — that phrasing isn't a real user query.
+  wikipedia: {
+    keywords: [
+      'who is', 'who was', 'who were', 'who are',
+      'tell me about',
+      'define',
+    ],
+    tools: ['wikipedia'],
+    paramExtractor: (msg: string) => {
+      // Strip the question prefix to isolate the topic. Wikipedia's
+      // search handles compound topics ("Marie Curie", "World War 2")
+      // so we just need to get the subject text out.
+      const stripped = msg
+        .replace(/^\s*(?:please\s+)?(?:can\s+you\s+)?/i, '')
+        .replace(/^\s*(?:tell\s+me\s+about|define)\s+/i, '')
+        .replace(/^\s*who\s+(?:is|was|were|are)\s+/i, '')
+        .replace(/[?.!]+\s*$/, '')
+        .trim();
+
+      if (!stripped) return undefined;
+      return { query: stripped };
+    },
+  },
+
   pihole: {
     keywords: ['pihole', 'pi-hole', 'dns', 'blocked', 'ads', 'blocking', 'sinkhole'],
     tools:    ['pihole_summary', 'pihole_top_blocked'],
@@ -883,6 +1010,23 @@ export function detectIntent(message: string): string[] {
         return group.keywords.some(k =>
           new RegExp('\\b' + escapeForRegex(k) + '\\b', 'i').test(message)
         );
+      }
+      if (groupName === 'calculate') {
+        // Special gate: only fire if the message contains a
+        // recognizable digit-operator-digit arithmetic pattern.
+        // Calculate's keywords ('+', '*', '/', '^') are too generic
+        // for plain substring matching to be safe — they appear in
+        // URLs, regex, code snippets, file paths, etc. The gate
+        // enforces "arithmetic is actually present" before the group
+        // can match. Mirrors datetime's word-boundary pattern: keep
+        // the keyword list as documentation, do the real guard here.
+        //
+        // The verb keywords ('calculate', 'compute', 'plus', 'minus',
+        // 'times', 'divided by', 'multiplied by') are also gated by
+        // the same rule — a message that says "calculate" but has
+        // no numbers won't fire prefetch, which is fine because the
+        // calculator tool can't do anything without numbers anyway.
+        return /\d+\s*[+\-*\/^]\s*\d+/.test(message);
       }
       return group.keywords.some(k => lower.includes(k));
     })
