@@ -2023,6 +2023,159 @@
     }
 
     /* ==========================================================
+       EXPORT PANEL — v0.5.16 Phase 3
+       Right-panel view for downloading or copying the active
+       session as markdown. Lives next to Settings as a peer
+       utility view. Backend route is
+       GET /api/sessions/:id/export?format=md (already wired
+       up by pre1).
+       ========================================================== */
+
+    .export-panel-tabs {
+      display: flex;
+      gap: 4px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 12px;
+    }
+
+    .export-panel-tab {
+      flex: 1;
+      padding: 8px 4px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .export-panel-tab:hover { color: var(--text); }
+    .export-panel-tab.active {
+      color: var(--cyan);
+      border-bottom-color: var(--cyan);
+      text-shadow: 0 0 6px var(--cyan-glow);
+    }
+
+    .export-panel-content {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .export-preview {
+      width: 100%;
+      min-height: 220px;
+      max-height: 50vh;
+      margin: 0;
+      padding: 10px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      line-height: 1.5;
+      color: var(--text);
+      background: var(--bg-base);
+      border: 1px solid var(--border);
+      border-radius: 1px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .export-btn-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .export-btn {
+      flex: 1;
+      padding: 9px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--cyan);
+      background: transparent;
+      border: 1px solid var(--cyan-mid);
+      border-radius: 1px;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .export-btn:hover {
+      background: var(--cyan-dim);
+      border-color: var(--cyan);
+    }
+    .export-btn:disabled {
+      color: var(--text-muted);
+      border-color: var(--border);
+      cursor: not-allowed;
+    }
+
+    .export-flash {
+      min-height: 14px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 1px;
+      color: var(--cyan);
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .export-flash.visible { opacity: 1; }
+
+    .export-empty {
+      padding: 24px 12px;
+      text-align: center;
+      color: var(--text-dim);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 1px;
+      line-height: 1.6;
+    }
+    .export-empty button {
+      margin-top: 14px;
+      padding: 8px 16px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--cyan);
+      background: transparent;
+      border: 1px solid var(--cyan-mid);
+      border-radius: 1px;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .export-empty button:hover {
+      background: var(--cyan-dim);
+      border-color: var(--cyan);
+    }
+
+    .export-coming-soon {
+      padding: 32px 16px;
+      text-align: center;
+      font-family: var(--font-mono);
+    }
+    .export-coming-soon .coming-soon-label {
+      display: inline-block;
+      margin-bottom: 12px;
+      padding: 4px 12px;
+      font-size: 8px;
+      letter-spacing: 3px;
+      color: var(--amber);
+      border: 1px solid var(--amber);
+      border-radius: 1px;
+      background: var(--amber-dim);
+    }
+    .export-coming-soon .coming-soon-body {
+      max-width: 280px;
+      margin: 0 auto;
+      font-size: 10px;
+      line-height: 1.7;
+      color: var(--text-dim);
+    }
+
+    /* ==========================================================
        EMPTY STATE — shown before any messages
        ========================================================== */
 
@@ -2722,6 +2875,9 @@
       </button>
       <button class="dock-icon" data-view="memory" onclick="switchView('memory', null)" title="Memory">
         <span class="dock-icon-glyph">◈</span>
+      </button>
+      <button class="dock-icon" data-view="export" onclick="switchView('export', null)" title="Export">
+        <span class="dock-icon-glyph">⤓</span>
       </button>
       <button class="dock-icon" data-view="settings" onclick="switchView('settings', null)" title="Settings">
         <span class="dock-icon-glyph">⚙</span>
@@ -3902,6 +4058,7 @@
     if (view === 'email')    { openPanel('email'); loadEmailPanel(); return; }
     if (view === 'soc')      { openPanel('soc'); loadSOCWall(); return; }
     if (view === 'memory')   { openPanel('memory');   return; }
+    if (view === 'export')   { openPanel('export');   return; }
     if (view === 'settings') { openPanel('settings'); return; }
     if (view === 'chat')     { closePanel(); }
   }
@@ -3928,6 +4085,14 @@
     } else if (type === 'memory') {
       title.textContent = 'MEMORY ENGINE';
       body.innerHTML = getMemoryPanelHTML();
+    } else if (type === 'export') {
+      title.textContent = 'EXPORT';
+      body.innerHTML = getExportPanelHTML();
+      // Always start on the Markdown tab when the panel opens —
+      // the user should land on the primary view, not whichever
+      // tab they had open last session.
+      EXPORT_PANEL_STATE.activeTab = 'markdown';
+      openExportPanel();
     } else if (type === 'settings') {
       title.textContent = 'SETTINGS';
       body.innerHTML = getSettingsPanelHTML();
@@ -4173,6 +4338,266 @@
         CLEAR CONVERSATION
       </button>
     `;
+  }
+
+
+  // ============================================================
+  // EXPORT PANEL — v0.5.16 Phase 3
+  //
+  // Right-panel view that lets the user download or copy the
+  // currently active session as markdown. Active session comes
+  // from PAST_CHATS_STATE.activeSessionId (the single source of
+  // truth set up in Phase 2c).
+  //
+  // Three tabs:
+  //   - Markdown: preview + "Download .md" button
+  //   - Copy:     same preview + "Copy to clipboard" button
+  //   - Share:    "Coming soon" placeholder (deferred — needs a
+  //               token-gated public read endpoint we haven't
+  //               written yet)
+  //
+  // Caching: openExportPanel fetches the markdown once per
+  // session and stashes it in EXPORT_PANEL_STATE. Tab switches,
+  // download and copy all read from memory — no extra round
+  // trips for the same chat.
+  // ============================================================
+
+  const EXPORT_PANEL_STATE = {
+    activeTab:        'markdown', // 'markdown' | 'copy' | 'share'
+    cachedMarkdown:   null,       // string of fetched md, or null
+    cachedSessionId:  null,       // session id the cache belongs to
+    cachedTitle:      null,       // title (for download filename)
+    isFetching:       false,
+    flashTimer:       null,
+  };
+
+  // Shape of the panel body — tabs across the top, content area
+  // below. The content area's innerHTML is repainted by
+  // renderExportPanel() once data is ready.
+  function getExportPanelHTML() {
+    return `
+      <div class="export-panel-tabs">
+        <button class="export-panel-tab active" data-tab="markdown"
+                onclick="setExportTab('markdown')">Markdown</button>
+        <button class="export-panel-tab" data-tab="copy"
+                onclick="setExportTab('copy')">Copy</button>
+        <button class="export-panel-tab" data-tab="share"
+                onclick="setExportTab('share')">Share link</button>
+      </div>
+      <div class="export-panel-content" id="export-panel-content">
+        <div class="export-empty">Loading…</div>
+      </div>
+    `;
+  }
+
+  // Called from openPanel('export'). Fetches the markdown if
+  // we don't already have it cached for the active session,
+  // then paints the content area.
+  async function openExportPanel() {
+    const sessionId = PAST_CHATS_STATE.activeSessionId;
+
+    // No active session — render the empty state immediately
+    // and skip the server hit entirely.
+    if (!sessionId) {
+      EXPORT_PANEL_STATE.cachedMarkdown  = null;
+      EXPORT_PANEL_STATE.cachedSessionId = null;
+      EXPORT_PANEL_STATE.cachedTitle     = null;
+      renderExportPanel();
+      return;
+    }
+
+    // Cache hit for this session — paint and stop.
+    if (EXPORT_PANEL_STATE.cachedSessionId === sessionId
+        && EXPORT_PANEL_STATE.cachedMarkdown !== null) {
+      renderExportPanel();
+      return;
+    }
+
+    // Fresh session (or first open) — fetch, then paint. The
+    // 'isFetching' flag makes renderExportPanel show a loading
+    // state if the user happens to tab-switch mid-fetch.
+    renderExportPanel();
+    await fetchSessionMarkdown(sessionId);
+    renderExportPanel();
+  }
+
+  // Fetch the markdown export and stash it in the cache. The
+  // backend returns text/markdown with Content-Disposition:
+  // attachment — that's fine, res.text() reads the body the
+  // same way either way.
+  async function fetchSessionMarkdown(sessionId) {
+    EXPORT_PANEL_STATE.isFetching = true;
+    try {
+      const res = await fetch(
+        `${BASE_URL}/api/sessions/${encodeURIComponent(sessionId)}/export?format=md`,
+        { headers: { 'Authorization': `Bearer ${CFG.token}` } },
+      );
+      if (!res.ok) {
+        console.warn('[Export] Fetch failed:', res.status);
+        EXPORT_PANEL_STATE.cachedMarkdown  = null;
+        EXPORT_PANEL_STATE.cachedSessionId = null;
+        return;
+      }
+      const text = await res.text();
+      EXPORT_PANEL_STATE.cachedMarkdown  = text;
+      EXPORT_PANEL_STATE.cachedSessionId = sessionId;
+      // Capture the title so the download filename is nicer
+      // than the server's generic "session-<id>.md".
+      const summary = PAST_CHATS_STATE.sessions.find(s => s.id === sessionId);
+      EXPORT_PANEL_STATE.cachedTitle = summary?.title ?? null;
+    } catch (err) {
+      console.warn('[Export] Fetch threw:', err);
+      EXPORT_PANEL_STATE.cachedMarkdown  = null;
+      EXPORT_PANEL_STATE.cachedSessionId = null;
+    } finally {
+      EXPORT_PANEL_STATE.isFetching = false;
+    }
+  }
+
+  // Switch active tab and repaint the content area. No fetch —
+  // we already have the markdown cached.
+  function setExportTab(tab) {
+    if (tab !== 'markdown' && tab !== 'copy' && tab !== 'share') return;
+    EXPORT_PANEL_STATE.activeTab = tab;
+    document.querySelectorAll('.export-panel-tab').forEach(el => {
+      el.classList.toggle('active', el.dataset.tab === tab);
+    });
+    renderExportPanel();
+  }
+
+  // Build a filesystem-safe filename from the session title.
+  // Lowercase, hyphen-separated, capped at 60 chars. Falls back
+  // to a generic name if title is missing or stripped to nothing.
+  function exportFilenameFor(title) {
+    const base = (title || 'nerdalert-session')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60);
+    return (base.length > 0 ? base : 'nerdalert-session') + '.md';
+  }
+
+  // Repaint the content area based on tab + cache + active session.
+  // Idempotent; safe to call from anywhere that changes state.
+  function renderExportPanel() {
+    const content = document.getElementById('export-panel-content');
+    if (!content) return;  // Panel was closed mid-fetch.
+
+    // Share tab is static — render the coming-soon block and stop.
+    if (EXPORT_PANEL_STATE.activeTab === 'share') {
+      content.innerHTML = `
+        <div class="export-coming-soon">
+          <div class="coming-soon-label">Coming soon</div>
+          <div class="coming-soon-body">
+            Shareable read-only links land in a later release.
+            They need a token-gated public endpoint on the server
+            side — on the roadmap, not in v0.5.16.
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    // Loading state takes precedence over empty — we're in flight.
+    if (EXPORT_PANEL_STATE.isFetching) {
+      content.innerHTML = `<div class="export-empty">Loading…</div>`;
+      return;
+    }
+
+    // No active session, or fetch came back empty → empty state
+    // with a + NEW CHAT button so the user has a path forward.
+    if (!PAST_CHATS_STATE.activeSessionId || EXPORT_PANEL_STATE.cachedMarkdown === null) {
+      content.innerHTML = `
+        <div class="export-empty">
+          No active chat to export.<br>
+          Send a message to start a session.
+          <br>
+          <button onclick="newChat(); closePanel();">+ NEW CHAT</button>
+        </div>
+      `;
+      return;
+    }
+
+    // We have markdown. Markdown and Copy tabs share the preview
+    // block — only the action button differs.
+    const md         = EXPORT_PANEL_STATE.cachedMarkdown;
+    const safeHTML   = escapeForPre(md);
+    const actionHTML = EXPORT_PANEL_STATE.activeTab === 'copy'
+      ? `<button class="export-btn" onclick="copyMarkdownToClipboard()">Copy to clipboard</button>`
+      : `<button class="export-btn" onclick="downloadMarkdown()">Download .md</button>`;
+
+    content.innerHTML = `
+      <pre class="export-preview">${safeHTML}</pre>
+      <div class="export-btn-row">${actionHTML}</div>
+      <div class="export-flash" id="export-flash"></div>
+    `;
+  }
+
+  // Minimal HTML escape for the <pre> preview. Only &, <, > matter
+  // inside a pre block — backticks and the rest of markdown pass
+  // through naturally so the preview reads like the file you'd get.
+  function escapeForPre(text) {
+    return String(text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  // Trigger a browser download of the cached markdown. Uses a blob
+  // URL + <a download> so we control the filename from the session
+  // title rather than the server's generic "session-<id>.md".
+  function downloadMarkdown() {
+    const md = EXPORT_PANEL_STATE.cachedMarkdown;
+    if (md === null) return;
+    const filename = exportFilenameFor(EXPORT_PANEL_STATE.cachedTitle);
+
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    // Slight delay before revoke — Safari needs the URL alive when
+    // the click event is processed.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+    flashExportMessage(`Downloaded ${filename}`);
+  }
+
+  // Copy the cached markdown to the system clipboard, then flash
+  // a brief confirmation under the action button.
+  async function copyMarkdownToClipboard() {
+    const md = EXPORT_PANEL_STATE.cachedMarkdown;
+    if (md === null) return;
+    try {
+      await navigator.clipboard.writeText(md);
+      flashExportMessage('Copied to clipboard');
+    } catch (err) {
+      // Browsers gate clipboard writes on HTTPS + user gesture; a
+      // button click qualifies, but localhost over plain HTTP can
+      // still trip some configs. Surface a hint rather than fail
+      // silently.
+      console.warn('[Export] Clipboard write failed:', err);
+      flashExportMessage('Copy failed — select the text manually');
+    }
+  }
+
+  // Show a short confirmation message under the action button.
+  // Auto-clears after ~2.5s. Re-entrant — a second call cancels
+  // the previous timer so rapid clicks don't desync.
+  function flashExportMessage(text) {
+    const el = document.getElementById('export-flash');
+    if (!el) return;
+    if (EXPORT_PANEL_STATE.flashTimer) {
+      clearTimeout(EXPORT_PANEL_STATE.flashTimer);
+    }
+    el.textContent = text;
+    el.classList.add('visible');
+    EXPORT_PANEL_STATE.flashTimer = setTimeout(() => {
+      el.classList.remove('visible');
+    }, 2500);
   }
 
 
