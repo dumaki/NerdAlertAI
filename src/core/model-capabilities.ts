@@ -122,12 +122,10 @@ const BUILTIN_CAPABILITIES: Record<string, ModelCapabilities> = {
 
 
   // ── OpenRouter ───────────────────────────────────────────
-  // Gemma 4 26B A4B Instruct is Google DeepMind's instruction-
-  // tuned Mixture-of-Experts multimodal model — 25.2B total,
-  // 3.8B active per token. Text + image in, text out. 256K
-  // context, native function calling, configurable reasoning
-  // (opt-in), Apache 2.0 license, 140+ languages. Free on
-  // OpenRouter.
+  // No OpenRouter free-tier entries currently — the free-tier slot
+  // (`nvidia/nemotron-3-super-120b-a12b:free`) is text-only, so it
+  // correctly falls through to DEFAULT_CAPABILITIES (vision: false)
+  // and does not need a positive entry here.
   //
   // FREE-TIER VISION MODEL JOURNEY
   // ─────────────────────────────────────────────────────
@@ -145,16 +143,22 @@ const BUILTIN_CAPABILITIES: Record<string, ModelCapabilities> = {
   //    family. Configured but hit OpenRouter 429 rate limits at
   //    Google AI Studio upstream on first request. Free-tier
   //    31B pool is popular; never validated behavior.
-  // 4. `google/gemma-4-26b-a4b-it:free` (current) — MoE
-  //    sibling of the 31B dense. 25.2B total, 3.8B active per
-  //    token. Same Apache 2.0 license, same multimodal caps,
-  //    separate rate-limit pool from the 31B. Smaller active
-  //    params should mean faster inference under throttle.
+  // 4. `google/gemma-4-26b-a4b-it:free` — MoE sibling of the
+  //    31B dense. Same Apache 2.0 license, same multimodal caps,
+  //    separate rate-limit pool. Also hit 429s consistently in
+  //    morning testing — free-tier Google pool too contested to
+  //    rely on as Brett's daily driver. Removed v0.5.20+.
+  // 5. `nvidia/nemotron-3-super-120b-a12b:free` (current) —
+  //    reverted back to the original Brett model. Text-only
+  //    (no vision), but stable, separate rate-limit pool from
+  //    Google, and clean narration on the prefetch path with
+  //    `reasoning: { enabled: false }`. The free-tier vision
+  //    search is paused until a model with comparable stability
+  //    AND vision shows up — likely a future Nemotron Nano VL
+  //    iteration or a new Qwen3.5-VL free release.
   //
-  // Adding more vision-capable OpenRouter models (Qwen3-VL,
-  // Pixtral cloud, etc.) is a one-line addition here.
-
-  'google/gemma-4-26b-a4b-it:free': { vision: true  },
+  // Adding a vision-capable OpenRouter model later is a one-line
+  // addition here, mirroring the Mistral pattern above.
 };
 
 

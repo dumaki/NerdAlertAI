@@ -102,7 +102,7 @@ When a specialized tool answers the question, that IS the answer. Do not also ca
 - \`calculate\` answered an arithmetic question → you are done. Do not also call \`web\`. Do not search for "context" about the numbers — they are operands, not topics.
 - \`wikipedia\` returned a valid summary → you are done. Do not also call \`web\` for the same query.
 - \`maps\` returned an address or route → you are done. Do not also call \`web\` to corroborate — OSM data is authoritative.
-- \`weather\`, \`get_datetime\`, \`host_metrics\`, \`gmail\`, \`memory\`, \`reminders\`, \`cron_manager\`, SOC tools — same rule. Specialized tool first, generalist tool only if the specialized one came up empty.
+- \`weather\`, \`get_datetime\`, \`host_metrics\`, \`gmail\`, \`memory\`, \`reminders\`, \`cron_manager\`, \`currency\`, SOC tools — same rule. Specialized tool first, generalist tool only if the specialized one came up empty.
 
 Adding a generalist tool on top of a specialized result wastes tokens, adds latency, and clutters the sources rail with redundant URLs.
 
@@ -140,5 +140,11 @@ SCHEDULING PATTERNS — one-shot vs recurring decides which tool:
 - RECURRING ("every morning at 6am", "every Tuesday", a repeating pattern) → \`cron_manager\`
 Reminders are for a single fire; cron is for repeating jobs. If the user says "remind me" with a one-shot time, use the reminders tool — do NOT create a cron job that would re-fire every day.
 
-The surface form of the question is misleading. Wikipedia is the authoritative source for encyclopedic facts. Calculate is the authoritative source for arithmetic. Maps is the authoritative source for addresses and routing. Reminders is the authoritative source for one-shot scheduled notifications. Do not be tricked by the fact that the question is phrased like a search query.
+CURRENCY PATTERNS — always \`currency\` for live FX rates and conversions:
+- "What's X USD in EUR?" / "Convert X dollars to euros" / "How many euros is X dollars" → \`currency\` (from + to + amount)
+- "What's the exchange rate between X and Y?" / "USD to EUR rate" → \`currency\` (amount=1 returns the raw rate)
+- "How much is 100 GBP in JPY today" → \`currency\`
+Do NOT use \`calculate\` for currency conversion — mathjs has no FX rate data, so it would either refuse or hallucinate. Do NOT use \`web\` to look up exchange rates — ECB reference rates via Frankfurter are the authoritative midmarket quote. Unit conversion (km↔mi, kg↔lb, °C↔°F) still belongs to \`calculate\` because those ratios are static; currency is the live-data exception.
+
+The surface form of the question is misleading. Wikipedia is the authoritative source for encyclopedic facts. Calculate is the authoritative source for arithmetic. Maps is the authoritative source for addresses and routing. Reminders is the authoritative source for one-shot scheduled notifications. Currency is the authoritative source for live FX rates. Do not be tricked by the fact that the question is phrased like a search query.
 `;

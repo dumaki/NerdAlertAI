@@ -101,6 +101,12 @@ tools:
     trust_level: 1         # Outbound HTTP to en.wikipedia.org, no auth.
                            # Same trust profile as weather and web tools.
 
+  currency:
+    enabled: true
+    trust_level: 1         # Outbound HTTP to api.frankfurter.dev, no auth.
+                           # ECB reference rates, daily updates. Same trust
+                           # profile as wikipedia / weather / maps.
+
   reminders:
     enabled: true
     trust_level: 1         # Writes to data/reminders.db and fires via Telegram.

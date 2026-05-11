@@ -3159,7 +3159,7 @@
   let pendingApprovals   = [];
   let approvalShownThisSession = new Set();
   let activeAgentName    = CFG.agentName ?? 'Sherman';
-  let currentModel       = CFG.model     ?? 'google/gemma-4-26b-a4b-it:free';
+  let currentModel       = CFG.model     ?? 'nvidia/nemotron-3-super-120b-a12b:free';
 
   // ── Vision input state ───────────────────────────────────
   // Pending image attachments waiting to ride out with the next
@@ -3651,9 +3651,9 @@
       sub:   'Local · prefetch + narration',
     },
     {
-      id:    'google/gemma-4-26b-a4b-it:free',
-      label: 'GEMMA 4 26B A4B',
-      sub:   'Free tier · vision',
+      id:    'nvidia/nemotron-3-super-120b-a12b:free',
+      label: 'NEMOTRON 3 SUPER 120B',
+      sub:   'Free tier · prefetch + narration',
     },
   ];
 

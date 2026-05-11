@@ -17,6 +17,7 @@ import { config }        from '../config/loader';
 
 import datetimeTool    from './builtin/datetime';
 import calculatorTool  from './builtin/calculator-tool';
+import currencyTool    from './builtin/currency-tool';
 import wikipediaTool   from './builtin/wikipedia-tool';
 import remindersTool   from './builtin/reminders-tool';
 import mapsTool        from './builtin/maps-tool';
@@ -52,6 +53,7 @@ const ALL_TOOLS: NerdAlertTool[] = [
   // Core tools
   datetimeTool,
   calculatorTool,
+  currencyTool,
   wikipediaTool,
   remindersTool,
   mapsTool,

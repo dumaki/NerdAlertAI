@@ -28,7 +28,7 @@
 //     → endpoint: OLLAMA_HOST/v1/chat/completions (OpenAI-compatible)
 //     → think: false suppresses Qwen3 <think>...</think> traces
 //
-//   MODEL=nvidia/llama-3.1-nemotron-70b-instruct:free   (default)
+//   MODEL=nvidia/nemotron-3-super-120b-a12b:free   (default)
 //     → uses OpenRouter via fetch with OPENROUTER_API_KEY
 //     → model string passed as-is — OpenRouter uses the full path
 //     → endpoint: https://openrouter.ai/api/v1/chat/completions
@@ -297,7 +297,7 @@ import { getCredential, setCredential } from '../security/credential-store';
 // API keys (OpenRouter, Anthropic) live in the OS keychain via
 // /setup, NOT in .env — see the credential cache section below.
 
-let activeModel: string = process.env.MODEL ?? 'nvidia/llama-3.1-nemotron-70b-instruct:free';
+let activeModel: string = process.env.MODEL ?? 'nvidia/nemotron-3-super-120b-a12b:free';
 
 export function setActiveModel(model: string): void {
   activeModel = model;

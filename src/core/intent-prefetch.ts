@@ -54,6 +54,10 @@
 import { Source }            from '../types/response.types';
 import { executeTool, type BrokerContext } from './permission-broker';
 import * as chrono from 'chrono-node';
+import {
+  normalizeCurrencyCode,
+  CURRENCY_NAME_TO_CODE,
+} from '../tools/builtin/currency-tool';
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -417,6 +421,141 @@ const INTENT_MAP: Record<string, IntentGroup> = {
       // the tool with no params; tool returns a usage error and
       // the model narrates a graceful clarification request.
       return undefined;
+    },
+  },
+
+  // ── Currency / FX ('exchange rate', 'convert X to Y', 'how many euros') ──
+  // Live FX rates via Frankfurter (ECB reference rates). Read-only;
+  // safe to commit on prefetch. Without this group, Mistral and
+  // Nemotron can't discover the currency tool under the tool-list
+  // overload — same shape as memory / cron / reminders / maps.
+  //
+  // KEYWORD COLLISION RULES
+  // ───────────────────────────────────────
+  // Deliberately narrow per Pattern 23 from v0.5.20 spec: 'convert'
+  // alone would false-positive on "convert this PDF to markdown";
+  // 'rate' alone would false-positive on "interest rate", "heart
+  // rate", "frame rate". Required anchors: an FX-specific phrase
+  // ('exchange rate', 'fx rate', 'forex', 'currency') OR a verb
+  // paired with a currency word ('convert dollars', 'convert
+  // euros'), OR the natural-language 'how many <currency-word>'
+  // form.
+  //
+  // PARAM EXTRACTION
+  // ───────────────────────────────────────
+  // The extractor scans for exactly two currency tokens (ISO codes
+  // from KNOWN_CURRENCY_CODES or English names from
+  // CURRENCY_NAME_TO_CODE), pulls a numeric amount (default 1),
+  // and detects reverse phrasing ('how many EUR is 100 USD' →
+  // swap from/to). If fewer than two recognized currency tokens
+  // are present, the extractor returns undefined and the tool
+  // gets called with no params — the tool then returns a usage
+  // hint and the model narrates a clarification request.
+  //
+  // The currency-token regex is built from CURRENCY_NAME_TO_CODE
+  // keys sorted longest-first so 'us dollars' matches before
+  // 'dollars' (regex alternation is greedy left-to-right). The
+  // imported normalizeCurrencyCode does the final validation —
+  // it rejects 3-letter strings not in KNOWN_CURRENCY_CODES,
+  // which prevents 'api', 'ceo', 'usb' etc. from triggering
+  // false-positive prefetches.
+  currency: {
+    keywords: [
+      // Explicit FX-intent phrases
+      'exchange rate', 'exchange rates',
+      'fx rate', 'fx rates', 'forex',
+      'currency conversion', 'currency rate',
+      // Natural-language quantity questions — 'how many <word>'
+      // is anchored enough not to false-positive on general
+      // 'how many X' queries (still wide enough to catch the
+      // common phrasings users actually type).
+      'how many euros', 'how many dollars', 'how many pounds',
+      'how many yen', 'how many usd', 'how many eur', 'how many gbp',
+      'how many cad', 'how many aud',
+      // Conversion verb + currency word — 'convert' alone is too
+      // broad ('convert this file'), but paired with a currency
+      // it's an unambiguous FX intent.
+      'convert usd', 'convert eur', 'convert gbp', 'convert jpy',
+      'convert cad', 'convert aud', 'convert chf',
+      'convert dollars', 'convert euros', 'convert pounds',
+      'convert yen', 'convert francs',
+    ],
+    tools: ['currency'],
+    paramExtractor: (msg: string) => {
+      // ── Build the currency-token regex ──────────────────
+      // CURRENCY_NAME_TO_CODE keys sorted longest-first so
+      // multi-word names ('us dollar', 'japanese yen') match
+      // before their single-word substrings ('dollar', 'yen').
+      // \b[A-Z]{3}\b catches ISO codes; normalizeCurrencyCode
+      // filters non-currency 3-letter strings (api/ceo/usb).
+      //
+      // Built fresh each call rather than at module load so the
+      // sort order is always correct — names map shouldn't change
+      // at runtime, but if it did (e.g. config-driven), this stays
+      // robust. The N is small (~40 names) so the cost is
+      // negligible.
+      const names = Object.keys(CURRENCY_NAME_TO_CODE)
+        .sort((a, b) => b.length - a.length)
+        .map(n => n.replace(/\s+/g, '\\s+'));   // 'us dollar' → 'us\s+dollar'
+      const tokenRe = new RegExp(
+        `\\b(${names.join('|')}|[a-zA-Z]{3})\\b`,
+        'gi',
+      );
+
+      // ── Collect currency tokens with their positions ────
+      // Position matters — we use 'how many' precedence to decide
+      // if from/to should be swapped (reverse phrasing).
+      const tokens: Array<{ code: string; index: number }> = [];
+      let m: RegExpExecArray | null;
+      while ((m = tokenRe.exec(msg)) !== null) {
+        const code = normalizeCurrencyCode(m[1]);
+        if (code) {
+          tokens.push({ code, index: m.index });
+        }
+      }
+
+      // Need at least two distinct currencies to convert between.
+      // 'distinct' meaning different codes — 'usd to usd' is
+      // pointless, fall through to the tool's clarification path.
+      if (tokens.length < 2) return undefined;
+      const distinctCodes = new Set(tokens.map(t => t.code));
+      if (distinctCodes.size < 2) return undefined;
+
+      // ── Amount ──────────────────────────────────────────
+      // First numeric run in the message. Supports thousands
+      // separators (1,000.50 or 1.000,50 — we normalize comma to
+      // dot only if there's no other dot present). Defaults to 1
+      // when absent, which gives the raw exchange rate.
+      let amount = 1;
+      const amountMatch = msg.match(/(\d{1,3}(?:[,]\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)/);
+      if (amountMatch) {
+        // Strip thousands-separator commas before parseFloat.
+        // '1,000.50' → '1000.50' → 1000.5. Numbers like '1,5'
+        // (European decimal comma) aren't supported — we'd need
+        // locale detection to disambiguate from '1,500' meaning
+        // one thousand five hundred. English-locale assumption.
+        const cleaned = amountMatch[1].replace(/,/g, '');
+        const n       = parseFloat(cleaned);
+        if (isFinite(n) && n >= 0) amount = n;
+      }
+
+      // ── Direction detection ─────────────────────────────
+      // Default: first token is `from`, second is `to`.
+      // 'how many <X> is <amount> <Y>' → first token is `to`,
+      //   second is `from` (swap).
+      //
+      // The 'how many' check is structural — the question form
+      // is "how many <target-currency>" so the FIRST token
+      // encountered is the destination, not the source.
+      const isReverse = /\bhow\s+many\b/i.test(msg);
+      const from = isReverse ? tokens[1].code : tokens[0].code;
+      const to   = isReverse ? tokens[0].code : tokens[1].code;
+
+      // Same-currency edge case (caught via distinctCodes above
+      // already, but a final guard doesn't hurt).
+      if (from === to) return undefined;
+
+      return { from, to, amount };
     },
   },
 
