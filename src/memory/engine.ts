@@ -38,6 +38,7 @@ import {
 
 import { keywordSearch, rankSubjects } from './search'
 import { runDecaySweep, detectConflict, touchRecord } from './decay'
+import { redact } from '../security/secret-scanner'
 
 // ── ID generation ─────────────────────────────────────────────────────────────
 // Timestamp-based so IDs sort chronologically and are human-readable in logs.
@@ -54,24 +55,41 @@ function nowISO(): string {
 // Write a new memory record. Checks for conflicts before writing.
 // Returns the created record AND a conflict report (even if no conflict found).
 // The caller decides what to do with a conflict — engine never auto-resolves.
+//
+// Persistence-boundary redaction (v0.5.25): every capture runs the incoming
+// content and subject through redact() before the record is built. The chat-
+// ingress scanner halts CRITICAL/HIGH hits before they reach the model, but
+// residual paths exist — tool error responses can echo configured user names
+// or session keys (the Synology auth path is the canonical case), and those
+// can land here verbatim. redact() is idempotent: re-running it on already-
+// clean content (or on the `[REDACTED-RULE]` markers it produces) is a no-op,
+// so this is safe to apply unconditionally.
 export function capture(input: CaptureInput): {
   record:   MemoryRecord
   conflict: ConflictReport
 } {
   ensureStorage()
+
+  // Scrub at the boundary. Subject is short and structural so live secrets
+  // there would be a bug, but redacting it too costs nothing and keeps any
+  // such bug from persisting as a live credential in a bucket key.
+  const cleanContent = redact(input.content)
+  const cleanSubject = redact(input.subject)
+
   const index = readIndex()
 
-  // Check for conflicts before writing
+  // Check for conflicts before writing — using the redacted versions so we
+  // never compare raw secrets against the stored corpus.
   const conflict = detectConflict(
-    { subject: input.subject, content: input.content },
+    { subject: cleanSubject, content: cleanContent },
     index.records
   )
 
   const now = nowISO()
   const record: MemoryRecord = {
     id:            genId(),
-    subject:       input.subject.toLowerCase(),
-    content:       input.content,
+    subject:       cleanSubject.toLowerCase(),
+    content:       cleanContent,
     confidence:    Math.min(1, Math.max(0, input.confidence ?? 0.8)),
     source:        input.source ?? 'session',
     tags:          (input.tags ?? []).map(t => t.toLowerCase()),

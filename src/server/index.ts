@@ -29,6 +29,19 @@ import { initOpenRouterKey, initAnthropicKey } from '../core/llm-client';
 import { initOpenclawCredential } from '../tools/builtin/soc-client';
 import { logAvailableTools } from '../tools/registry';
 import { selfCheckEnv, logEnvSelfCheck } from '../security/env-self-check';
+import { installConsoleRedaction } from '../security/safe-console';
+
+// ──────────────────────────────────────────────────────────────────
+// Install console redaction FIRST, before any other top-level statement.
+// All subsequent console.* calls — boot banner, unhandledRejection handler,
+// /chat error logs, anything any imported module logs at runtime — have
+// their output scrubbed against the secret-scanner ruleset.
+//
+// Idempotent: safe to call again from anywhere. The wrapper itself never
+// throws — if format()/redact() fail on weird input it falls through to
+// String(arg).join(' '). See src/security/safe-console.ts.
+// ──────────────────────────────────────────────────────────────────
+installConsoleRedaction();
 
 // Catch unhandled promise rejections globally
 // The Anthropic SDK throws APIUserAbortError when the browser disconnects
