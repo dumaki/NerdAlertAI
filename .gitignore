@@ -60,3 +60,14 @@ data/reminders.db-shm
 # actual model files. Blanket ignore as a safety net so a stray
 # `cp` into the repo can't ship a multi-GB binary.
 *.bin
+
+# === SESSION EPHEMERA — DOCS ARCHIVE + HANDOFFS ===
+# Historical spec versions (everything pre-current) live here so the
+# top of docs/ stays clean — only the current spec doc is tracked.
+# Handoff notes between sessions are also ephemera, not product
+# artifacts. Both get ignored until NerdAlertAI is a live product
+# with a real changelog cadence. The current spec doc stays at
+# docs/ root (e.g. docs/NerdAlert_Spec_v0_5_25.md) and IS tracked.
+docs/specDocs/
+docs/handoffs/
+
