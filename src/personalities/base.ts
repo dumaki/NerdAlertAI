@@ -39,9 +39,44 @@ export interface Personality {
   // Optional — if not set, the agent just responds naturally.
   firstContactLine?: string;
 
-  // Voice model reference for future TTS integration.
-  // Will point to a trained voice model file when that phase is built.
-  voiceModelRef?: string;
+  // Per-personality voice configuration. Multi-provider from day one
+  // so the same personality can route to a local engine (Piper) for the
+  // ephemeral Voice module today, and to a cloud engine (ElevenLabs) for
+  // AVClub persistent audio later. Both fields are optional — a personality
+  // with no voices configured simply has no speaker icon on its messages.
+  //
+  // Adding the elevenlabs slot is reserved for the AVClub module milestone;
+  // it is not used yet. Defining it here ensures both modules read the same
+  // shape, so a personality file never needs to be migrated when AVClub ships.
+  voices?: PersonalityVoices;
+}
+
+// ============================================================
+// PersonalityVoices — multi-provider voice routing
+// ============================================================
+// One sub-field per TTS provider. Only `piper` is wired today.
+// Missing sub-field = that provider is not configured for this
+// personality (graceful absence; no errors, just no audio).
+// ============================================================
+export interface PersonalityVoices {
+  piper?: PiperVoiceConfig;
+  // elevenlabs?: ElevenLabsVoiceConfig;   // reserved for AVClub Slice 3
+}
+
+// ============================================================
+// PiperVoiceConfig — points at a local ONNX voice model
+// ============================================================
+// `model` is a path RELATIVE to config.voice.tts.voices_dir.
+// e.g. with voices_dir = ~/.nerdalert/voices and model = 'sherman/voice.onnx',
+// the resolved file is ~/.nerdalert/voices/sherman/voice.onnx.
+//
+// `config` is optional — Piper auto-discovers `<model>.json` next to the
+// .onnx by default, which covers the standard rhasspy/piper layout. Only
+// set `config` if your .json sits somewhere other than alongside the model.
+// ============================================================
+export interface PiperVoiceConfig {
+  model: string;        // required, relative to voices_dir
+  config?: string;      // optional, defaults to <model>.json next to the .onnx
 }
 
 export interface PersonalityPromptParams {

@@ -31,3 +31,21 @@ data/reminders.db
 data/reminders.db-wal
 data/reminders.db-shm
 .env*
+
+# === VOICE MODELS ===
+# Voice ONNX files are large binaries (50–100 MB) and live outside the
+# repo at ~/.nerdalert/voices/. The voices.example/ folder only holds
+# documentation, never actual voice files. This is a safety net in case
+# something gets dropped in by accident.
+*.onnx
+*.onnx.json
+
+# === GENERATED AUDIO ===
+# TTS / STT testing leaves stray .wav files in the working directory
+# (piper writes timestamped files when the output path isn't explicit).
+# These are ephemeral test artifacts and license-encumbered, never
+# belong in the repo. Blanket ignore for safety.
+*.wav
+*.mp3
+*.ogg
+*.flac

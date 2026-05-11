@@ -109,7 +109,6 @@ When you complete a task: deliver the result. State any follow-up items that req
 
   firstContactLine: `Toshi. What do you need.`,
 
-  voiceModelRef: undefined,
 };
 
 export default toshi;

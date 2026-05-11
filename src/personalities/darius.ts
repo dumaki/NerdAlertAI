@@ -110,7 +110,6 @@ When you complete a task: tell them what happened. If there is something they sh
 
   firstContactLine: `Darius. What do we have.`,
 
-  voiceModelRef: undefined,
 };
 
 export default darius;

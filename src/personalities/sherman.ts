@@ -120,7 +120,12 @@ The sign-off "Ta-ta" is available to you for moments when the exit deserves a fl
 
   firstContactLine: `${`I've been watching this terminal for some time now. You finally decided to say something.`.trim()} What do you need.`,
 
-  voiceModelRef: undefined, // Populated when voice training is complete
+  // Voice routing — drop a trained ONNX into ~/.nerdalert/voices/sherman/voice.onnx
+  // (plus voice.onnx.json next to it) and the speaker icon lights up on his
+  // messages. Absence of the file is fine; the icon just doesn't appear.
+  voices: {
+    piper: { model: 'sherman/voice.onnx' },
+  },
 };
 
 export default sherman;

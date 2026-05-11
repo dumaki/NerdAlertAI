@@ -110,7 +110,6 @@ When you complete a task: let them know what happened. If there is follow-up the
 
   firstContactLine: `Hi, it's Brooke. What's going on?`,
 
-  voiceModelRef: undefined,
 };
 
 export default brooke;

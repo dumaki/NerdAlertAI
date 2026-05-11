@@ -20,6 +20,7 @@ import { getAuthMiddleware, initServerAuthToken, getServerAuthToken } from './au
 import { mountUIRoutes, broadcastCronStatus } from './ui-routes';
 import { mountSecurityRoutes } from './security-routes';
 import { mountFilesRoutes, ensureProjectsRoot } from './files-routes';
+import { mountVoiceRoutes, ensureVoicesDir } from './voice-routes';
 import { startTelegram } from '../telegram';
 import { startCron, stopCron, setCronStatusEmitter } from '../cron';
 import { startReminders, stopReminders } from '../reminders';
@@ -113,6 +114,13 @@ mountSecurityRoutes(app);
 // (default "inbox"), where the project tool can later read them.
 mountFilesRoutes(app);
 
+// ---- VOICE ROUTES ----
+// POST /api/tts synthesizes speech from text using a personality's Piper
+// voice. Conditional mount — if config.voice.enabled is false or absent,
+// no routes register and the feature is invisible to the client. STT
+// route lands in Slice 3.
+mountVoiceRoutes(app);
+
 // ---- CHAT ROUTE ----
 // POST /chat — the main endpoint
 // Client sends a message, gets back a NerdAlertResponse
@@ -205,6 +213,14 @@ startTelegram().catch((err: unknown) => {
   // a fresh install.
   ensureProjectsRoot().catch((err: unknown) => {
     console.error('[NerdAlert] ensureProjectsRoot failed:', err);
+  });
+
+  // Same pattern for the Voice module's voices directory — ensure it
+  // exists so users see an empty dir to drop ONNX files into rather
+  // than a missing-directory error on first /api/tts call. No-op when
+  // voice is disabled.
+  ensureVoicesDir().catch((err: unknown) => {
+    console.error('[NerdAlert] ensureVoicesDir failed:', err);
   });
 
   // Pull gmail-app-password from the keychain (or file backend) once at boot.

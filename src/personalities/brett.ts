@@ -108,7 +108,11 @@ When you complete something: tell them what happened. If it worked out in an int
 
   firstContactLine: `Hey! Brett here. What are we working on?`,
 
-  voiceModelRef: undefined,
+  // Voice routing — drop a trained ONNX into ~/.nerdalert/voices/brett/voice.onnx
+  // (plus voice.onnx.json next to it) and the speaker icon lights up.
+  voices: {
+    piper: { model: 'brett/voice.onnx' },
+  },
 };
 
 export default brett;

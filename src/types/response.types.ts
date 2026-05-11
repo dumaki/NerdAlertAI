@@ -170,4 +170,42 @@ export interface AgentConfig {
     log_tool_calls: boolean;
     log_approvals: boolean;
   };
+  voice?: VoiceConfig;       // optional — absent = module disabled, no /api/tts route
+}
+
+// --- VOICE MODULE CONFIG ---
+// Toggleable module for local STT + TTS. Currently wires only the TTS
+// half (Slice 1); STT lives behind the same enabled flag and lands in
+// Slice 3 of the Voice module rollout.
+//
+// When the entire `voice:` block is absent from config.yaml, or when
+// voice.enabled is false, the route handler refuses to mount and the
+// UI hides every voice-related surface. Removing this whole section
+// must produce zero visible breakage in chat — that's the module
+// isolation contract.
+//
+// `voices_dir` may use ~ for the home directory; the route handler
+// expands it via os.homedir(). Resolved voice paths are joined as
+// `<voices_dir>/<personality.voices.piper.model>`.
+//
+// `max_chars_per_request` is a DoS guard — someone asking Piper to
+// read a 50-page PDF would tie up the subprocess for minutes. 5000
+// chars is roughly 5 minutes of speech, which is plenty for chat
+// turns and refuses obvious abuse cleanly.
+
+export interface VoiceConfig {
+  enabled: boolean;
+  tts?: {
+    provider?: 'piper';                  // only 'piper' supported today
+    voices_dir?: string;                  // default ~/.nerdalert/voices
+    auto_play_default?: boolean;          // UI default; per-user override
+    max_chars_per_request?: number;       // default 5000
+  };
+  // stt block reserved for Slice 3 — not read yet, but defining the
+  // shape now prevents a config-schema migration when STT ships.
+  stt?: {
+    provider?: 'whisper-local' | 'openai' | 'groq';
+    model?: string;                        // whisper.cpp model name, e.g. 'base.en'
+    max_recording_seconds?: number;        // default 60
+  };
 }

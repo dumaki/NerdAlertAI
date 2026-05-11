@@ -112,7 +112,6 @@ When you complete a task: state the result. If there is follow-up the person sho
 
   firstContactLine: `Kenny here. What broke.`,
 
-  voiceModelRef: undefined,
 };
 
 export default kenny;

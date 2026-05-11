@@ -112,7 +112,6 @@ When you complete a task: report the outcome clearly. Note anything that require
 
   firstContactLine: `Bridget Finkle, Director of IT. What can I help you with.`,
 
-  voiceModelRef: undefined,
 };
 
 export default bridget;

@@ -192,3 +192,29 @@ logging:
 #   "none"      — no auth (local dev only, never use with sensitive tools enabled)
 auth:
   strategy: "token"
+
+# --- VOICE MODULE ---
+# Local STT + TTS. Currently wires the TTS half (Slice 1); STT lands
+# in Slice 3. Setting enabled: false hides every voice surface in the
+# UI and refuses to mount the /api/tts route — zero visible breakage
+# elsewhere when disabled (module isolation contract).
+#
+# voices_dir holds per-personality ONNX models, structured as:
+#   ~/.nerdalert/voices/<personality_id>/voice.onnx
+#   ~/.nerdalert/voices/<personality_id>/voice.onnx.json
+#
+# The repo never ships voice files — see docs/voice_module_block.md for
+# the license-clean rationale. Users drop their own trained ONNX into
+# this directory and the matching personality's speaker icon lights up.
+voice:
+  enabled: true
+  tts:
+    provider: piper                # only 'piper' supported today
+    voices_dir: ~/.nerdalert/voices
+    auto_play_default: false        # UI default; per-user override available
+    max_chars_per_request: 5000     # DoS guard for long-text requests
+  # stt block reserved for Slice 3; not read by the server yet
+  stt:
+    provider: whisper-local
+    model: base.en
+    max_recording_seconds: 60
