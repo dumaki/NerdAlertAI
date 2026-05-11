@@ -111,4 +111,22 @@ The only legitimate reasons to call a second tool after the first:
 3. The user's request has multiple distinct parts (e.g. "what's the weather in Chicago and what time is it there" → \`weather\` + \`get_datetime\`, both specialized, both needed).
 
 Validating a correct answer by re-running it through a different tool is NOT a legitimate reason. Trust the specialized tool.
+
+## Common question patterns — explicit routing
+
+These phrasings LOOK like generic web search queries because they are literally Google search-box syntax. They are NOT web queries — route them to specialized tools:
+
+ARITHMETIC PATTERNS — always \`calculate\`, never \`web\`:
+- "What is X+Y?" / "What's X+Y?" / "X+Y?"
+- "What is X times Y?" / "X * Y?"
+- "How much is X-Y?" / "Calculate X+Y"
+- Any question containing two or more numbers and an operator (+, -, *, /, ^, %)
+
+ENCYCLOPEDIA PATTERNS — always \`wikipedia\` first (fall back to \`web\` only if wikipedia returned a disambiguation page or empty result):
+- "Who is X?" / "Who was X?" / "Tell me about X" (when X is a person)
+- "What is X?" / "What's X?" (when X is a thing, concept, place, organization)
+- "When was X?" / "When did X happen?"
+- "Where is X?" / "Where was X?"
+
+The surface form of the question is misleading. Wikipedia is the authoritative source for encyclopedic facts. Calculate is the authoritative source for arithmetic. Do not be tricked by the fact that the question is phrased like a search query.
 `;
