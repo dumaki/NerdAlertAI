@@ -1935,6 +1935,43 @@
       border-color: var(--red);
     }
 
+    /* ── About section ── v0.5.17 pre2
+       Lives at the bottom of the Settings panel. Three lines:
+       version (from window.NERDALERT_CONFIG.version, originally
+       package.json), repo link (opens in new tab), and a storage
+       readout (refreshed on every Settings open via loadPastChats).
+    */
+    .settings-about {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 8px 10px;
+      background: var(--bg-base);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      line-height: 1.6;
+    }
+    .settings-about-version {
+      color: var(--text-bright);
+      letter-spacing: 1px;
+    }
+    .settings-about-link {
+      color: var(--cyan);
+      text-decoration: none;
+      letter-spacing: 0.5px;
+      transition: text-shadow var(--transition-fast);
+      word-break: break-all;
+    }
+    .settings-about-link:hover {
+      text-shadow: 0 0 6px var(--cyan-glow);
+    }
+    .settings-about-storage {
+      color: var(--text-muted);
+      letter-spacing: 0.5px;
+    }
+
     /* ==========================================================
        EXPORT PANEL — v0.5.16 Phase 3
        Right-panel view for downloading or copying the active
@@ -2912,6 +2949,7 @@
     agentName:  'Sherman',
     trustLevel: 1,
     port:       3773,
+    version:    'unknown',
   };
 
   const BASE_URL = `http://localhost:${CFG.port}`;
@@ -4009,6 +4047,12 @@
     } else if (type === 'settings') {
       title.textContent = 'SETTINGS';
       body.innerHTML = getSettingsPanelHTML();
+      // Fire-and-forget refresh so the storage line reflects the
+      // latest server state. Handles cold-start (Settings opened
+      // before the first /api/sessions fetch returns) and the
+      // "sent a few messages since last open" case. Updates the
+      // storage line in place once the GET completes.
+      refreshSettingsStorage();
     }
   }
 
@@ -4196,7 +4240,52 @@
       <button class="settings-clear-btn" onclick="clearConversation()">
         CLEAR CONVERSATION
       </button>
+
+      <div class="settings-section-label" style="margin-top:16px">ABOUT</div>
+      <div class="settings-about">
+        <div class="settings-about-version">NerdAlertAI v${CFG.version}</div>
+        <a class="settings-about-link"
+           href="https://github.com/dumaki/NerdAlertAI"
+           target="_blank"
+           rel="noopener noreferrer">github.com/dumaki/NerdAlertAI</a>
+        <div class="settings-about-storage" id="settings-about-storage">${formatStorageDisplay()}</div>
+      </div>
     `;
+  }
+
+  // ── Storage display helpers ── v0.5.17 pre2
+  //
+  // Used by the Settings ABOUT card to summarize on-disk session
+  // storage. Pulled from PAST_CHATS_STATE — which is the same
+  // source the past-chats sidebar reads from, so the numbers
+  // always line up with what the user sees in the sidebar.
+  //
+  // We count only non-empty sessions for the "X chats" label
+  // because empty placeholders are already hidden from the
+  // sidebar (Phase 2c filter); showing them in the count would
+  // contradict what's visible. totalBytes from the server
+  // includes everything on disk — honest disk usage.
+
+  function formatBytes(bytes) {
+    const n = Number(bytes) || 0;
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+    return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  }
+
+  function formatStorageDisplay() {
+    const sessions = (PAST_CHATS_STATE?.sessions || [])
+      .filter(s => (s?.messageCount ?? 0) > 0);
+    const bytes = PAST_CHATS_STATE?.totalBytes ?? 0;
+    const chatLabel = sessions.length === 1 ? 'chat' : 'chats';
+    return `Storage: ${formatBytes(bytes)} across ${sessions.length} ${chatLabel}`;
+  }
+
+  async function refreshSettingsStorage() {
+    await loadPastChats();
+    const el = document.getElementById('settings-about-storage');
+    if (el) el.textContent = formatStorageDisplay();
   }
 
 

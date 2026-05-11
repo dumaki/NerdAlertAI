@@ -88,6 +88,29 @@ function sseEvent(res: Response, name: string, payload: Record<string, unknown>)
   res.write(`event: ${name}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
+// ── Product version ── v0.5.17 pre2
+//
+// Read once at module load and reused on every GET /. Resolved
+// against process.cwd() since the server is always launched from
+// the repo root via `npm run dev` / `npm start`. We can't use a
+// __dirname-relative require because the path depth differs
+// between source (src/server/) and compiled (dist/src/server/),
+// and tsconfig has no rootDir to normalize it. Falls back to
+// 'unknown' on read failure so a misconfigured launch can't crash
+// the UI — the About card will just display "v unknown" instead.
+const VERSION: string = (() => {
+  try {
+    const fs = require('fs') as typeof import('fs');
+    const pkgPath = path.resolve(process.cwd(), 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    return typeof pkg.version === 'string' ? pkg.version : 'unknown';
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[ui-routes] Could not read version from package.json: ${msg}`);
+    return 'unknown';
+  }
+})();
+
 // ── Vision wire-through helpers ───────────────────────────
 //
 // Image input is a content-channel extension to the chat envelope
@@ -677,6 +700,7 @@ export function mountUIRoutes(app: Express): void {
       trustLevel: cfg.agent?.trust_level       ?? 1,
       port:       cfg.server?.port             ?? 3773,
       model:      process.env.MODEL            ?? 'nvidia/llama-3.1-nemotron-70b-instruct:free',
+      version:    VERSION,
     };
 
     html = html.replace(
