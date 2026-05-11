@@ -1025,6 +1025,14 @@
       animation: pulse 1.5s infinite;
     }
 
+    /* Module toggle hides the dock icon entirely. Module backend
+       (cron jobs, poll loops, etc.) keeps running — this is
+       purely a visibility decision controlled by Settings.
+       v0.5.17 pre3. */
+    .dock-icon-hidden {
+      display: none;
+    }
+
     /* ==========================================================
        CHAT AREA — center column
        ========================================================== */
@@ -1933,6 +1941,43 @@
     .settings-clear-btn:hover {
       background: var(--red-dim);
       border-color: var(--red);
+    }
+
+    /* ── Module toggles ── v0.5.17 pre3
+       Each row is the module's literal label. Click flips the
+       state: bright accent text + phosphor glow when ON, dim
+       text when OFF. The actual hide/show happens in JS by
+       toggling .dock-icon-hidden on the matching dock icon. */
+    .settings-modules-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .settings-module-row {
+      display: block;
+      width: 100%;
+      padding: 8px 10px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      text-align: left;
+      background: var(--bg-base);
+      border: 1px solid var(--border);
+      border-radius: 1px;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .settings-module-row:hover {
+      border-color: var(--cyan-mid);
+      background: var(--bg-elevated);
+    }
+    .settings-module-row.on {
+      color: var(--cyan);
+      text-shadow: 0 0 4px var(--cyan-glow);
+    }
+    .settings-module-row.off {
+      color: var(--text-dim);
     }
 
     /* ── About section ── v0.5.17 pre2
@@ -3352,6 +3397,12 @@
     setupPastChatsClicks();
     loadPastChats();
 
+    // v0.5.17 pre3: apply the user's saved module-disabled set
+    // to the dock icons. Reads localStorage.nerdalert_disabled_modules
+    // and hides any matching dock icons. Idempotent and cheap —
+    // safe to call here even before the user opens Settings.
+    applyDisabledModules();
+
     // Set trust level pips
     for (let i = 1; i <= 5; i++) {
       const pip = document.getElementById(`pip-${i}`);
@@ -4236,6 +4287,9 @@
         <span class="settings-trust-note">Edit config.yaml + restart to change</span>
       </div>
 
+      <div class="settings-section-label" style="margin-top:16px">MODULES</div>
+      <div class="settings-modules-list" id="settings-modules-list">${renderModuleToggleRows()}</div>
+
       <div class="settings-section-label" style="margin-top:16px">SESSION</div>
       <button class="settings-clear-btn" onclick="clearConversation()">
         CLEAR CONVERSATION
@@ -4252,6 +4306,111 @@
       </div>
     `;
   }
+
+  // ── Module toggles ── v0.5.17 pre3
+  //
+  // Stage 1 (this commit): UI-only hide. Disabled modules have
+  // their dock icon hidden via the .dock-icon-hidden class. The
+  // module backend (Email cron jobs, SOC SSE poll loop, etc.)
+  // continues running — this is purely a client-side visibility
+  // preference stored in localStorage.
+  //
+  // Stage 2 (deferred to v0.6+): a true config.yaml-backed
+  // disable that also stops the backend loops. Out of scope here.
+  //
+  // Why localStorage and not server state: per-browser UI
+  // preferences fit localStorage; they shouldn't roam across
+  // devices and shouldn't survive a re-install. If we want
+  // synced preferences later, we add a server endpoint then.
+
+  const DISABLED_MODULES_KEY = 'nerdalert_disabled_modules';
+
+  // The toggleable module list. Chat, Memory, Export, and
+  // Settings are intentionally NOT here — Chat is core, Memory
+  // and Export are utility surfaces (not modules in the
+  // removable sense), and Settings can't lock itself out. List
+  // grows as new modules ship; each id must match the dock
+  // icon's data-view attribute so applyDisabledModules can find it.
+  const MODULE_TOGGLE_LIST = [
+    { id: 'email', label: 'Email' },
+    { id: 'soc',   label: 'SOC'   },
+  ];
+
+  // Read the disabled set from localStorage. Wrapped in try/catch
+  // because a corrupted JSON value (manual edit gone wrong) would
+  // otherwise crash startup; we fall back to an empty set and
+  // let the user re-toggle.
+  function getDisabledModules() {
+    try {
+      const raw = localStorage.getItem(DISABLED_MODULES_KEY);
+      if (!raw) return new Set();
+      const arr = JSON.parse(raw);
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch (err) {
+      console.warn('[Modules] Failed to read disabled set:', err);
+      return new Set();
+    }
+  }
+
+  function setDisabledModules(set) {
+    try {
+      localStorage.setItem(DISABLED_MODULES_KEY, JSON.stringify([...set]));
+    } catch (err) {
+      console.warn('[Modules] Failed to persist disabled set:', err);
+    }
+  }
+
+  // Apply the current disabled state to the dock icons. Called
+  // at startup (DOMContentLoaded) and after every toggle, so
+  // the dock always reflects the persisted state. Idempotent;
+  // safe to call any number of times.
+  function applyDisabledModules() {
+    const disabled = getDisabledModules();
+    for (const m of MODULE_TOGGLE_LIST) {
+      const icon = document.querySelector(`.dock-icon[data-view="${m.id}"]`);
+      if (!icon) continue;
+      if (disabled.has(m.id)) icon.classList.add('dock-icon-hidden');
+      else                    icon.classList.remove('dock-icon-hidden');
+    }
+  }
+
+  // Toggle a single module. If the user disables the module
+  // they're currently viewing, kick them back to chat first so
+  // they don't end up stranded on a hidden panel. The Settings
+  // panel stays open and just the modules list re-renders —
+  // avoids flickering the storage line or losing scroll position.
+  function toggleModule(id) {
+    const disabled = getDisabledModules();
+    if (disabled.has(id)) {
+      disabled.delete(id);
+    } else {
+      disabled.add(id);
+      if (currentView === id) {
+        switchView('chat', null);
+      }
+    }
+    setDisabledModules(disabled);
+    applyDisabledModules();
+    // Rebuild just the inner list so other Settings sections
+    // (storage line, About card) aren't disturbed.
+    const list = document.getElementById('settings-modules-list');
+    if (list) list.innerHTML = renderModuleToggleRows();
+  }
+
+  // Build the inner row markup for the MODULES section. Pulled
+  // out so toggleModule can rebuild just the row HTML without
+  // touching the outer container.
+  function renderModuleToggleRows() {
+    const disabled = getDisabledModules();
+    return MODULE_TOGGLE_LIST.map(m => {
+      const state = disabled.has(m.id) ? 'off' : 'on';
+      return `
+        <button class="settings-module-row ${state}"
+                onclick="toggleModule('${m.id}')">${m.label}</button>
+      `;
+    }).join('');
+  }
+
 
   // ── Storage display helpers ── v0.5.17 pre2
   //
