@@ -1,222 +1,165 @@
-# NerdAlertAI — Handoff to v0.5.16 finish
+# NerdAlertAI — Handoff to v0.5.18 (Q1 tool backlog)
 
-**Generated:** 2026-05-10 (Phase 2c shipped, context window full,
+**Generated:** 2026-05-10 (v0.5.17 shipped, context nearly full,
 starting fresh chat)
-**Branch:** dev — clean checkpoint, four commits ahead of v0.5.15
-**Spec:** `docs/NerdAlert_Spec_v0_5_16.md` is the canonical reference
-**Repo state:** `index.html` 5774 lines, `tsc --noEmit` clean
+**Branch:** dev — clean checkpoint, six commits ahead of v0.5.16
+**Spec:** `docs/NerdAlert_Spec_v0_5_17.md` is the latest canonical
+reference
+**Repo state:** `index.html` ~6571 lines, `tsc --noEmit` clean,
+`package.json` at 0.5.17
 
 ## What the new chat is for
 
-Two pieces remain to call v0.5.16 done:
+v0.5.17 (Settings rebuild) is fully done. Six pre-commits on `dev`,
+spec written, tested across each pre-commit before commit. Nothing
+remains for v0.5.17 itself.
 
-1. **Settings panel cleanup** — small, mostly subtraction
-2. **Phase 3 — Export panel** — right-panel Export view, MD / copy /
-   share-link tabs (backend already in place)
+The next chat picks from the **Q1 launch baseline tool backlog** —
+small, focused tool additions that each close a Q1 checklist item.
+None of these are coherent enough to batch into a single themed
+version like v0.5.16 (UI restructure) or v0.5.17 (Settings rebuild);
+each tool is its own scope.
 
-After both land, v0.5.16 ships and the spec doc gets a small "all
-phases shipped" update.
+## What was just shipped (v0.5.17)
 
-## What was just shipped
-
-Four commits on `dev`, in order:
+Six commits on `dev`, in order:
 
 | SHA | Title |
 |---|---|
-| `9d89d3d` | v0.5.16-pre1: multi-session backend |
-| `64db272` | v0.5.16-pre2 (Phase 2a): topbar identity + model dropdowns |
-| `ffdcfdd` | v0.5.16-pre3 (Phase 2b): left rail restructure + past chats list |
-| `7e105e0` | v0.5.16-pre4 (Phase 2c): session switching + new chat + sessionId wiring |
+| `af630f2` | v0.5.17-pre1: settings cleanup — strip duplicates |
+| `6dfb5cd` | v0.5.17-pre2: about section + version wiring |
+| `cf54934` | v0.5.17-pre3: module toggles in settings |
+| `03d75c7` | v0.5.17-pre4: dock icon tooltips |
+| `278300f` | v0.5.17-pre5: quick actions in settings |
+| `8fb2700` | v0.5.17-pre6: trust level expansion |
 
-Full breakdown in `docs/NerdAlert_Spec_v0_5_16.md`. Read that first.
+Full breakdown in `docs/NerdAlert_Spec_v0_5_17.md`. Read that
+first — it covers the final Settings shape, the design decisions
+made along the way, and the small follow-ups deferred (topbar
+flash, sessions auth, module toggle Stage 2).
 
-## Piece 1 — Settings cleanup
+## Q1 tool backlog — pick one to start v0.5.18
 
-### The problem
+From the project's Q1 launch baseline checklist (in
+`nerdalert-checklist.html`), the remaining items are all tool
+additions or content-channel extensions. None share a coherent
+theme that would justify batching:
 
-The Settings panel was the original home for agent picker + model
-picker. Both now live in the topbar dropdowns (Phase 2a). The
-Settings panel's unique content is just:
+| ID | Description | Notes |
+|---|---|---|
+| q1-calculator | Math tool, L0 | Lightweight, no API key, prevents arithmetic hallucinations. Probably mathjs-backed. Small. |
+| q1-wikipedia | Wikipedia REST tool, L1 | Keyless, structured snippets. Small. |
+| q1-reminders | One-shot reminders | Distinct from cron (which is recurring). NL time parsing is the hard part. Probably needs `chrono-node` or similar. Medium. |
+| q1-maps | Maps / location lookup | OSM-based, address + directions. Open data, no key. Medium. |
+| q1-units | Currency + unit conversion | exchangerate.host for FX. Likely L0/L1. Small. |
+| q1-imagegen | Image generation (= AVClub at L2) | Already on the personality roadmap. Larger scope — needs the AVClub personality work. |
+| q1-voice-browser | Web Speech API STT/TTS | Browser-side, not Pi-side. Content-channel extension like vision (q1-vision), not a tool. Medium-large. |
 
-- **Trust Level** — read-only display, useful, keep
-- **Clear Conversation** button — useful, keep
+**Reasonable next-piece picks:**
 
-The duplicates that need to go:
+- **Fastest closure**: calculator + wikipedia + units could land as
+  a single "lightweight tools batch" v0.5.18 since they're each
+  small, keyless, L0/L1, and share a flavor. Closes three Q1 boxes
+  at once.
+- **Most-asked**: reminders, if you've heard testers want it. NL
+  time parsing is the only real complexity.
+- **Strategic**: voice-browser is the biggest unlock and the most
+  visible. It's also the biggest scope.
+- **Roadmap**: imagegen + AVClub personality is a coherent arc on
+  its own.
 
-- **Active Agent** card grid (~7 cards, one per character)
-- **Model** `<select>` dropdown + flash element
+User picks in the new chat — no decision pre-locked here.
 
-### Files to touch
+## Other deferred items worth knowing about
 
-`src/ui/index.html` only. Two functions affected:
+Not Q1 but on the radar (from `docs/NerdAlert_Spec_v0_5_17.md`
+pending list and elsewhere):
 
-- `getSettingsPanelHTML()` — around line 4100. Returns the full
-  settings panel innerHTML. Strip the agent-cards block and the
-  model-select block. Keep Trust Level + Clear Conversation.
-- `switchAgent(id)` — around line 4071. Was the click handler for
-  the agent cards. After cleanup it's unreachable code from the UI.
-  Either delete it or leave a deprecated stub (recommend delete —
-  topbarSelectPersonality is the live path, switchAgent was a thin
-  wrapper around it after Phase 2c refactor anyway).
+- **Topbar flash for `switchModel`** — small UX polish, restores
+  success/failure feedback for model switching now that the Settings
+  flash element is gone. One-line CSS addition + 2-3 lines of JS to
+  reuse the existing optimistic-update pattern.
+- **Sessions routes auth check** — `/api/sessions`, `:id`, `:id/export`
+  in `ui-routes.ts` don't validate the bearer token. UI sends it
+  regardless, so adding the check is one line per route. Hardening
+  pass, zero UI change.
+- **Module toggles Stage 2** — today's toggles are UI-only.
+  Real disable (cron pause, SSE shutdown) is the deeper work.
+  Architectural decision needed first.
+- **Spec v0.6 work** — project storage as first-class primitive,
+  memory side panel + consolidation, document indexing, file safety,
+  soft personality specialization. See latest project memory for the
+  ordered build list.
 
-CSS classes that go unused after cleanup (safe to leave or remove):
+## Cross-cutting reminders (unchanged from previous handoff)
 
-- `.settings-agent-list`, `.settings-agent-card`, `.settings-agent-dot`,
-  `.settings-agent-info`, `.settings-agent-name`, `.settings-agent-title`,
-  `.settings-agent-check`
-- `.settings-model-select`, `.settings-model-note`, `.settings-model-flash`
-
-Leaving them is harmless (dead CSS rules). Removing keeps the file
-tighter. Either is fine — the next chat can pick.
-
-### Verification
-
-After the edit:
-- Settings dock icon opens panel
-- Shows Trust Level + Clear Conversation only
-- No agent cards, no model dropdown
-- Topbar personality + model dropdowns still work
-- Settings still close cleanly
-
-## Piece 2 — Phase 3 export panel
-
-### The mental model
-
-Right-panel "Export" view, opened from a new dock icon OR from a
-"⤓" button in the past-chats list inline with each chat item.
-Decision pending — recommend the dock icon (simpler, matches the
-pattern). The per-chat inline button is a v0.7 polish.
-
-### Backend (already in place)
-
-`GET /api/sessions/:id/export?format=md` returns a markdown attachment
-with `Content-Disposition: attachment; filename="…"`. Implemented in
-pre1 (`src/server/ui-routes.ts`). No backend changes needed.
-
-The markdown shape comes from `exportSessionMarkdown(session)` in
-`src/server/session-store.ts`. Format is roughly:
-
-```
-# <title>
-
-**Agent:** <agentName>
-**Created:** <createdAt>
-**Updated:** <updatedAt>
-**Messages:** <messageCount>
-
----
-
-## You (HH:MM)
-
-<message>
-
-## <agentName> (HH:MM)
-
-<message>
-
-…
-```
-
-If the format needs adjusting (e.g. different heading style for
-copy-paste-friendliness), that's a one-function tweak in
-session-store.
-
-### UI shape
-
-Recommend:
-
-- Add a sixth dock icon, e.g. `⤓` (down arrow) with `data-view="export"`
-- `switchView('export', null)` opens the right panel like the others
-- Panel body has tabs across the top: **Markdown** / **Copy** / **Share link**
-- **Markdown tab**: shows the rendered markdown in a code-styled
-  textarea or pre block, with a "Download .md" button that fetches
-  `/api/sessions/:id/export?format=md` and triggers the browser
-  download via blob URL + temporary `<a>` click
-- **Copy tab**: same markdown content, but a "Copy to clipboard"
-  primary button + a small preview
-- **Share link tab**: deferred to v0.7 / v0.8 — would need backend
-  routes for token-gated read-only public access. Recommend stubbing
-  with "Coming soon" copy and the share-link UI shape for design
-  continuity, OR omitting the tab and adding it later.
-
-Active session is sourced from `PAST_CHATS_STATE.activeSessionId`. If
-null (no active session — fresh state), show empty-state message
-"Send a message to start a chat first" with a button that triggers
-`newChat()`.
-
-### Files to touch
-
-`src/ui/index.html` only:
-
-- CSS for `.export-panel-tabs`, `.export-panel-tab`, `.export-content`,
-  `.download-md-btn`, `.copy-md-btn`
-- HTML: add dock icon to `.module-dock`
-- JS: `EXPORT_PANEL_STATE` (current tab, cached markdown),
-  `openExportPanel()`, `renderExportPanel()`, `fetchSessionMarkdown(sessionId)`,
-  `downloadMarkdown()`, `copyMarkdownToClipboard()`
-- `switchView`: handle `'export'` case (same pattern as other views)
-- `openPanel`: handle `'export'` case (title, body innerHTML)
-
-### Verification
-
-- New "⤓" dock icon visible, switches active state correctly
-- Clicking with no active session shows empty state
-- Clicking with active session shows markdown preview
-- Download button delivers `<title>.md` to browser downloads
-- Copy button copies to clipboard with a brief flash confirmation
-- Tab switching works without losing scroll position
-- Closing the panel returns to chat view cleanly
-
-## Cross-cutting reminders
-
-- **Branch policy**: dev for all active work; main only on explicit
-  user confirmation
-- **Commit messages with special chars**: write to `.git/FILENAME.txt`,
-  use `git commit -F .git/FILENAME.txt` (em-dashes, angle brackets,
-  section symbols break zsh parsing otherwise)
-- **TypeScript check**: `./node_modules/.bin/tsc --noEmit` from project
-  root with `export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH` prefix
-  in osascript environment
-- **No server restart needed for UI changes** — `ui-routes.ts` reads
-  `index.html` fresh on every `GET /`. Hard refresh in browser is
-  enough.
+- **Branch policy**: `dev` for all active work; `main` only on
+  explicit user confirmation. v0.5.17 has not been merged to main
+  yet — that's a separate decision.
+- **Commit messages with special chars**: write to
+  `.git/FILENAME.txt`, use `git commit -F .git/FILENAME.txt`
+  (em-dashes, angle brackets, section symbols break zsh parsing
+  otherwise). Pattern is well-established now — every v0.5.17 pre
+  commit used it.
+- **TypeScript check**: `./node_modules/.bin/tsc --noEmit` from
+  project root with
+  `export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH` prefix in
+  the osascript environment.
+- **No server restart needed for UI changes** — `ui-routes.ts`
+  reads `index.html` fresh on every `GET /`. Hard refresh in
+  browser is enough.
 - **TS changes need ts-node restart** — Ben usually restarts via
-  `nerd-start` (existing alias)
+  `nerd-start`. Notable v0.5.17 case: pre2 touched
+  `src/server/ui-routes.ts` (added VERSION const), so the version
+  string didn't update in the UI until after restart. This is
+  expected behavior, not a bug.
+- **Package version bump cadence**: `package.json` bumps on each
+  minor version (e.g. 0.5.17 → 0.5.18 when v0.5.18 work starts).
+  Pre-commits within a minor share the same version. Source of
+  truth for product version.
 
 ## Key state to carry into the new chat
 
-- `PAST_CHATS_STATE` is the in-memory store; `localStorage.nerdalert_active_session`
-  is the persistent source of truth
-- `applyPersonality(character)` is the slim personality-apply helper —
-  used wherever personality needs to change without resume side effects
-- `setActiveSession(sessionId)` is the single point of truth for
-  activeSessionId — call it whenever the active session changes
-- Empty sessions (`messageCount === 0`) are filtered out of the
-  rendered past-chats list; only the most recent empty per agent has
-  any practical presence via active.json
-- The legacy `switchAgent` was refactored in Phase 2c to also route
-  through `applyPersonality` + `resumeAgentMostRecent` for behavioural
-  parity with the topbar path — after Settings cleanup it can be
-  deleted entirely
+- `package.json` version is `0.5.17`. Next minor (whenever v0.5.18
+  starts) bumps it.
+- `CFG.version` in `index.html` is populated from `window.NERDALERT_CONFIG`,
+  which `ui-routes.ts` builds from `VERSION` (read from
+  `package.json` via `process.cwd()` at module load).
+- `PAST_CHATS_STATE.totalBytes` + sessions length are exposed in
+  Settings ABOUT card. Refresh hook is on `openPanel('settings')`.
+- `DISABLED_MODULES_KEY = 'nerdalert_disabled_modules'` in
+  localStorage holds the user's module-toggle state. Stage 1 only:
+  hides dock icons via `.dock-icon-hidden` CSS, doesn't pause
+  backends.
+- `MODULE_TOGGLE_LIST` in `index.html` is the canonical list of
+  toggleable modules. Each new module added to the dock should also
+  decide whether it goes in this list. Chat, Memory, Export,
+  Settings are intentionally NOT in the list.
+- `TRUST_LEVELS` in `index.html` is the canonical L0–L5 descriptions.
+  If trust level semantics change in the agent layer, the strings
+  here need updating to match.
+- `aria-label` on dock icons drives both screen reader accessibility
+  AND the visual tooltip text — single source of truth.
 
-## Tested and confirmed working at end of Phase 2c
+## Tested and confirmed working at end of v0.5.17
 
-- Click any past chat → loads with RESUMED banner, accent switches if
-  different agent
-- Click currently active chat → no-op
-- + NEW button → empty state, doesn't appear in list until first message
-- First message after + NEW → goes into the new session, appears in
-  list with derived title
-- Personality switch from topbar → resumes most recent chat for that
-  agent, or empty if none
-- /clear → wipes current session, drops from list
-- Page reload → restores last-open session via localStorage
-- SOC wall, cron, host metrics, file upload, vision, search filter,
-  module dock all unchanged
+- Settings panel renders cleanly with five sections: Trust Level,
+  Modules, Quick Actions, Session, About
+- All six trust levels (L0–L5) visible with current highlighted
+- Module toggles persist across reload, hide/show dock icons
+- Dock tooltips appear instantly on hover, no clipping
+  (including Settings rightmost icon)
+- Setup Credentials button opens loopback panel in new tab
+- Tool List button closes Settings and runs /help in chat
+- Version string in About card displays from package.json
+- Storage line refreshes on every Settings open
+- Past chats list, multi-session switching, export panel,
+  SOC wall, cron, host metrics — all unchanged
 
 ## File: spec doc
 
-`docs/NerdAlert_Spec_v0_5_16.md` — read this first in the new chat.
-It has the full architecture, file map, decision log, and pending
-items. This HANDOFF.md is the abbreviated "what to do next" view;
-the spec is the complete picture.
+`docs/NerdAlert_Spec_v0_5_17.md` — read this first in the new
+chat. It has the full breakdown of every pre-commit, the final
+Settings shape, the design decisions made, and the items deferred.
+This HANDOFF.md is the abbreviated "what to do next" view; the
+spec is the complete picture.
