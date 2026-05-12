@@ -16,6 +16,7 @@
   "license": "ISC",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.92.0",
+    "@huggingface/transformers": "^4.2.0",
     "better-sqlite3": "^12.9.0",
     "chrono-node": "^2.9.1",
     "cron-parser": "^5.5.0",

@@ -39,7 +39,20 @@
     "noImplicitAny": true,
 
     // Catches cases where a variable could be null/undefined unexpectedly
-    "strictNullChecks": true
+    "strictNullChecks": true,
+
+    // Skip type-checking of .d.ts files inside node_modules.
+    // Added in v0.5.26 for @huggingface/transformers, whose type definitions
+    // reference browser DOM globals (HTMLCanvasElement, HTMLImageElement,
+    // HTMLVideoElement) that don't exist in our Node-only `types: ["node"]`
+    // config. The library itself works fine in Node — the offending types
+    // are only used by image/video helpers we don't call. skipLibCheck is
+    // the cleanest fix: it doesn't reduce type safety on OUR code (every
+    // .ts file in src/ is still fully checked), it only stops the compiler
+    // from reading dependency .d.ts files looking for problems we can't fix.
+    // Standard practice in TypeScript Node projects. Tracked upstream as
+    // huggingface/transformers.js#1270 and #1093 (unresolved at v4.2.0).
+    "skipLibCheck": true
   },
   // src/**/* covers all application code
   // scripts/**/* covers the CLI tools (memory-cli.ts etc.)

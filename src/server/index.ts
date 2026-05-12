@@ -21,6 +21,7 @@ import { mountUIRoutes, broadcastCronStatus } from './ui-routes';
 import { mountSecurityRoutes } from './security-routes';
 import { mountFilesRoutes, ensureProjectsRoot } from './files-routes';
 import { mountVoiceRoutes, ensureVoicesDir, ensureWhisperModelsDir } from './voice-routes';
+import { mountMemoryRoutes, logMemoryBootCapability } from './memory-routes';
 import { startTelegram } from '../telegram';
 import { startCron, stopCron, setCronStatusEmitter } from '../cron';
 import { startReminders, stopReminders } from '../reminders';
@@ -134,6 +135,15 @@ mountFilesRoutes(app);
 // route lands in Slice 3.
 mountVoiceRoutes(app);
 
+// ---- MEMORY ROUTES ----
+// GET /api/memory/embedding-capability returns { available, enabled, ... }
+// for the semantic-memory sub-module. Unconditional mount: it's a query
+// endpoint, not an action endpoint — "is the gun loaded?" should always
+// get an answer, even when the gun isn't loaded. The boot log line below
+// emits once at startup so the operator can see capability state without
+// hitting the endpoint.
+mountMemoryRoutes(app);
+
 // ---- CHAT ROUTE ----
 // POST /chat — the main endpoint
 // Client sends a message, gets back a NerdAlertResponse
@@ -214,6 +224,15 @@ app.listen(SERVER_PORT, () => {
   //   3. User upgraded but their .env was written by an older
   //      setup.sh that wrote secrets
   logEnvSelfCheck(selfCheckEnv());
+
+  // ── Semantic memory capability log ──────────────────────────
+  // Emits one line describing whether the embedding model is
+  // available ("[memory] semantic ready ...") or why it isn't
+  // ("[memory] semantic disabled: <reason>"). The capability
+  // check itself is just fs.statSync calls — no model load, no
+  // network. The model only loads into RAM on the first embed()
+  // call, not at boot.
+  logMemoryBootCapability();
   console.log('');
 
 startTelegram().catch((err: unknown) => {
