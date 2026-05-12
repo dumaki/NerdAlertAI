@@ -133,6 +133,11 @@ tools:
     enabled: true
     trust_level: 1
 
+  rss:
+    enabled: true
+    trust_level: 1         # Outbound HTTP to public feed URLs, no auth.
+                           # Same trust profile as web / weather / wikipedia.
+
   host_metrics:
     enabled: true
     trust_level: 1         # Local OS reads only — no auth, no network

@@ -26,6 +26,7 @@ import gmailTool       from './builtin/gmail-tool';
 import gmailSetupTool  from './builtin/gmail-setup';
 import helpTool        from './builtin/help-tool';
 import weatherTool     from './builtin/weather-tool';
+import rssTool         from './builtin/rss-tool';
 import hostMetricsTool from './builtin/host-metrics';
 import projectTool     from './builtin/project-tool';
 import { webTool }         from './builtin/web-tool';
@@ -61,6 +62,7 @@ const ALL_TOOLS: NerdAlertTool[] = [
   helpTool,
   weatherTool,
   webTool,
+  rssTool,
   hostMetricsTool,
   projectTool,
   gmailTool,
