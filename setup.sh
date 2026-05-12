@@ -224,7 +224,145 @@ else
 fi
 
 # ============================================================
-# STEP 5 — Write .env (non-secrets only)
+# STEP 5 — Optional capabilities (semantic memory + voice)
+# ============================================================
+# NerdAlert ships three opt-in capabilities that the agent
+# enables automatically when their assets are present. The
+# repo deliberately does not bundle these — see
+# voices.example/README.md and whisper-models.example/README.md
+# for the license-cleanroom and file-size rationale.
+#
+# Capabilities and their assets:
+#   1. Semantic memory (~400 MB)
+#        Asset: bge-base-en-v1.5 HuggingFace model directory
+#        Without it: memory.search() falls back to TF-IDF —
+#        still works, just less smart on paraphrase queries.
+#   2. Voice TTS (Piper)
+#        Asset: piper binary + per-personality voice.onnx
+#        Without it: speaker icons hidden, no TTS surface.
+#   3. Voice STT (Whisper)
+#        Asset: whisper-cli + ffmpeg + ggml-*.bin model
+#        Without it: mic button hidden, /api/stt returns 503.
+#
+# This block detects what's installed, creates the empty
+# directories so the user sees where things go, and offers
+# to download the two model files. It does NOT install
+# binaries — those have user-preferred install methods
+# (brew vs pipx vs source build) we refuse to choose for the
+# user.
+# ============================================================
+echo ""
+echo -e "${BOLD}Step 4 — Optional capabilities${RESET}"
+echo ""
+
+# Create the three optional-asset directories up front so the
+# user sees where assets go even if they skip the downloads.
+# chmod 700 mirrors the existing ~/.nerdalert permission posture.
+mkdir -p "$HOME/.nerdalert/embeddings"      && chmod 700 "$HOME/.nerdalert/embeddings"
+mkdir -p "$HOME/.nerdalert/voices"          && chmod 700 "$HOME/.nerdalert/voices"
+mkdir -p "$HOME/.nerdalert/whisper-models"  && chmod 700 "$HOME/.nerdalert/whisper-models"
+
+# ── Binary detection ─────────────────────────────────────────
+# Detect each optional binary so we can report status in the
+# final summary block. We don't fail-fast on missing tools —
+# user can install them later and the modules light up at next
+# boot via their capability checks (Pattern 25, voice + memory).
+HAS_GIT_LFS="no"
+HAS_PIPER="no"
+HAS_WHISPER_CLI="no"
+HAS_FFMPEG="no"
+command -v git-lfs     &>/dev/null && HAS_GIT_LFS="yes"
+command -v piper       &>/dev/null && HAS_PIPER="yes"
+command -v whisper-cli &>/dev/null && HAS_WHISPER_CLI="yes"
+command -v ffmpeg      &>/dev/null && HAS_FFMPEG="yes"
+
+# ── Semantic memory model download ───────────────────────────
+# TODO(v1.0.0): consider flipping default to N for broader-user
+# releases. Today (beta — Rob + Jung) default Y keeps fresh
+# installs at full capability with one Enter press. See
+# HANDOFF_v0_5_30_setup_audit.md for the rationale.
+SEM_MODEL_DIR="$HOME/.nerdalert/embeddings/bge-base-en-v1.5"
+
+if [ -d "$SEM_MODEL_DIR" ] && [ -f "$SEM_MODEL_DIR/config.json" ]; then
+  ok "Semantic memory model already installed"
+else
+  info "Semantic memory model — bge-base-en-v1.5 (~400 MB)"
+  info "Powers smarter memory.search() recall via embeddings."
+  info "Skipping is safe: memory falls back to TF-IDF keyword search."
+  echo ""
+  read -rp "  Download now? [Y/n]: " DOWNLOAD_SEM
+  DOWNLOAD_SEM="${DOWNLOAD_SEM:-Y}"
+
+  if [[ "$DOWNLOAD_SEM" =~ ^[Yy] ]]; then
+    if [ "$HAS_GIT_LFS" = "yes" ]; then
+      info "Cloning BAAI/bge-base-en-v1.5 via git-lfs..."
+      # --skip-repo: we're not inside a git repo and don't want
+      # git-lfs to write its smudge filter to a global config.
+      git lfs install --skip-repo &>/dev/null || true
+      if git clone https://huggingface.co/BAAI/bge-base-en-v1.5 "$SEM_MODEL_DIR"; then
+        ok "Semantic memory model installed"
+      else
+        warn "Clone failed — semantic memory will fall back to TF-IDF"
+        info "Retry later with:"
+        info "  git clone https://huggingface.co/BAAI/bge-base-en-v1.5 $SEM_MODEL_DIR"
+        # Don't leave a partial clone on disk — the capability
+        # check would report it as broken rather than missing,
+        # which is a more confusing failure mode.
+        rm -rf "$SEM_MODEL_DIR"
+      fi
+    else
+      warn "git-lfs not installed — can't auto-download the model"
+      info "Install git-lfs with:  brew install git-lfs"
+      info "Then run:"
+      info "  git clone https://huggingface.co/BAAI/bge-base-en-v1.5 $SEM_MODEL_DIR"
+    fi
+  else
+    info "Skipped — semantic memory will use TF-IDF keyword search"
+  fi
+fi
+
+# ── Whisper STT model download ───────────────────────────────
+# Matches config.yaml default voice.stt.model: base.en.
+# Direct HuggingFace curl avoids the whisper.cpp clone-and-run-
+# script dance — same file the official downloader fetches.
+WHISPER_MODEL="$HOME/.nerdalert/whisper-models/ggml-base.en.bin"
+
+echo ""
+if [ -f "$WHISPER_MODEL" ]; then
+  ok "Whisper STT model (base.en) already installed"
+else
+  info "Whisper STT model — base.en (~142 MB)"
+  info "Required for the mic button + voice input."
+  info "Also requires whisper-cli + ffmpeg binaries (see summary)."
+  echo ""
+  read -rp "  Download now? [Y/n]: " DOWNLOAD_WHISPER
+  DOWNLOAD_WHISPER="${DOWNLOAD_WHISPER:-Y}"
+
+  if [[ "$DOWNLOAD_WHISPER" =~ ^[Yy] ]]; then
+    info "Downloading ggml-base.en.bin from HuggingFace..."
+    # -f: fail on HTTP errors (don't write a 404 body to disk)
+    # -L: follow redirects (HF uses CDN redirects)
+    # --progress-bar: visible progress without verbose curl noise
+    if curl -fL --progress-bar \
+        -o "$WHISPER_MODEL" \
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"; then
+      ok "Whisper model installed"
+    else
+      warn "Download failed — STT will be unavailable until you retry"
+      # Same hygiene as the LFS branch above: never leave a
+      # partial file on disk where capability checks might find it.
+      rm -f "$WHISPER_MODEL"
+      info "Retry later with:"
+      info "  curl -fL -o $WHISPER_MODEL \\"
+      info "    https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
+    fi
+  else
+    info "Skipped — STT mic button will stay hidden until installed"
+  fi
+fi
+
+# ============================================================
+# STEP 6 — Write .env (non-secrets only)
 # ============================================================
 # The .env file holds NON-SECRET configuration only:
 # port numbers, MODEL string, OLLAMA_HOST URL, and similar.
@@ -234,7 +372,7 @@ fi
 # bearer token on first boot if no keychain entry exists.
 # ============================================================
 echo ""
-echo -e "${BOLD}Step 4 — Creating .env (non-secret config)${RESET}"
+echo -e "${BOLD}Step 5 — Creating .env (non-secret config)${RESET}"
 echo ""
 
 ENV_FILE="$PROJECT_ROOT/.env"
@@ -297,7 +435,7 @@ info "(no secrets — those go through /setup)"
 # STEP 6 — Shell aliases
 # ============================================================
 echo ""
-echo -e "${BOLD}Step 5 — Setting up shell aliases${RESET}"
+echo -e "${BOLD}Step 6 — Setting up shell aliases${RESET}"
 echo ""
 
 SHELL_RC=""
@@ -370,6 +508,33 @@ echo -e "  ${YELLOW}nerd-open${RESET}     ${GRAY}← opens http://localhost:3773
 echo ""
 echo -e "  ${BOLD}Optional — set up Gmail:${RESET}"
 echo -e "  ${GRAY}npm run setup:gmail${RESET}"
+echo ""
+# ── Optional capabilities status ───────────────────────────────
+# Echoes a final summary of what's wired up vs. what still
+# needs manual install. Re-evaluates the same conditions the
+# Step 4 block checked, so this stays accurate even if the user
+# accepted only some of the downloads.
+echo -e "  ${BOLD}Optional capabilities — status:${RESET}"
+if [ -d "$SEM_MODEL_DIR" ] && [ -f "$SEM_MODEL_DIR/config.json" ]; then
+  echo -e "  ${GREEN}✓${RESET} Semantic memory model installed"
+else
+  echo -e "  ${GRAY}○${RESET} Semantic memory — TF-IDF fallback active"
+fi
+if [ "$HAS_PIPER" = "yes" ]; then
+  echo -e "  ${GREEN}✓${RESET} Piper TTS binary on PATH ${GRAY}(drop voice.onnx into ~/.nerdalert/voices/<personality>/)${RESET}"
+else
+  echo -e "  ${GRAY}○${RESET} Piper TTS — install with: ${CYAN}brew install piper${RESET} or ${CYAN}pipx install piper-tts${RESET}"
+fi
+if [ "$HAS_WHISPER_CLI" = "yes" ] && [ "$HAS_FFMPEG" = "yes" ]; then
+  if [ -f "$WHISPER_MODEL" ]; then
+    echo -e "  ${GREEN}✓${RESET} Whisper STT ready (binaries + model)"
+  else
+    echo -e "  ${YELLOW}!${RESET} Whisper binaries installed, model not downloaded"
+  fi
+else
+  echo -e "  ${GRAY}○${RESET} Whisper STT — install with: ${CYAN}brew install whisper-cpp ffmpeg${RESET}"
+fi
+echo -e "  ${GRAY}See voices.example/README.md + whisper-models.example/README.md for full setup.${RESET}"
 echo ""
 echo -e "  ${GRAY}Questions? See SHIPPING.md for full documentation.${RESET}"
 echo ""

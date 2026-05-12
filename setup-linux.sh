@@ -237,13 +237,127 @@ case "$MODEL_CHOICE" in
     ;;
 esac
 
-# ── 7. Build TypeScript ───────────────────────────────────────
+# ── 7. Optional capabilities (semantic memory + voice) ───
+# NerdAlert ships three opt-in capabilities that the agent enables
+# automatically when their assets are present. The repo deliberately
+# does not bundle these — see voices.example/README.md and
+# whisper-models.example/README.md for the license-cleanroom + size
+# rationale.
+#
+# This block detects what's installed, creates the empty directories
+# so the user sees where things go, and offers to download the two
+# model files. It does NOT install binaries — those have user-
+# preferred install methods (apt vs pipx vs source build) we refuse
+# to choose for the user.
+echo ""
+echo "→ Optional capabilities (semantic memory + voice)"
+
+# Create the three optional-asset directories up front so the user
+# sees where assets go even if they skip the downloads.
+mkdir -p "$HOME/.nerdalert/embeddings"      && chmod 700 "$HOME/.nerdalert/embeddings"
+mkdir -p "$HOME/.nerdalert/voices"          && chmod 700 "$HOME/.nerdalert/voices"
+mkdir -p "$HOME/.nerdalert/whisper-models"  && chmod 700 "$HOME/.nerdalert/whisper-models"
+
+# Binary detection — used by both the prompts below and the final
+# summary block. Don't fail-fast on missing tools; modules light up
+# at next boot via their capability checks (Pattern 25).
+HAS_GIT_LFS="no"
+HAS_PIPER="no"
+HAS_WHISPER_CLI="no"
+HAS_FFMPEG="no"
+command -v git-lfs     &>/dev/null && HAS_GIT_LFS="yes"
+command -v piper       &>/dev/null && HAS_PIPER="yes"
+command -v whisper-cli &>/dev/null && HAS_WHISPER_CLI="yes"
+command -v ffmpeg      &>/dev/null && HAS_FFMPEG="yes"
+
+# Semantic memory model.
+# TODO(v1.0.0): consider flipping default to N for broader-user
+# releases. Today (beta — Rob + Jung) default Y keeps fresh installs
+# at full capability with one Enter press. See HANDOFF_v0_5_30 for
+# the rationale.
+SEM_MODEL_DIR="$HOME/.nerdalert/embeddings/bge-base-en-v1.5"
+if [ -d "$SEM_MODEL_DIR" ] && [ -f "$SEM_MODEL_DIR/config.json" ]; then
+  echo "  ✓ Semantic memory model already installed"
+else
+  echo ""
+  echo "  Semantic memory model — bge-base-en-v1.5 (~400 MB)"
+  echo "  Powers smarter memory.search() recall via embeddings."
+  echo "  Skipping is safe: memory falls back to TF-IDF keyword search."
+  echo ""
+  read -rp "  Download now? [Y/n]: " DOWNLOAD_SEM
+  DOWNLOAD_SEM="${DOWNLOAD_SEM:-Y}"
+  if [[ "$DOWNLOAD_SEM" =~ ^[Yy] ]]; then
+    if [ "$HAS_GIT_LFS" = "yes" ]; then
+      echo "  → Cloning BAAI/bge-base-en-v1.5 via git-lfs..."
+      # --skip-repo: we're not inside a git repo and don't want
+      # git-lfs to write its smudge filter to global config.
+      git lfs install --skip-repo &>/dev/null || true
+      if git clone https://huggingface.co/BAAI/bge-base-en-v1.5 "$SEM_MODEL_DIR"; then
+        echo "  ✓ Semantic memory model installed"
+      else
+        echo "  ⚠ Clone failed — semantic memory will fall back to TF-IDF"
+        echo "    Retry later with:"
+        echo "      git clone https://huggingface.co/BAAI/bge-base-en-v1.5 $SEM_MODEL_DIR"
+        # Don't leave a partial clone on disk — the capability check
+        # would see an incomplete directory and report it as broken
+        # rather than missing, which is a more confusing failure mode.
+        rm -rf "$SEM_MODEL_DIR"
+      fi
+    else
+      echo "  ⚠ git-lfs not installed — can't auto-download"
+      echo "    Install with:  sudo apt install git-lfs"
+      echo "    Then run:"
+      echo "      git clone https://huggingface.co/BAAI/bge-base-en-v1.5 $SEM_MODEL_DIR"
+    fi
+  else
+    echo "  → Skipped — semantic memory will use TF-IDF keyword search"
+  fi
+fi
+
+# Whisper STT model. Matches config.yaml default voice.stt.model:
+# base.en. Direct HuggingFace curl avoids the whisper.cpp clone-
+# and-run-script dance — same file the official downloader fetches.
+WHISPER_MODEL="$HOME/.nerdalert/whisper-models/ggml-base.en.bin"
+if [ -f "$WHISPER_MODEL" ]; then
+  echo "  ✓ Whisper STT model (base.en) already installed"
+else
+  echo ""
+  echo "  Whisper STT model — base.en (~142 MB)"
+  echo "  Required for the mic button + voice input."
+  echo "  Also requires whisper-cli + ffmpeg binaries (see summary)."
+  echo ""
+  read -rp "  Download now? [Y/n]: " DOWNLOAD_WHISPER
+  DOWNLOAD_WHISPER="${DOWNLOAD_WHISPER:-Y}"
+  if [[ "$DOWNLOAD_WHISPER" =~ ^[Yy] ]]; then
+    echo "  → Downloading ggml-base.en.bin from HuggingFace..."
+    # -f: fail on HTTP errors (don't write a 404 body to disk)
+    # -L: follow redirects (HF uses CDN redirects)
+    # --progress-bar: visible progress without verbose curl noise
+    if curl -fL --progress-bar \
+        -o "$WHISPER_MODEL" \
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"; then
+      echo "  ✓ Whisper model installed"
+    else
+      echo "  ⚠ Download failed — STT will be unavailable until you retry"
+      # Same hygiene as the LFS branch above: never leave a partial
+      # file on disk where capability checks might find it.
+      rm -f "$WHISPER_MODEL"
+      echo "    Retry later with:"
+      echo "      curl -fL -o $WHISPER_MODEL \\"
+      echo "        https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
+    fi
+  else
+    echo "  → Skipped — STT mic button will stay hidden until installed"
+  fi
+fi
+
+# ── 8. Build TypeScript ───────────────────────────────────────
 echo ""
 echo "→ Building TypeScript..."
 npm run build
 echo "  ✓ Build complete"
 
-# ── 8. Shell aliases ──────────────────────────────────────────
+# ── 9. Shell aliases ────────────────────────────────────────────
 echo ""
 echo "→ Adding shell aliases to ~/.bashrc..."
 
@@ -262,7 +376,7 @@ else
   echo "  ✓ Aliases already present"
 fi
 
-# ── 9. systemd service ────────────────────────────────────────
+# ── 10. systemd service ────────────────────────────────────────
 echo ""
 echo "→ Installing systemd service..."
 
@@ -299,5 +413,47 @@ echo ""
 echo "  Check status:  nerd-status"
 echo "  View logs:     nerd-logs"
 echo "  Restart:       nerd-restart"
+echo ""
+# ── Optional capabilities status ───────────────────────────────
+# Re-evaluates the same conditions the step 7 block checked, so
+# this stays accurate even if the user accepted only some of the
+# downloads. Mirrors the macOS setup.sh summary.
+echo "  Optional capabilities — status:"
+if [ -d "$SEM_MODEL_DIR" ] && [ -f "$SEM_MODEL_DIR/config.json" ]; then
+  echo "    ✓ Semantic memory model installed"
+else
+  echo "    ○ Semantic memory — TF-IDF fallback active"
+fi
+if [ "$HAS_PIPER" = "yes" ]; then
+  echo "    ✓ Piper TTS binary on PATH (drop voice.onnx into ~/.nerdalert/voices/<personality>/)"
+else
+  echo "    ○ Piper TTS — install with: pipx install piper-tts"
+fi
+if [ "$HAS_WHISPER_CLI" = "yes" ] && [ "$HAS_FFMPEG" = "yes" ]; then
+  if [ -f "$WHISPER_MODEL" ]; then
+    echo "    ✓ Whisper STT ready (binaries + model)"
+  else
+    echo "    ! Whisper binaries installed, model not downloaded"
+  fi
+else
+  # No apt package for whisper-cli on Ubuntu — build from source.
+  # ffmpeg has an apt package; bundle hints into one line for brevity.
+  echo "    ○ Whisper STT — sudo apt install ffmpeg + build whisper.cpp from source"
+  echo "      (https://github.com/ggerganov/whisper.cpp)"
+fi
+echo "  See voices.example/README.md + whisper-models.example/README.md for full setup."
+echo ""
+# ── Recurring deploy procedure ────────────────────────────────
+# Addresses HANDOFF_v0_5_30 gap #2: prod was 14 versions stale
+# when v0.5.29 deployed, and `pull && build && restart` failed
+# because deps had drifted. `npm install` is a no-op when
+# package-lock matches installed modules, so safe to run every
+# time. This block documents the correct procedure right where
+# future-Ben will see it.
+echo "  To deploy updates after pulling from dev:"
+echo "    git pull origin dev \\"
+echo "      && npm install \\"
+echo "      && npm run build \\"
+echo "      && sudo systemctl restart $SERVICE_NAME"
 echo "  ══════════════════════════════════════════"
 echo ""
