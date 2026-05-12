@@ -58,6 +58,16 @@ import {
   normalizeCurrencyCode,
   CURRENCY_NAME_TO_CODE,
 } from '../tools/builtin/currency-tool';
+// v0.5.28: embedder + capability check power the prefetch relevance
+// gate (evaluatePrefetchRelevance at the bottom of this file). The
+// gate is the mechanical half of the dissonance defense; the prompt
+// clause in buildInjectedPrompt is the behavioral half. When the
+// embedder is unavailable (model not installed, semantic disabled in
+// config), the gate fails open and the prompt clause becomes the
+// sole defense — preserving the strict-superset property from
+// v0.5.26.
+import { embed } from '../memory/embedder';
+import { getEmbeddingCapability } from '../memory/capability';
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -1252,6 +1262,32 @@ export async function prefetchTools(
 //
 // Formats available results into a system prompt injection block.
 // Model is told explicitly: only reference values shown here.
+//
+// DISSONANCE CLAUSE (v0.5.28 — Approach A)
+// ─────────────────────────────────────────────────────────────
+// When prefetch misroutes (keyword collision, ambiguous query, or
+// multi-group match where only one group is relevant), the data
+// block contains tool output that has no relationship to the user's
+// question. The previous prompt's strongest directive was "Report
+// ONLY the values shown above" — but Mistral interprets a data/
+// question mismatch as license to invent a response that fits the
+// question's shape while ignoring the data entirely. v0.5.27's
+// memory-update bug surfaced this: host_metrics data → "Got it,
+// I've updated that for you" confabulation, with no memory write.
+//
+// The new dissonance clause is framed positively (action verb
+// "say so plainly") rather than as another "Do NOT" — Mistral's
+// instruction-following degrades under stacked negations, and the
+// existing prompt already has six. Framing the desired behavior
+// directly gives the model something to do rather than something
+// to avoid.
+//
+// Approach B's relevance gate in ui-routes.ts handles the same
+// failure class mechanically (bails to tool loop before this
+// prompt is ever assembled). A and B are defense in depth: B
+// catches what A's prompt-following misses, A catches what B's
+// threshold misses (and is the only defense when embeddings are
+// unavailable, preserving the strict-superset property).
 
 export function buildInjectedPrompt(results: PrefetchResult[]): string {
   const available = results.filter(r => r.available);
@@ -1274,6 +1310,13 @@ export function buildInjectedPrompt(results: PrefetchResult[]): string {
     `Do NOT invent additional tool calls or suggest fetching more data. ` +
     `Do NOT mention timeouts, errors, or unavailability unless the data block explicitly says Unavailable. ` +
     `Do NOT offer to try again. ` +
+    // ── v0.5.28 dissonance clause ─────────────────────────
+    // If the data above does not actually answer what the user
+    // asked, say so plainly. This is a real failure mode — the
+    // pre-fetch system fires the wrong tool sometimes, and when
+    // it does, fabricating a confident answer that fits the
+    // question's shape is worse than admitting the mismatch.
+    `If the data above does not actually answer the user's question, say so plainly in your own voice — for example: "I don't have that information" or "I pulled <whatever was pulled> but that doesn't answer what you asked." Honesty here is more valuable than the appearance of helpfulness. Do NOT fabricate an answer that fits the question's shape but ignores the data. ` +
     `Stay in character and narrate what you see as if you retrieved it yourself.`
   );
 }
@@ -1337,4 +1380,215 @@ export function clipPrefetchForFreeTier(
 
     return { ...r, data: replacement };
   });
+}
+
+// ── evaluatePrefetchRelevance (v0.5.28 — Approach B) ───────────────────────────────────────
+//
+// The mechanical half of the dissonance defense. Decides whether
+// prefetched data is relevant to the user's question; if not, the
+// caller (ui-routes.ts) bails out of the narration path and lets
+// the tool loop handle the turn instead.
+//
+// WHY THIS EXISTS
+// ────────────────────────────────────────────────────────────
+// v0.5.27 closed the specific keyword collision (bare 'memory' in
+// host_metrics) that surfaced the dissonance class. But the class
+// itself — prefetch fires the wrong group, the model receives
+// unrelated data, and Mistral confabulates a confident response
+// that ignores the data — is independent of any specific
+// keyword. Any future collision, ambiguous query, or multi-group
+// match where only one group is truly relevant can reproduce the
+// same silent failure.
+//
+// This gate intercepts dissonance BEFORE the model sees the bad
+// data. Bad data never reaches the prompt; the model gets a clean
+// shot at the question via its native tool calling.
+//
+// MECHANISM
+// ────────────────────────────────────────────────────────────
+// Embed the user's message and each prefetched tool's data using
+// v0.5.26's bge-base embedder. Both vectors are L2-normalized (the
+// embedder passes normalize: true to the transformer pipeline), so
+// cosine similarity collapses to a simple dot product. Take the max
+// similarity across all available tools — if even one tool's data
+// is relevant, we narrate. Below the threshold, we bail.
+//
+// THRESHOLD
+// ────────────────────────────────────────────────────────────
+// 0.3 is an empirical starting point from the v0.5.28 handoff.
+// bge-base similarities between unrelated short texts cluster low
+// (~0.1–0.25), between weakly-related texts mid (~0.3–0.45), and
+// between strongly-related texts high (~0.5–0.85). Exported as a
+// constant so the threshold is greppable and the telemetry logs
+// in ui-routes.ts can reference it when emitting log lines.
+//
+// Tune by observation: every gate decision logs the similarity
+// scores. After a few hundred turns, plot the distribution —
+// relevant prefetches should cluster well above 0.3, dissonance
+// cases well below.
+//
+// FAIL-OPEN SEMANTICS
+// ────────────────────────────────────────────────────────────
+// Every error path returns relevant: true. The reasoning: when we
+// don't know whether the data is relevant (embedder unavailable,
+// embed call throws, no tools available to score), preserving the
+// pre-v0.5.28 narration path is strictly better than a false-
+// positive bail that takes a working narration off the rails. The
+// prompt clause in buildInjectedPrompt is the fallback defense.
+//
+// This is the v0.5.26 strict-superset property applied to v0.5.28:
+// every code path is at least as good as pre-fix, never worse.
+//
+// CAPABILITY GATING
+// ────────────────────────────────────────────────────────────
+// Mirrors the hybrid memory search dispatcher's gate (v0.5.26):
+// getEmbeddingCapability() returns { available: false } when the
+// bge-base model directory is missing or semantic memory is
+// disabled in config. In that case we skip the embed calls entirely
+// (would throw anyway) and return relevant: true.
+//
+// LATENCY COST
+// ────────────────────────────────────────────────────────────
+// ~30–80ms per embed() call on the bge-base ONNX runtime. With
+// 1–N prefetched tools, total cost is ~60–160ms added to the
+// narration path. Negligible against the model's own latency
+// (Mistral 24B at ~10–20 tok/s starts emitting tokens well after
+// the gate has resolved). The embedder model is already loaded if
+// v0.5.26 semantic memory has been used in this process, so the
+// first call after server boot might be slightly slower (cold path
+// triggers model load), but every subsequent call is hot.
+
+/** Cosine similarity threshold below which we bail out of narration. */
+export const PREFETCH_RELEVANCE_THRESHOLD = 0.3;
+
+/** Per-tool similarity score, used both for the decision and for telemetry. */
+export interface PrefetchToolScore {
+  toolName:   string;
+  similarity: number;
+}
+
+/** Result of evaluating a prefetch turn against the user's question. */
+export interface PrefetchRelevanceJudgment {
+  /** True when at least one tool scored >= threshold, OR when we fail open. */
+  relevant:            boolean;
+  /** Maximum cosine similarity across all scored tools. Zero when nothing scored. */
+  maxSimilarity:       number;
+  /** Per-tool scores for telemetry. Empty when capability unavailable or no tools available. */
+  perToolScores:       PrefetchToolScore[];
+  /** False when the embedder isn't available; tells callers the prompt clause is the only defense this turn. */
+  capabilityAvailable: boolean;
+  /** Set when fail-open was triggered by an error rather than by absent capability. Useful for log filtering. */
+  failOpenReason?:     string;
+}
+
+/**
+ * Compute cosine similarity between two L2-normalized embedding vectors.
+ *
+ * For unit vectors, cosine(a, b) = (a · b) / (||a|| * ||b||) = a · b
+ * since both norms are 1. The bge-base embedder passes normalize: true
+ * to the transformer pipeline, so both inputs here are guaranteed unit-
+ * length. Same math as hybrid-search.ts in the memory engine.
+ */
+function dotProduct(a: Float32Array, b: Float32Array): number {
+  // Length mismatch shouldn't happen — both vectors come from the same
+  // embedder which always emits EMBEDDING_DIMENSIONS-length output —
+  // but the guard makes the function safe to reuse and keeps a
+  // possible future model swap from silently producing wrong scores.
+  if (a.length !== b.length) return 0;
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) {
+    sum += a[i] * b[i];
+  }
+  return sum;
+}
+
+export async function evaluatePrefetchRelevance(
+  userMessage: string,
+  results:     PrefetchResult[],
+): Promise<PrefetchRelevanceJudgment> {
+  const available = results.filter(r => r.available);
+
+  // Nothing to score → nothing to bail on. Caller already skips
+  // narration when no tools are available, but the explicit branch
+  // here keeps the function correct when called in isolation
+  // (tests, future callers, etc.) and avoids a no-op embedder load.
+  if (available.length === 0) {
+    return {
+      relevant:            true,
+      maxSimilarity:       0,
+      perToolScores:       [],
+      capabilityAvailable: false,
+      failOpenReason:      'no-available-tools',
+    };
+  }
+
+  // Capability gate — if the bge-base model isn't installed or
+  // semantic memory is disabled in config, we can't score relevance.
+  // Fail open to preserve pre-v0.5.28 behavior; the prompt clause
+  // in buildInjectedPrompt is the only remaining defense.
+  const cap = getEmbeddingCapability();
+  if (!cap.available) {
+    return {
+      relevant:            true,
+      maxSimilarity:       0,
+      perToolScores:       [],
+      capabilityAvailable: false,
+      failOpenReason:      `embedder-unavailable: ${cap.error ?? 'unknown'}`,
+    };
+  }
+
+  // Embed the user's question. Single call; reused against every tool.
+  let userVec: Float32Array;
+  try {
+    userVec = await embed(userMessage);
+  } catch (err: unknown) {
+    // Embedder failure on the user message means we can't score
+    // anything. Fail open with a clear reason for the telemetry.
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[prefetch-relevance] user message embed failed: ${msg}`);
+    return {
+      relevant:            true,
+      maxSimilarity:       0,
+      perToolScores:       [],
+      capabilityAvailable: true,
+      failOpenReason:      `user-embed-error: ${msg}`,
+    };
+  }
+
+  // Embed each tool's data and score. Per-tool errors are tolerated:
+  // we mark that tool with similarity=1 (fail-open at the tool level)
+  // so a single bad embed call can't trigger a false-positive bail on
+  // a turn where the rest of the data is genuinely relevant. The log
+  // line lets us spot if this is happening systematically.
+  const perToolScores: PrefetchToolScore[] = [];
+  for (const r of available) {
+    try {
+      const dataVec    = await embed(r.data);
+      const similarity = dotProduct(userVec, dataVec);
+      perToolScores.push({ toolName: r.toolName, similarity });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[prefetch-relevance] embed failed for ${r.toolName}: ${msg}`);
+      // similarity=1 means this tool counts as fully relevant for
+      // the max-aggregate below — fail open at the tool level.
+      perToolScores.push({ toolName: r.toolName, similarity: 1 });
+    }
+  }
+
+  // Max-aggregate across tools: if ANY tool's data is relevant, we
+  // narrate. This is deliberate — a multi-tool prefetch where only
+  // one tool is relevant (weather + datetime on "what's the weather
+  // tomorrow") should not bail just because the irrelevant tool's
+  // score is low. The relevant tool's data is enough to narrate from.
+  const maxSimilarity = perToolScores.reduce(
+    (max, s) => Math.max(max, s.similarity),
+    0,
+  );
+
+  return {
+    relevant:            maxSimilarity >= PREFETCH_RELEVANCE_THRESHOLD,
+    maxSimilarity,
+    perToolScores,
+    capabilityAvailable: true,
+  };
 }

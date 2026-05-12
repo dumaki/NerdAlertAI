@@ -40,9 +40,13 @@ import {
   prefetchTools,
   buildInjectedPrompt,
   clipPrefetchForFreeTier,
+  evaluatePrefetchRelevance,
+  PREFETCH_RELEVANCE_THRESHOLD,
   type PrefetchResult,
+  type PrefetchRelevanceJudgment,
   type HistoryTurn,
 } from '../core/intent-prefetch';
+import { checkResponseReferencesData } from '../core/narration-postcheck';
 import { getAllJobs, getRecentRuns } from '../cron';
 import {
   saveSession,
@@ -575,12 +579,28 @@ async function handlePseudoToolStream(
   void dedupSources(sourceSink);
 }
 
+// ── NarrationOutcome (v0.5.28) ─────────────────────────
+//
+// The shape handleNarrationStream returns to the orchestrator.
+//   'streamed' — response was post-checked, emitted, and the SSE
+//                response was ended; the caller does nothing more.
+//   'bail'     — confabulation detected; the caller must continue
+//                the response by invoking the tool loop on the
+//                same SSE stream. No events have been written.
+//   'error'    — the model call threw; the caller does nothing
+//                more (handleNarrationStream already wrote the
+//                error event and ended the response).
+type NarrationOutcome =
+  | { kind: 'streamed' }
+  | { kind: 'bail'; reason: string }
+  | { kind: 'error' };
+
 // ── Single-turn narration handler — NEW for v0.5.13.1 ─────────
 //
 // Runs when intent-prefetch produced narratable data. Skips the
-// tool adapter entirely and just streams text from the model with
-// the enriched system prompt (which already contains the LIVE
-// SYSTEM DATA block from buildInjectedPrompt).
+// tool adapter entirely and emits text from the model with the
+// enriched system prompt (which already contains the LIVE SYSTEM
+// DATA block from buildInjectedPrompt).
 //
 // Why this exists: when prefetch fires AND we route through the
 // pseudo-tool adapter, the model sees two contradictory instruction
@@ -607,9 +627,39 @@ async function handlePseudoToolStream(
 // and citation chips populated, rather than staying on the
 // "Data injected into response." placeholder forever.
 //
-// This matches the documented prefetch-narration single-turn pattern
-// and is what the OpenRouter free-tier path was originally designed
-// to do before the pseudo-tool adapter came in.
+// V0.5.28 — POST-HOC DISSONANCE CHECK (Approach C)
+// ─────────────────────────────────────────────────────────────
+// Tokens are now BUFFERED server-side rather than streamed live.
+// After generation completes, the post-check in
+// narration-postcheck.ts compares the response against the
+// prefetched data: did the response reference any salient value?
+// If yes, the buffered response is emitted in one burst. If no,
+// the handler returns 'bail' and the caller invokes the tool
+// loop on the same SSE stream — the model gets a fresh shot at
+// the question without the misroute data in its context.
+//
+// This layer caught the v0.5.28 Sherman case that both A (prompt
+// clause) and B (relevance gate) missed: Mistral produced "His
+// character was developed in the 19th century" which references
+// zero values from the get_datetime block. Salient-token
+// intersection = 0 → bail. The tool loop then handles the
+// question through its native tool-calling path.
+//
+// UX cost: narration loses live token streaming. Typical Mistral
+// narration is short (1-3 sentences) so the buffering pause is
+// usually 1-3 seconds. The correctness gain (no more confident
+// confabulations) is worth the pause. v0.5.29 could split the
+// buffered text on sentence boundaries and emit in chunks if the
+// pause becomes an annoyance.
+//
+// EVENT ORDERING ON BAIL
+// ─────────────────────────────────────────────────────────────
+// Prefetch tool cards (tool_start / tool_result) were emitted
+// at the top of the function pre-v0.5.28. They've moved AFTER
+// the post-check so the bail path doesn't surface misroute
+// cards. On bail, NO SSE events are emitted — the caller takes
+// over with a clean stream. The user sees only what the tool
+// loop produces.
 async function handleNarrationStream(
   res:             Response,
   enrichedPrompt:  string,
@@ -617,7 +667,7 @@ async function handleNarrationStream(
   prefetchSources: Source[],
   prefetchResults: PrefetchResult[],
   transport:       'openrouter' | 'ollama',
-): Promise<void> {
+): Promise<NarrationOutcome> {
 
   const llm = getLLMConfig();
   const bareModel = llm.model.replace(/^ollama\//, '');
@@ -631,27 +681,12 @@ async function handleNarrationStream(
   // capability gate blocks them at the request boundary.
   const orMessages: ORMessage[] = convertHistoryForOpenAI(initialMessages);
 
-  // Emit tool_start + tool_result for each available prefetched tool so
-  // the frontend renders ONE collapsible card per tool with the actual
-  // content inside. The chat/stream handler skips its tool_prefetch
-  // emit when narration runs (see hasNarratablePrefetch gate above) so
-  // these are the only tool-card events that fire on this path.
-  //
-  // tool_start creates a thinking spinner inside #streaming-bubble;
-  // tool_result then finds that element by id and replaces it with
-  // the data card. Both fire before tokens stream, so the spinner is
-  // usually too brief to register visually — but that's accurate:
-  // prefetch already finished server-side. The card lands populated,
-  // no placeholder.
-  for (const r of prefetchResults) {
-    if (!r.available) continue;
-    const id = `prefetch_${r.toolName}`;
-    sseEvent(res, 'tool_start',  { id, name: r.toolName });
-    sseEvent(res, 'tool_result', { id, name: r.toolName, output: r.data });
-  }
-
+  // ── Buffered generation (v0.5.28) ──────────────────────────
+  // Generate the full response without emitting any SSE events.
+  // The post-check below decides whether to commit the buffered
+  // text to the wire (legitimate) or discard it and signal the
+  // caller to invoke the tool loop instead (confabulation).
   let fullText = '';
-
   try {
     const stream = transport === 'ollama'
       ? streamOllama(orMessages, enrichedPrompt, bareModel)
@@ -659,19 +694,88 @@ async function handleNarrationStream(
 
     for await (const chunk of stream) {
       fullText += chunk;
-      sseEvent(res, 'token', { text: chunk });
     }
-
-    sseEvent(res, 'done', {
-      text:    fullText,
-      sources: dedupSources(prefetchSources),
-    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     sseEvent(res, 'error', { message });
-  } finally {
     res.end();
+    return { kind: 'error' };
   }
+
+  // ── Post-hoc dissonance check (v0.5.28 Approach C) ────────────
+  // Does the response reference any salient value from the
+  // prefetched data? See narration-postcheck.ts for the design
+  // and trade-off rationale.
+  const allData = prefetchResults
+    .filter(r => r.available)
+    .map(r => r.data)
+    .join('\n\n');
+  const postcheck = checkResponseReferencesData(fullText, allData);
+
+  if (!postcheck.referenced && !postcheck.failOpen) {
+    // Confabulation detected. Bail to caller without emitting
+    // anything — the caller invokes the tool loop on the same
+    // SSE stream. The model gets a clean shot at the question
+    // without the misroute prefetch data in its context.
+    const responsePreview = fullText.slice(0, 80).replace(/\s+/g, ' ');
+    console.log(
+      `[narration-postcheck] BAIL no-data-reference ` +
+      `data-tokens=${postcheck.dataTokenCount} ` +
+      `response-tokens=${postcheck.responseTokenCount} ` +
+      `response="${responsePreview}"`
+    );
+    return { kind: 'bail', reason: 'no-data-reference' };
+  }
+
+  // Legitimate — log the decision, then emit.
+  if (postcheck.failOpen) {
+    // Data had no salient tokens (empty result, or all-stopwords).
+    // Fail-open: we can't gate on what isn't there, so the
+    // response goes through. Logged so we can spot if this
+    // happens often enough to indicate broken data sources.
+    console.log(
+      `[narration-postcheck] OK fail-open data-tokens=0 ` +
+      `response-tokens=${postcheck.responseTokenCount}`
+    );
+  } else {
+    // Standard pass — at least one salient token shared. The
+    // shared list is capped at 10 entries in the postcheck
+    // function to keep log lines bounded.
+    console.log(
+      `[narration-postcheck] OK shared=[${postcheck.sharedTokens.join(',')}] ` +
+      `data-tokens=${postcheck.dataTokenCount} response-tokens=${postcheck.responseTokenCount}`
+    );
+  }
+
+  // ── Emit prefetch tool cards ─────────────────────────────
+  // Deferred from the top of the function (where it lived
+  // pre-v0.5.28) so the bail path doesn't surface misroute cards.
+  //
+  // tool_start creates a thinking spinner inside #streaming-bubble;
+  // tool_result then finds that element by id and replaces it with
+  // the data card. Both fire before the response token event, so
+  // the spinner is too brief to register visually — but that's
+  // accurate: prefetch already finished server-side. The card lands
+  // populated, no placeholder.
+  for (const r of prefetchResults) {
+    if (!r.available) continue;
+    const id = `prefetch_${r.toolName}`;
+    sseEvent(res, 'tool_start',  { id, name: r.toolName });
+    sseEvent(res, 'tool_result', { id, name: r.toolName, output: r.data });
+  }
+
+  // Emit the buffered response. Pre-v0.5.28 streamed token events
+  // chunk-by-chunk as Mistral produced them; the buffer-and-emit
+  // approach trades streaming UX for the ability to gate on the
+  // complete response.
+  sseEvent(res, 'token', { text: fullText });
+  sseEvent(res, 'done', {
+    text:    fullText,
+    sources: dedupSources(prefetchSources),
+  });
+  res.end();
+
+  return { kind: 'streamed' };
 }
 
 // ── Cron SSE broadcast (unchanged) ───────────────────────────
@@ -852,6 +956,84 @@ export function mountUIRoutes(app: Express): void {
       // ── Route to the right adapter ────────────────────────
       const hasNarratablePrefetch = prefetchResults.some(r => r.available);
 
+      // ── Prefetch relevance gate (v0.5.28 — Approach B) ─────────────────────────────────────────
+      //
+      // The mechanical half of the dissonance defense (paired with
+      // the prompt clause in buildInjectedPrompt). Embeds the user
+      // message and each prefetched tool's data, computes cosine
+      // similarity, and bails out of the narration path when the
+      // data is unrelated to the question.
+      //
+      // Why a gate at this layer and not inside narration: the model
+      // receives the prefetched data through the enrichedPrompt. If
+      // the model sees data that doesn't match the question, the
+      // best case is the v0.5.28 dissonance clause kicks in and the
+      // model admits the mismatch — the worst case (and the case
+      // v0.5.27 surfaced) is Mistral confabulating a confident
+      // answer that ignores the data entirely. The gate moves the
+      // decision upstream of the model: bad data never reaches the
+      // prompt, so the model gets a clean shot at the question via
+      // its native tool-calling protocol on the tool-loop path.
+      //
+      // Fails open: when the embedder is unavailable (model not
+      // installed, semantic memory disabled), evaluatePrefetch-
+      // Relevance returns relevant=true and we narrate as before.
+      // The prompt clause in buildInjectedPrompt is the only
+      // defense in that configuration — still strictly better than
+      // pre-v0.5.28 behavior.
+      //
+      // Write-on-prefetch tail risk: reminders.set and memory.capture
+      // commit writes BEFORE this gate runs. In the rare case where
+      // a write fires but the gate bails (low-similarity between the
+      // user's phrasing and the resulting confirmation text), the
+      // tool-loop fallback might re-fire the write and produce a
+      // duplicate. In practice, write-on-prefetch only triggers on
+      // strongly-anchored paramExtractor matches (chrono.parse for
+      // reminders, anchored capture imperatives for memory), and the
+      // resulting data shares strong semantic overlap with the user
+      // message, so the gate passes. v0.7's full tool loop will
+      // replace this whole architecture; documenting and accepting
+      // the tail risk here rather than building a complex
+      // "already-wrote" tracker.
+      let relevanceJudgment: PrefetchRelevanceJudgment | null = null;
+      if (hasNarratablePrefetch) {
+        relevanceJudgment = await evaluatePrefetchRelevance(safeMessage, prefetchResults);
+        const scoreSummary = relevanceJudgment.perToolScores
+          .map(s => `${s.toolName}=${s.similarity.toFixed(3)}`)
+          .join(',');
+        const msgPreview = safeMessage.slice(0, 80).replace(/\s+/g, ' ');
+        if (!relevanceJudgment.relevant) {
+          // BAIL: log the full context so the threshold can be tuned
+          // from observation. Includes the 80-char message preview
+          // since this is the case we most want to inspect later.
+          console.log(
+            `[prefetch-relevance] BAIL maxSim=${relevanceJudgment.maxSimilarity.toFixed(3)} ` +
+            `< threshold=${PREFETCH_RELEVANCE_THRESHOLD} tools=[${scoreSummary}] msg="${msgPreview}"`
+          );
+        } else if (relevanceJudgment.capabilityAvailable) {
+          // OK: log scores without the message preview — happy-path
+          // turns are higher volume and we don't need the user text
+          // to tune the threshold from passing cases.
+          console.log(
+            `[prefetch-relevance] OK maxSim=${relevanceJudgment.maxSimilarity.toFixed(3)} ` +
+            `>= threshold=${PREFETCH_RELEVANCE_THRESHOLD} tools=[${scoreSummary}]`
+          );
+        } else {
+          // FAIL-OPEN: embedder unavailable or embed call threw.
+          // Telemetry-only — the prompt clause is now the sole
+          // defense for this turn.
+          console.log(
+            `[prefetch-relevance] FAIL-OPEN reason="${relevanceJudgment.failOpenReason ?? 'unknown'}" → narrating without gate`
+          );
+        }
+      }
+      // shouldNarrate is the post-gate narration decision. Three
+      // ways to false: (a) no prefetch ran, (b) prefetch ran but no
+      // tool returned data, (c) gate bailed. (a) and (b) drop
+      // through to the existing no-prefetch tool-loop path; (c)
+      // routes through the same path with the bare systemPrompt.
+      const shouldNarrate = hasNarratablePrefetch && (relevanceJudgment?.relevant ?? true);
+
       // Emit the tool_prefetch SSE event ONLY for paths that won't
       // narrate. Narration emits tool_start + tool_result inside
       // handleNarrationStream so the rail card shows actual content
@@ -859,6 +1041,14 @@ export function mountUIRoutes(app: Express): void {
       // Without this gate, both event families fire and the user sees
       // two cards per tool (one empty in #prefetch-blocks, one
       // populated in #streaming-bubble).
+      //
+      // v0.5.28: condition keyed on hasNarratablePrefetch (not
+      // shouldNarrate) so the gate-bail case ALSO suppresses this
+      // event. Surfacing misroute prefetch cards would just confuse
+      // the user — they'd see tool data they didn't ask about, then
+      // the tool loop doing something different. The misroute is
+      // silently swallowed server-side; the tool loop will produce
+      // its own cards via tool_start/tool_result.
       if (prefetchResults.length > 0 && !hasNarratablePrefetch) {
         sseEvent(res, 'tool_prefetch', {
           tools: prefetchResults.map(r => ({
@@ -871,19 +1061,33 @@ export function mountUIRoutes(app: Express): void {
       }
 
       // Decision tree:
-      //   1. Anthropic              → ReAct loop (its own tool calling, no prefetch)
-      //   2. Ollama/OR + prefetch   → single-turn narration (skips the tool
-      //                                protocol that contradicts the prefetch's
-      //                                "narrate, don't call tools" instructions —
-      //                                see handleNarrationStream comment)
-      //   3. Ollama (no prefetch)   → native OpenAI tool_calls (with pseudo
-      //                                fallback if the model isn't tool-flagged)
-      //   4. OpenRouter (no prefetch) → pseudo-tool XML protocol
+      //   1.  Anthropic                       → ReAct loop (its own tool calling, no prefetch)
+      //   2a. Ollama/OR + prefetch relevant   → single-turn narration (skips the tool
+      //                                          protocol that contradicts the prefetch's
+      //                                          "narrate, don't call tools" instructions —
+      //                                          see handleNarrationStream comment)
+      //   2b. Ollama/OR + prefetch IRRELEVANT → (v0.5.28) bail through to the tool-loop
+      //                                          path with BARE systemPrompt and empty
+      //                                          sources. The misroute data is silently
+      //                                          discarded; the tool loop gets a clean
+      //                                          shot at the question via native tool
+      //                                          calls.
+      //   3.  Ollama (no prefetch)            → native OpenAI tool_calls (with pseudo
+      //                                          fallback if the model isn't tool-flagged)
+      //   4.  OpenRouter (no prefetch)        → pseudo-tool XML protocol
+      //
+      // The Ollama and OpenRouter else-if branches handle both case 2b
+      // (gate bail) and cases 3/4 (no prefetch) with identical
+      // parameters: bare systemPrompt and empty sources. This is
+      // intentional — in both cases the tool loop must not see the
+      // enrichedPrompt's injected data block, which would reproduce
+      // the v0.5.13.1 narration-vs-tool-loop conflict that motivated
+      // handleNarrationStream's existence.
       if (llm.provider === 'anthropic') {
         const tools = toAnthropicFormat(getAvailableTools()) as Anthropic.Tool[];
         await handleAnthropicStream(res, systemPrompt, messages, tools, trustLevel);
-      } else if (hasNarratablePrefetch) {
-        await handleNarrationStream(
+      } else if (shouldNarrate) {
+        const outcome = await handleNarrationStream(
           res,
           enrichedPrompt,
           messages,
@@ -891,11 +1095,38 @@ export function mountUIRoutes(app: Express): void {
           prefetchResults,
           llm.provider,
         );
+        // v0.5.28 Approach C: if the post-check detected confabulation,
+        // narration returned 'bail' without writing anything to the
+        // SSE stream. Continue the response by invoking the tool loop
+        // with bare systemPrompt + empty sources — same shape as the
+        // B-gate bail and the no-prefetch path. The model gets a clean
+        // shot at the question via its native tool-calling protocol
+        // without the misroute prefetch data muddying its context.
+        //
+        // 'streamed' and 'error' both mean the response is already
+        // ended; there's nothing more to do.
+        if (outcome.kind === 'bail') {
+          console.log(
+            `[narration] postcheck bail (${outcome.reason}) → tool loop fallback`
+          );
+          if (llm.provider === 'ollama') {
+            await handleOllamaStream(res, systemPrompt, messages, [], trustLevel);
+          } else {
+            await handlePseudoToolStream(res, systemPrompt, messages, [], trustLevel);
+          }
+        }
       } else if (llm.provider === 'ollama') {
-        await handleOllamaStream(res, enrichedPrompt, messages, prefetchSources, trustLevel);
+        // v0.5.28: pass systemPrompt (bare) and [] (empty sources)
+        // instead of enrichedPrompt / prefetchSources. In the no-
+        // prefetch case this is byte-identical to the previous
+        // behavior (enrichedPrompt === systemPrompt when prefetch
+        // didn't run; prefetchSources is empty when no tool returned
+        // data). In the gate-bail case it strips the misroute data
+        // out of the model's input so the tool loop runs clean.
+        await handleOllamaStream(res, systemPrompt, messages, [], trustLevel);
       } else {
-        // OpenRouter, no prefetch matched
-        await handlePseudoToolStream(res, enrichedPrompt, messages, prefetchSources, trustLevel);
+        // OpenRouter — same bail behavior as the Ollama branch.
+        await handlePseudoToolStream(res, systemPrompt, messages, [], trustLevel);
       }
 
       const saveable = [
