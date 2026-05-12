@@ -444,16 +444,34 @@ fi
 echo "  See voices.example/README.md + whisper-models.example/README.md for full setup."
 echo ""
 # ── Recurring deploy procedure ────────────────────────────────
-# Addresses HANDOFF_v0_5_30 gap #2: prod was 14 versions stale
-# when v0.5.29 deployed, and `pull && build && restart` failed
-# because deps had drifted. `npm install` is a no-op when
-# package-lock matches installed modules, so safe to run every
-# time. This block documents the correct procedure right where
-# future-Ben will see it.
+# Addresses HANDOFF_v0_5_30 gap #2 + the v0.5.29 "Tools : log
+# regression" mystery.
+#
+# Two gotchas this procedure handles:
+#   1. Dep drift: prod was 14 versions stale when v0.5.29
+#      deployed and `pull && build && restart` failed because
+#      deps had drifted. `npm install` is a no-op when
+#      package-lock matches installed modules, so safe to run
+#      every time.
+#   2. Boot-output delay: there's a ~2s gap between systemctl
+#      marking the service "Started" and the Node process
+#      actually emitting its boot banner (Express wire-up +
+#      initServerAuthToken + the app.listen callback). Running
+#      journalctl too quickly after restart misses the boot
+#      lines. `sleep 3` covers it. Verified live on Optiplex
+#      2026-05-12: systemd "Started" at 18:26:51, boot banner
+#      emitted at 18:26:53.
 echo "  To deploy updates after pulling from dev:"
 echo "    git pull origin dev \\"
 echo "      && npm install \\"
 echo "      && npm run build \\"
-echo "      && sudo systemctl restart $SERVICE_NAME"
+echo "      && sudo systemctl restart $SERVICE_NAME \\"
+echo "      && sleep 3 \\"
+echo "      && sudo journalctl -u $SERVICE_NAME --since '10 seconds ago' --no-pager"
+echo ""
+echo "  To verify a tool registered (e.g. after adding to registry)"
+echo "  without restarting, grep the journal for the most recent"
+echo "  Tools line:"
+echo "    sudo journalctl -u $SERVICE_NAME | grep 'Tools  :' | tail -1"
 echo "  ══════════════════════════════════════════"
 echo ""
