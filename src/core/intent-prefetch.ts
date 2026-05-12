@@ -160,16 +160,36 @@ const INTENT_MAP: Record<string, IntentGroup> = {
 
   // ── Host machine metrics ─────────────────────────────────
   // Owns all queries about the machine NerdAlert runs on.
-  // Intentionally broad — "cpu", "memory", "disk" are unambiguous
-  // when asked without a specific service name. If the user says
-  // "influx metrics" or "wazuh memory" the more specific group wins
-  // because both keywords must match (keyword matching is OR, but
-  // "wazuh" in that query also matches the wazuh group which is
-  // more specific context for the agent to reason about).
+  // Intentionally broad — "cpu", "disk" are unambiguous when
+  // asked without a specific service name. If the user says
+  // "influx metrics" or "wazuh memory" the more specific group
+  // wins because both keywords must match (keyword matching is
+  // OR, but "wazuh" in that query also matches the wazuh group
+  // which is more specific context for the agent to reason about).
+  //
+  // BARE-COMMON-NOUN SUBSTRING TRAP (v0.5.27)
+  // ──────────────────────────────────────────────
+  // The bare word "memory" used to live in this list for RAM
+  // queries ("how's memory looking", "memory pressure"). It was
+  // removed because intent-prefetch uses substring matching —
+  // every message containing "memory" anywhere ("update memory
+  // so that ...", "memory engine", "in memory") was routing here
+  // instead of the memory group. The result was Mistral receiving
+  // host_metrics data in the prefetch block for memory-update
+  // questions and confabulating a memory-update confirmation.
+  // RAM queries still land via 'ram', 'memory usage', 'memory
+  // pressure', 'free memory', and 'available memory'.
+  //
+  // Generalizes: any bare common noun shared between modules
+  // ("disk", "service", "tool", "session") is a substring trap.
+  // Keep host_metrics keywords either compound ("disk space",
+  // "memory usage") or unambiguous in context ("optiplex",
+  // "cpu"). See Pattern 30 in v0.5.27 spec.
   host_metrics: {
     keywords: [
       'cpu', 'cpu usage', 'cpu load',
-      'memory', 'ram', 'memory usage',
+      'ram', 'memory usage', 'memory pressure',
+      'free memory', 'available memory',
       'disk', 'disk space', 'disk usage', 'storage',
       'uptime', 'how long has',
       'machine', 'computer', 'laptop', 'macbook',
@@ -811,6 +831,15 @@ const INTENT_MAP: Record<string, IntentGroup> = {
       // Recall — explicit memory-verb queries
       'do you remember', 'what do you remember',
       'what do you know about me', 'do you know about me',
+      // Update / correct / forget — anchored to "memory" or
+      // "what you remember" so we don't fire on generic uses
+      // of "update" or "forget" (v0.5.27). Surfaces matching
+      // records via search; auto-supersede on prefetch is too
+      // aggressive because we can't tell which record to replace.
+      'update memory', 'update your memory', 'update what you remember',
+      'correct memory', 'correct your memory',
+      'change what you remember', 'change memory',
+      'forget that', 'remove from memory',
       // Bare topic words — fire on dedicated memory queries
       'your memory', 'memory engine', 'in memory',
     ],
@@ -832,6 +861,54 @@ const INTENT_MAP: Record<string, IntentGroup> = {
           confidence: 0.9,
           source:     'user_statement',
         };
+      }
+
+      // ── Update / correct (search matching records) ───────
+      // "update memory so that X" / "correct memory about Y" /
+      // "change what you remember about Z" → search to surface
+      // matching records so the model can supersede them on the
+      // follow-up turn. Auto-supersede on prefetch is too aggressive
+      // — we don't know with confidence which record to replace.
+      //
+      // The cleaned remainder becomes the search query. Semantic
+      // memory (v0.5.26) handles relevance matching from there —
+      // even when the user's correction phrasing doesn't share
+      // many literal tokens with the stored record, the embedding
+      // of the full statement surfaces the right candidates. This
+      // branch closes the v0.5.27 gap where Mistral confabulated a
+      // memory-update confirmation when host_metrics prefetch fired
+      // on the bare word "memory".
+      const updateAnchor =
+        /\b(?:update|correct|change|fix)\s+(?:your\s+)?memory\b|\b(?:update|correct|change|fix)\s+what\s+you\s+(?:remember|know)\b/i;
+      if (updateAnchor.test(msg)) {
+        const cleaned = msg
+          .replace(/^(?:please\s+)?(?:can\s+you\s+|could\s+you\s+|would\s+you\s+)?(?:update|correct|change|fix)\s+(?:your\s+)?memory\s+(?:so\s+that\s+|to\s+|about\s+)?/i, '')
+          .replace(/^(?:please\s+)?(?:can\s+you\s+|could\s+you\s+|would\s+you\s+)?(?:update|correct|change|fix)\s+what\s+you\s+(?:remember|know)\s+(?:about\s+)?/i, '')
+          .replace(/[?.!]+\s*$/, '')
+          .trim();
+        if (cleaned) {
+          return { action: 'search', query: cleaned, limit: 8 };
+        }
+      }
+
+      // ── Forget (search matching records) ─────────────
+      // "forget that I work at Google" → search "I work at Google"
+      // "remove the Sherman thing from memory" → search "the Sherman thing"
+      //
+      // Narrow patterns deliberately. "forget about X" is too often
+      // a dismissive non-memory phrase ("let's forget about that
+      // meeting") to gate on. The skip-pattern check also rejects
+      // ultra-short pronouns ("forget it", "forget that") that
+      // aren't useful as search queries.
+      const forgetThatRe = /\bforget\s+that\s+(.+?)[?.!]*\s*$/i;
+      const removeFromRe = /\bremove\s+(.+?)\s+from\s+memory\b/i;
+      const forgetMatch  = msg.match(forgetThatRe) ?? msg.match(removeFromRe);
+      if (forgetMatch) {
+        const topic = forgetMatch[1].trim();
+        const skipPatterns = /^(it|this|everything|nothing|what\s+i\s+said)$/i;
+        if (topic.length > 2 && !skipPatterns.test(topic)) {
+          return { action: 'search', query: topic, limit: 8 };
+        }
       }
 
       // ── Topic-scoped recall ──────────────────────────────
