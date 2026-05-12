@@ -18,6 +18,7 @@
 import {
   CaptureInput,
   MemoryRecord,
+  MemoryIndexEntry,
   SearchOptions,
   SearchResult,
   SessionContext,
@@ -42,11 +43,12 @@ import { redact } from '../security/secret-scanner'
 
 // v0.5.26 semantic memory hooks. Capability check decides whether to attempt
 // embedding at all; embed() produces the vector; putEmbedding persists it.
-// These three are imported with a clear comment so the dependency on the
-// embedding sub-module is easy to find when reasoning about the boot path.
+// hybridSearch is the read-side counterpart added in step 5 — see
+// dispatchedSearch() below for how the keyword/hybrid choice is made.
 import { getEmbeddingCapability } from './capability'
-import { embed } from './embedder'
-import { putEmbedding } from './embedding-store'
+import { embed }                  from './embedder'
+import { putEmbedding }           from './embedding-store'
+import { hybridSearch }           from './hybrid-search'
 
 // ── ID generation ─────────────────────────────────────────────────────────────
 // Timestamp-based so IDs sort chronologically and are human-readable in logs.
@@ -195,13 +197,46 @@ export async function captureBatch(inputs: CaptureInput[]): Promise<Array<{
   return results
 }
 
+// dispatchedSearch (internal helper) ──────────────────────────────────────────
+// Picks the search path based on embedding capability. Pure function: no
+// side effects, no I/O beyond what hybridSearch already does (one model
+// invocation per call when capability is available). Both search() and
+// sessionContext() call this; search() adds the touch-after-retrieval
+// side effect on top, sessionContext() does not (it's a read-only
+// snapshot for the system prompt and shouldn't advance decay timers).
+//
+// This is the only place the capability check influences search behavior.
+// Adding new search strategies (e.g., a vector-only path for evaluation,
+// or a re-ranker stage) means adding branches here, not threading flags
+// through call sites.
+async function dispatchedSearch(
+  query:   string,
+  entries: MemoryIndexEntry[],
+  options: SearchOptions,
+): Promise<SearchResult[]> {
+  const cap = getEmbeddingCapability()
+  if (cap.available) {
+    return hybridSearch(query, entries, options, cap.blendWeight)
+  }
+  // Capability unavailable — fall through to pure TF-IDF. This is the same
+  // path v0.5.25 took for every query; nothing about the keyword side
+  // changed in v0.5.26.
+  return keywordSearch(query, entries, options)
+}
+
 // ── search() ─────────────────────────────────────────────────────────────────
-// Keyword search using TF-IDF scoring against the index.
-// Optionally filter by subject, tags, confidence, or active status.
-export function search(query: string, options: SearchOptions = {}): SearchResult[] {
+// Public search entry point. Routes to keyword or hybrid via the
+// dispatcher, then runs the touch-after-retrieval pass so every returned
+// record's decay timer resets. Async since v0.5.26 step 5 because
+// hybridSearch awaits the query embedding; the keyword fallback is sync
+// internally but the dispatcher's signature is async either way.
+export async function search(
+  query:   string,
+  options: SearchOptions = {},
+): Promise<SearchResult[]> {
   ensureStorage()
   const index   = readIndex()
-  const results = keywordSearch(query, index.records, options)
+  const results = await dispatchedSearch(query, index.records, options)
 
   // Touch accessed records so their decay timer resets
   for (const result of results) {
@@ -270,14 +305,24 @@ export function subjects(): Array<{ subject: string; count: number }> {
 // The output is intentionally compact — this goes into the system prompt,
 // so every token counts. Sherman's personality loads before this block,
 // and this block informs rather than overrides it.
-export function sessionContext(query?: string, limit: number = 15): SessionContext {
+export async function sessionContext(query?: string, limit: number = 15): Promise<SessionContext> {
   ensureStorage()
   const index = readIndex()
 
   let records: SearchResult[]
 
   if (query && query.trim().length > 0) {
-    records = keywordSearch(query, index.records, { limit, activeOnly: true, minConfidence: 0.3 })
+    // Route through the dispatcher so session context benefits from
+    // semantic recall too — a system prompt loaded at session start with
+    // "wazuh" as the query should surface records about Suricata, Snort,
+    // or alerts even if they don't contain the literal word. Note: no
+    // touch step here. sessionContext is a passive read; touching every
+    // record in the context block at session start would advance decay
+    // timers on N records per session and defeat the point of the decay
+    // mechanism.
+    records = await dispatchedSearch(query, index.records, {
+      limit, activeOnly: true, minConfidence: 0.3,
+    })
   } else {
     // No query — load the most recently accessed high-confidence records
     records = index.records

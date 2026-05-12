@@ -120,7 +120,7 @@ Use 'count' to check memory database statistics.`,
         // ── READ OPERATIONS (L1) ────────────────────────────────────────────
 
         case 'search': {
-          const results = search(
+          const results = await search(
             (params.query as string) ?? '',
             {
               subject: params.subject as string | undefined,
@@ -170,7 +170,7 @@ Use 'count' to check memory database statistics.`,
         }
 
         case 'context': {
-          const ctx = sessionContext(
+          const ctx = await sessionContext(
             params.query as string | undefined,
             params.limit as number | undefined,
           )

@@ -75,7 +75,7 @@ switch (cmd) {
       console.error('Usage: memory-cli search "query string"')
       process.exit(1)
     }
-    const results = search(arg)
+    const results = await search(arg)
     printLine()
     if (results.length === 0) {
       console.log('No results found.')
@@ -125,7 +125,7 @@ switch (cmd) {
   }
 
   case 'context': {
-    const ctx = sessionContext(arg)
+    const ctx = await sessionContext(arg)
     printLine()
     console.log(ctx.summary)
     console.log(`\n— ${ctx.record_count} records loaded from subjects: [${ctx.subjects.join(', ')}]`)
