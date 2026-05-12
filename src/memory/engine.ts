@@ -40,6 +40,14 @@ import { keywordSearch, rankSubjects } from './search'
 import { runDecaySweep, detectConflict, touchRecord } from './decay'
 import { redact } from '../security/secret-scanner'
 
+// v0.5.26 semantic memory hooks. Capability check decides whether to attempt
+// embedding at all; embed() produces the vector; putEmbedding persists it.
+// These three are imported with a clear comment so the dependency on the
+// embedding sub-module is easy to find when reasoning about the boot path.
+import { getEmbeddingCapability } from './capability'
+import { embed } from './embedder'
+import { putEmbedding } from './embedding-store'
+
 // ── ID generation ─────────────────────────────────────────────────────────────
 // Timestamp-based so IDs sort chronologically and are human-readable in logs.
 // Format: "1714500000000-a3f9x" — milliseconds + random suffix
@@ -64,10 +72,10 @@ function nowISO(): string {
 // can land here verbatim. redact() is idempotent: re-running it on already-
 // clean content (or on the `[REDACTED-RULE]` markers it produces) is a no-op,
 // so this is safe to apply unconditionally.
-export function capture(input: CaptureInput): {
+export async function capture(input: CaptureInput): Promise<{
   record:   MemoryRecord
   conflict: ConflictReport
-} {
+}> {
   ensureStorage()
 
   // Scrub at the boundary. Subject is short and structural so live secrets
@@ -100,24 +108,91 @@ export function capture(input: CaptureInput): {
     archived:      false,
     valid_from:    input.valid_from ?? now,
     valid_to:      input.valid_to,
+    // v0.5.26: initially false. tryEmbedRecord flips to true and writes a
+    // second JSONL line if the embedding succeeds. Doing the durable write
+    // first means an embedding failure (or an unavailable embedder) never
+    // costs us the record.
+    embedded:      false,
   }
 
-  // Write to JSONL and update index
+  // Durable write FIRST — record persists to JSONL + index regardless of
+  // whether embedding succeeds. This was the entire v0.5.25-and-earlier
+  // behaviour; everything below this line is the v0.5.26 enhancement.
   appendRecord(record)
   upsertIndexEntry(toIndexEntry(record))
 
+  // Best-effort embedding. Failures are swallowed (logged) inside the helper
+  // — the contract is: capture() never throws for embedding-related reasons.
+  await tryEmbedRecord(record)
+
   return { record, conflict }
+}
+
+// ── tryEmbedRecord(): best-effort embed + persist a vector for a record ─────────
+// Called from capture() after the record is durably written. Three outcomes:
+//
+//   1. Capability unavailable (no model, disabled flag, etc.) — return early.
+//      Record stays embedded:false; backfill worker handles it once the
+//      model is installed.
+//   2. Embedding throws — log a single-line warning and return. Same end
+//      state as (1); the record is still captured and searchable via the
+//      keyword path.
+//   3. Success — putEmbedding writes the vector to the store FIRST, then we
+//      write a second JSONL line with embedded:true and update the index
+//      entry. Vector-before-flag ordering means a crash between the two
+//      writes leaves an orphan vector (benign — backfill overwrites with a
+//      fresh embedding on next sweep) rather than a "index says embedded but
+//      store doesn't have it" inconsistency (which would force hybrid search
+//      to handle missing vectors at runtime in step 5).
+async function tryEmbedRecord(record: MemoryRecord): Promise<void> {
+  const cap = getEmbeddingCapability()
+  if (!cap.available) return
+
+  try {
+    const vector = await embed(record.content)
+
+    // Store write before the flag flip. See ordering rationale above.
+    putEmbedding(`mem:${record.id}`, vector)
+
+    // Now flip the boolean in JSONL + index. The new JSONL line carries the
+    // same id, so readAllRecords()'s "last line wins" rule means a fresh
+    // index rebuild on next restart will produce embedded:true even if a
+    // backfill never runs. updated_at advances since this is a real mutation
+    // of the record's metadata, even though content is unchanged.
+    const updated: MemoryRecord = {
+      ...record,
+      embedded:   true,
+      updated_at: nowISO(),
+    }
+    appendRecord(updated)
+    upsertIndexEntry(toIndexEntry(updated))
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    // Single-line, non-noisy warning. The backfill worker is the recovery
+    // path; a per-record stack trace would drown the logs on first install
+    // before the model is downloaded or if the model load fails repeatedly.
+    console.warn(`[memory] embedding failed for record ${record.id}: ${msg} (backfill will retry)`)
+  }
 }
 
 // ── captureBatch() ────────────────────────────────────────────────────────────
 // Write multiple records in one call — used by session summaries and cron sweeps.
 // Conflict detection runs for each record individually.
 // Returns array of { record, conflict } in input order.
-export function captureBatch(inputs: CaptureInput[]): Array<{
+export async function captureBatch(inputs: CaptureInput[]): Promise<Array<{
   record:   MemoryRecord
   conflict: ConflictReport
-}> {
-  return inputs.map(input => capture(input))
+}>> {
+  // Sequential (not Promise.all) since v0.5.26: embedding is CPU-bound on the
+  // ONNX runtime singleton, so parallel awaits would just queue inside the
+  // model and add no throughput. Sequential also keeps log output in record-
+  // order and means a partial failure leaves a clean prefix-of-success rather
+  // than an interleaved mess.
+  const results: Array<{ record: MemoryRecord; conflict: ConflictReport }> = []
+  for (const input of inputs) {
+    results.push(await capture(input))
+  }
+  return results
 }
 
 // ── search() ─────────────────────────────────────────────────────────────────
@@ -252,10 +327,10 @@ export function sessionContext(query?: string, limit: number = 15): SessionConte
 // Used when conflict detection finds a contradiction and the operator
 // decides the new record is correct.
 // Does NOT delete the old record — marks it inactive with a pointer to the new one.
-export function supersede(oldId: string, newInput: CaptureInput): {
+export async function supersede(oldId: string, newInput: CaptureInput): Promise<{
   old_record: MemoryRecord | undefined
   new_record: MemoryRecord
-} {
+}> {
   const old = getFullRecord(oldId)
 
   if (old) {
@@ -266,8 +341,11 @@ export function supersede(oldId: string, newInput: CaptureInput): {
       updated_at:    nowISO(),
       valid_to:      nowISO(),
     }
-    // The old record gets a new JSONL line marking it superseded
-    const { record: newRecord } = capture(newInput)
+    // The old record gets a new JSONL line marking it superseded. We do NOT
+    // re-embed the old record — its content is unchanged, the vector in the
+    // store is still mathematically valid, and the spread above propagates
+    // its existing `embedded` flag forward through toIndexEntry.
+    const { record: newRecord } = await capture(newInput)
     const withPointer: MemoryRecord = { ...updated, superseded_by: newRecord.id }
     appendRecord(withPointer)
     upsertIndexEntry(toIndexEntry(withPointer))
@@ -276,7 +354,7 @@ export function supersede(oldId: string, newInput: CaptureInput): {
   }
 
   // Old record not found — just capture the new one
-  const { record: newRecord } = capture(newInput)
+  const { record: newRecord } = await capture(newInput)
   return { old_record: undefined, new_record: newRecord }
 }
 

@@ -36,6 +36,14 @@ export interface MemoryRecord {
   valid_to?:    string          // ISO 8601 — when this fact stopped being true (if known)
   superseded_by?: string        // id of the record that replaced this one
   conflict_with?: string[]      // ids of records this one contradicts
+  // v0.5.26: true if memory-embeddings.json holds a vector for this record id.
+  // Optional so existing JSONL lines (written before v0.5.26) read as undefined
+  // (treated as false by toIndexEntry). Living on the JSONL record — not just
+  // the index entry — means touch/decay/supersede spreads preserve it for free
+  // through their `...record` updates. Flipped to true by the engine's capture
+  // path after a successful embed + putEmbedding write; flipped to true by the
+  // step-6 backfill worker as it processes the embedding backlog.
+  embedded?:    boolean
 }
 
 // ── Lightweight index entry — what lives in memory-index.json ────────────────

@@ -218,7 +218,7 @@ Use 'count' to check memory database statistics.`,
           if (!params.content) {
             return errorResponse('capture failed: content is required.')
           }
-          const { record, conflict } = capture({
+          const { record, conflict } = await capture({
             subject:    params.subject as string,
             content:    params.content as string,
             confidence: params.confidence as number | undefined,
@@ -239,7 +239,7 @@ Use 'count' to check memory database statistics.`,
           if (!Array.isArray(params.records)) {
             return errorResponse('capture_batch requires a records array')
           }
-          const results   = captureBatch(params.records as any[])
+          const results   = await captureBatch(params.records as any[])
           const conflicts = results.filter(r => r.conflict.has_conflict).length
           return {
             type:    'text',
@@ -252,7 +252,7 @@ Use 'count' to check memory database statistics.`,
           if (!params.old_id || !params.content || !params.subject) {
             return errorResponse('supersede requires old_id, subject, and content')
           }
-          const result = supersede(params.old_id as string, {
+          const result = await supersede(params.old_id as string, {
             subject:    params.subject as string,
             content:    params.content as string,
             confidence: params.confidence as number | undefined,

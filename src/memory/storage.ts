@@ -155,11 +155,13 @@ export function upsertIndexEntry(entry: MemoryIndexEntry): void {
 
 // ── Convert a full record to a compact index entry ────────────────────────────
 export function toIndexEntry(record: MemoryRecord): MemoryIndexEntry {
-  // `embedded` always starts false here — the embedding store is written
-  // after the index entry on the capture path (engine.ts), and that write
-  // flips the boolean by re-calling upsertIndexEntry with the updated entry.
-  // Rebuilds from the JSONL also start at false; the backfill worker walks
-  // the index and embeds any record whose `embedded` is still false.
+  // `embedded` is read from the record itself (v0.5.26 schema). For records
+  // written before v0.5.26 the field is undefined on the JSONL line, which
+  // coerces to false here — correct behaviour: those records have no vector
+  // yet, and the backfill worker (step 6) will pick them up. Touch/decay/
+  // supersede paths spread `...record` and so propagate the boolean for free,
+  // which keeps already-embedded records from being silently demoted back to
+  // embedded:false every time they're accessed.
   return {
     id:            record.id,
     subject:       record.subject,
@@ -170,7 +172,7 @@ export function toIndexEntry(record: MemoryRecord): MemoryIndexEntry {
     last_accessed: record.last_accessed,
     active:        record.active,
     archived:      record.archived,
-    embedded:      false,
+    embedded:      record.embedded === true,
   }
 }
 

@@ -41,6 +41,11 @@ function printLine() {
   console.log('─'.repeat(60))
 }
 
+// All CLI commands run inside an async main() so the `capture` case (now
+// async since v0.5.26 to support inline embedding) can use `await`. The
+// other engine functions stayed synchronous; they're called without await
+// and behave exactly as before.
+async function main() {
 switch (cmd) {
 
   case 'capture': {
@@ -49,12 +54,13 @@ switch (cmd) {
       process.exit(1)
     }
     const input  = JSON.parse(arg)
-    const { record, conflict } = capture(input)
+    const { record, conflict } = await capture(input)
     console.log(`✓ Captured [${record.id}]`)
     console.log(`  Subject    : ${record.subject}`)
     console.log(`  Content    : ${record.content}`)
     console.log(`  Confidence : ${record.confidence}`)
     console.log(`  Source     : ${record.source}`)
+    console.log(`  Embedded   : ${record.embedded === true ? 'yes' : 'no'}`)
     if (record.tags.length > 0) console.log(`  Tags       : ${record.tags.join(', ')}`)
     if (conflict.has_conflict) {
       console.log(`\n⚠️  Conflict detected:`)
@@ -178,3 +184,12 @@ Environment:
     break
   }
 }
+}
+
+// Run main() and ensure any async error (capture is the only async path) is
+// surfaced with a non-zero exit. Otherwise an unhandled rejection would
+// produce a confusing process error rather than a clean stack trace.
+main().catch(err => {
+  console.error(err)
+  process.exit(1)
+})
