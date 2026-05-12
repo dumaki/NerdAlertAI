@@ -146,7 +146,12 @@ export async function capture(input: CaptureInput): Promise<{
 //      fresh embedding on next sweep) rather than a "index says embedded but
 //      store doesn't have it" inconsistency (which would force hybrid search
 //      to handle missing vectors at runtime in step 5).
-async function tryEmbedRecord(record: MemoryRecord): Promise<void> {
+export async function tryEmbedRecord(record: MemoryRecord): Promise<void> {
+  // v0.5.26 step 6: exported so backfill.ts can reuse the same contract.
+  // Two callers — capture() and runBackfill() — go through the SAME
+  // helper, so embed-side behaviour is identical whether a record is
+  // embedded at write time or backfilled later. One contract, two entry
+  // points.
   const cap = getEmbeddingCapability()
   if (!cap.available) return
 

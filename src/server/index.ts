@@ -22,6 +22,7 @@ import { mountSecurityRoutes } from './security-routes';
 import { mountFilesRoutes, ensureProjectsRoot } from './files-routes';
 import { mountVoiceRoutes, ensureVoicesDir, ensureWhisperModelsDir } from './voice-routes';
 import { mountMemoryRoutes, logMemoryBootCapability } from './memory-routes';
+import { runBackfill } from '../memory/backfill';
 import { startTelegram } from '../telegram';
 import { startCron, stopCron, setCronStatusEmitter } from '../cron';
 import { startReminders, stopReminders } from '../reminders';
@@ -316,6 +317,21 @@ startTelegram().catch((err: unknown) => {
   // — different table, different lifecycle, different UX.
   startReminders().catch((err: unknown) => {
     console.error('[Reminders] Failed to start:', err);
+  });
+
+  // ── Semantic memory backfill worker (v0.5.26 step 6) ──────────
+  // Walks the memory index for records with `embedded: false` and asks
+  // the engine's tryEmbedRecord helper to fix each one up. Non-blocking
+  // (server is fully reachable while this runs) and yields to the event
+  // loop every 25 records so HTTP requests don't stutter. Bails cleanly
+  // if the embedding model isn't installed — the user installs the model
+  // and restarts to retry. No-op if every record is already embedded.
+  //
+  // Same fire-and-forget shape as the other start* tasks above: a slow
+  // or failing backfill never delays the server from listening or
+  // affects any other subsystem.
+  runBackfill().catch((err: unknown) => {
+    console.error('[memory] Backfill failed:', err);
   });
 
   process.on('SIGTERM', () => {
