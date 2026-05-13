@@ -30,6 +30,7 @@ import { initGmailCredential } from '../gmail/config';
 import { initOpenRouterKey, initAnthropicKey } from '../core/llm-client';
 import { initOpenclawCredential } from '../tools/builtin/soc-client';
 import { logAvailableTools } from '../tools/registry';
+import { initTimerState, stopTimerState } from './timer-state';
 import { selfCheckEnv, logEnvSelfCheck } from '../security/env-self-check';
 import { installConsoleRedaction } from '../security/safe-console';
 
@@ -87,6 +88,7 @@ app.use((req, res, next) => {
   if (req.method === 'GET' && req.path === '/')                   return next();
   if (req.method === 'GET' && req.path === '/favicon.ico')        return next();
   if (req.method === 'GET' && req.path === '/api/cron/stream')    return next();
+  if (req.method === 'GET' && req.path === '/api/timer/stream')   return next();
   if (req.method === 'GET' && req.path === '/api/soc/wall')       return next();
   if (req.method === 'GET' && req.path === '/api/host/metrics')   return next();
   if (req.method === 'GET' && req.path === '/api/setup/panel')    return next();
@@ -334,10 +336,26 @@ startTelegram().catch((err: unknown) => {
     console.error('[memory] Backfill failed:', err);
   });
 
+  // ── Timer state ──────────────────────────────────
+  // Boots the timer module: loads persisted state from
+  // ~/.nerdalert/timers.json, fires missed-expiry events for any
+  // countdowns that already passed, and starts the 250ms tick loop
+  // that detects future expiries. Synchronous — the cost is one
+  // small JSON read — so it runs inline rather than fire-and-forget
+  // like the other init helpers.
+  //
+  // Module isolation: when config.yaml `tools.timer.enabled: false`,
+  // the tool disappears from the agent but this still runs so the
+  // SSE endpoint can hand out an empty list. No agent-visible
+  // breakage with the module off; the topbar component sees an empty
+  // state and renders nothing.
+  initTimerState();
+
   process.on('SIGTERM', () => {
     console.log('[Server] SIGTERM received — shutting down...');
     stopReminders();
     stopCron();
+    stopTimerState();
     process.exit(0);
   });
 
@@ -345,6 +363,7 @@ startTelegram().catch((err: unknown) => {
     console.log('[Server] SIGINT received — shutting down...');
     stopReminders();
     stopCron();
+    stopTimerState();
     process.exit(0);
   });
 });

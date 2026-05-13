@@ -670,6 +670,186 @@
     }
 
     /* ==========================================================
+       TOPBAR TIMER — v0.5.30
+       ==========================================================
+       Live timer/stopwatch display absolutely centered in the top
+       bar. Invisible by default (display:none); the JS adds
+       .visible only when there's at least one active timer or a
+       fresh expiry to flash. With everything hidden, the topbar
+       reads exactly as it did pre-v0.5.30.
+
+       Position is absolute relative to the topbar (which is
+       position:relative) so it stays centered regardless of how
+       wide the topbar-controls dropdown labels grow. z-index sits
+       above the topbar (100) but below the topbar dropdowns (200)
+       so the personality / model menus open OVER the timer when
+       both are visible at once.
+       ========================================================== */
+
+    .topbar-timer {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 10px 4px 8px;
+      background: var(--bg-deepest);
+      border: 1px solid var(--cyan-mid);
+      border-radius: 1px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 1px;
+      color: var(--cyan);
+      text-shadow: 0 0 6px var(--cyan-glow);
+      z-index: 150;
+      user-select: none;
+    }
+    .topbar-timer.visible {
+      display: inline-flex;
+    }
+
+    /* Expiry flash — brief attention-grab when a countdown fires.
+       Pulses between dim and bright cyan for ~6 seconds. */
+    .topbar-timer.flashing {
+      animation: timer-flash 0.6s ease-in-out 0s infinite;
+    }
+    @keyframes timer-flash {
+      0%, 100% {
+        background: var(--bg-deepest);
+        color: var(--cyan);
+        border-color: var(--cyan-mid);
+      }
+      50% {
+        background: var(--cyan-dim);
+        color: var(--text-bright);
+        border-color: var(--cyan);
+        box-shadow: 0 0 14px var(--cyan-glow);
+      }
+    }
+
+    .topbar-timer-display {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 6px;
+      min-width: 90px;
+    }
+    .topbar-timer-label {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--text-dim);
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      max-width: 100px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .topbar-timer-mode {
+      font-size: 8px;
+      color: var(--text-muted);
+      letter-spacing: 1px;
+    }
+    .topbar-timer-value {
+      font-family: var(--font-mono);
+      font-weight: bold;
+      font-size: 12px;
+      /* tabular-nums keeps digits a fixed width so the timer
+         doesn't visibly jitter as seconds tick. */
+      font-variant-numeric: tabular-nums;
+    }
+
+    .topbar-timer-arrow {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-dim);
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+      transition: color var(--transition-fast);
+    }
+    .topbar-timer-arrow:hover {
+      color: var(--cyan);
+      text-shadow: 0 0 4px var(--cyan-glow);
+    }
+    /* visibility:hidden (not display:none) so the timer body
+       doesn't shift sideways when arrows toggle off. */
+    .topbar-timer-arrow.hidden {
+      visibility: hidden;
+    }
+
+    .topbar-timer-mute {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-dim);
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      padding: 0 2px 0 8px;
+      line-height: 1;
+      border-left: 1px solid var(--border);
+      transition: color var(--transition-fast);
+    }
+    .topbar-timer-mute:hover { color: var(--cyan); text-shadow: 0 0 4px var(--cyan-glow); }
+    .topbar-timer-mute.muted { color: var(--amber); }
+    .topbar-timer-mute.muted:hover { color: var(--amber); text-shadow: 0 0 4px var(--amber-glow); }
+
+    /* Hover dropdown — shows the full list of active timers when
+       there are 2+. Only displayed via :hover when the JS has
+       added .has-multiple (i.e. there's something to drop down
+       to). On a single-timer state the dropdown is empty + hidden. */
+    .topbar-timer-dropdown {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      min-width: 220px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--cyan-mid);
+      border-radius: 1px;
+      padding: 4px;
+      display: none;
+      z-index: 200;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6),
+                  0 0 12px var(--cyan-glow);
+    }
+    .topbar-timer:hover .topbar-timer-dropdown.has-multiple {
+      display: block;
+    }
+    .topbar-timer-dropdown-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 5px 8px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+    }
+    .topbar-timer-dropdown-row.active {
+      background: var(--cyan-dim);
+    }
+    .topbar-timer-dropdown-row .row-label {
+      color: var(--text);
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .topbar-timer-dropdown-row .row-mode {
+      font-size: 8px;
+      color: var(--text-muted);
+      letter-spacing: 1px;
+    }
+    .topbar-timer-dropdown-row .row-value {
+      font-weight: bold;
+      color: var(--cyan);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ==========================================================
        SIDEBAR
        ========================================================== */
 
@@ -3030,6 +3210,28 @@
       </div>
     </div>
 
+    <!-- v0.5.30: agent-driven timer/stopwatch display. Absolutely
+         centered in the topbar; the JS adds .visible only when at
+         least one timer is active or a fresh expiry is flashing.
+         With nothing active, no markup is visible — strict-superset
+         property holds. -->
+    <div class="topbar-timer" id="topbar-timer" aria-live="polite">
+      <button class="topbar-timer-arrow hidden" id="topbar-timer-prev"
+              onclick="cycleTimer(-1)" aria-label="Previous timer">◂</button>
+      <div class="topbar-timer-display">
+        <span class="topbar-timer-label" id="topbar-timer-label"></span>
+        <span class="topbar-timer-mode"  id="topbar-timer-mode"></span>
+        <span class="topbar-timer-value" id="topbar-timer-value">--:--</span>
+      </div>
+      <button class="topbar-timer-arrow hidden" id="topbar-timer-next"
+              onclick="cycleTimer(1)" aria-label="Next timer">▸</button>
+      <button class="topbar-timer-mute" id="topbar-timer-mute"
+              onclick="toggleTimerMute()"
+              aria-label="Toggle alarm sound"
+              title="Alarm sound">♪</button>
+      <div class="topbar-timer-dropdown" id="topbar-timer-dropdown"></div>
+    </div>
+
     <div class="topbar-status">
       <div class="status-indicator">
         <div class="status-dot" id="status-dot"></div>
@@ -3733,6 +3935,14 @@
     // Slice 4: same shape for STT capability. A null/false result
     // keeps the mic button hidden (CSS default).
     loadSttCapability();
+
+    // v0.5.30: open the topbar timer SSE stream. Stays open for the
+    // life of the page; the topbar timer component is invisible until
+    // the stream pushes a non-empty state. Module isolation contract:
+    // when config.yaml `tools.timer.enabled: false`, the agent can't
+    // start timers, the stream stays empty, and nothing renders — the
+    // topbar is byte-identical to pre-v0.5.30 in that state.
+    initTimerStream();
 
     // Set trust level pips
     for (let i = 1; i <= 5; i++) {
@@ -7286,6 +7496,323 @@ function escapeHtml(str) {
     if (!input) return;
     input.value = text;
     sendMessage();
+  }
+
+
+  // ============================================================
+  // TOPBAR TIMER — v0.5.30
+  // ============================================================
+  // Live timer/stopwatch display in the center of the top bar.
+  // Listens to /api/timer/stream for state changes and expiry
+  // events; renders nothing when zero timers are active.
+  //
+  // SERVER ↔ CLIENT SPLIT
+  //   The server's 250ms tick exists only to DETECT expiry. The
+  //   visible countdown digits are computed client-side from
+  //   `expiresAt - Date.now()`, refreshed by a local 250ms tick.
+  //   That keeps the SSE stream quiet (one message per state
+  //   change, not 4 per second) while still feeling live.
+  //
+  // INVISIBLE-BY-DEFAULT
+  //   .topbar-timer has display:none in CSS. The JS toggles
+  //   .visible only when there's something to show. With no
+  //   active timers and no fresh flash, the local tick also
+  //   stops to avoid burning CPU on an idle page.
+  // ============================================================
+
+  const TIMER_MUTE_KEY   = 'nerdalert_timer_muted';
+  const TIMER_FLASH_MS   = 6000;     // duration of the post-expiry flash
+  const TIMER_AUDIO_PATH = '/assets/sounds/nerd-alert.mp3';
+
+  const TIMER_STATE = {
+    timers:          [],     // [{id, mode, label, startedAt, expiresAt}]
+    cycleIndex:      0,      // which timer to show when multiple are active
+    muted:           (() => {
+      try { return localStorage.getItem(TIMER_MUTE_KEY) === '1'; }
+      catch { return false; }
+    })(),
+    flashState:      null,   // {label, untilMs} during the post-expiry flash
+    eventSource:     null,   // open EventSource so we can close on unload if needed
+    audio:           null,   // preloaded alarm sound
+    localTickHandle: null,   // setInterval handle for the local 250ms tick
+  };
+
+  function initTimerStream() {
+    // Open the SSE connection. EventSource can't send custom
+    // headers, so the token rides as a query param — same
+    // pattern /api/cron/stream and /api/soc/wall use.
+    try {
+      const url = `${BASE_URL}/api/timer/stream?token=${encodeURIComponent(CFG.token || '')}`;
+      const es  = new EventSource(url);
+      TIMER_STATE.eventSource = es;
+
+      es.addEventListener('state', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          handleTimerState(Array.isArray(data.timers) ? data.timers : []);
+        } catch (err) {
+          console.warn('[timer] state parse failed:', err);
+        }
+      });
+
+      es.addEventListener('expired', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          handleTimerExpiry(data.expired || {}, Array.isArray(data.timers) ? data.timers : []);
+        } catch (err) {
+          console.warn('[timer] expiry parse failed:', err);
+        }
+      });
+
+      // EventSource auto-reconnects with browser-default backoff
+      // on transient network issues. No manual retry needed; just
+      // swallow the error so the console doesn't get noisy.
+      es.onerror = () => { /* auto-reconnect handles it */ };
+    } catch (err) {
+      console.warn('[timer] initTimerStream failed:', err);
+    }
+
+    // Preload the alarm sound. new Audio() doesn't throw on a
+    // missing file — the eventual play() call rejects instead, and
+    // we catch that and fall back to visual-only flash.
+    try {
+      TIMER_STATE.audio = new Audio(TIMER_AUDIO_PATH);
+      TIMER_STATE.audio.preload = 'auto';
+    } catch {
+      TIMER_STATE.audio = null;
+    }
+  }
+
+  function handleTimerState(timers) {
+    TIMER_STATE.timers = timers;
+    // If the currently-shown index is now out of range (a timer
+    // was removed), pull it back into bounds.
+    if (TIMER_STATE.cycleIndex >= timers.length) {
+      TIMER_STATE.cycleIndex = Math.max(0, timers.length - 1);
+    }
+    renderTimer();
+  }
+
+  function handleTimerExpiry(expired, remainingTimers) {
+    TIMER_STATE.timers = remainingTimers;
+    if (TIMER_STATE.cycleIndex >= remainingTimers.length) {
+      TIMER_STATE.cycleIndex = Math.max(0, remainingTimers.length - 1);
+    }
+
+    // Flash for TIMER_FLASH_MS — the local tick clears it when
+    // untilMs passes.
+    TIMER_STATE.flashState = {
+      label:   expired.label || 'timer',
+      untilMs: Date.now() + TIMER_FLASH_MS,
+    };
+
+    // Best-effort alarm sound. Skipped when muted, when no audio
+    // element exists, or when the browser blocks autoplay (e.g.
+    // user hasn't interacted with the page yet — once they have,
+    // future plays work). Always non-blocking.
+    if (!TIMER_STATE.muted && TIMER_STATE.audio) {
+      try {
+        TIMER_STATE.audio.currentTime = 0;   // rewind for back-to-back expiries
+        const p = TIMER_STATE.audio.play();
+        if (p && typeof p.catch === 'function') {
+          p.catch(() => { /* autoplay blocked or file missing — visual flash only */ });
+        }
+      } catch { /* ignore */ }
+    }
+
+    renderTimer();
+  }
+
+  function renderTimer() {
+    const container = document.getElementById('topbar-timer');
+    if (!container) return;
+
+    const timers      = TIMER_STATE.timers;
+    const flashActive = TIMER_STATE.flashState && Date.now() < TIMER_STATE.flashState.untilMs;
+
+    // Nothing to show — hide the container and stop the local tick.
+    if (timers.length === 0 && !flashActive) {
+      container.classList.remove('visible', 'flashing');
+      stopTimerLocalTick();
+      return;
+    }
+
+    container.classList.add('visible');
+    if (flashActive) container.classList.add('flashing');
+    else             container.classList.remove('flashing');
+
+    // Flash-only state: a timer fired and there are no remaining
+    // active timers. Show a "<label> done!" notice for TIMER_FLASH_MS
+    // then disappear. The local tick handles the disappear.
+    if (timers.length === 0 && flashActive) {
+      setTimerText('label', `${TIMER_STATE.flashState.label} done!`);
+      setTimerText('mode',  '');
+      setTimerText('value', '▲');
+      hideTimerArrows();
+      renderTimerDropdown([]);
+      updateTimerMuteButton();
+      startTimerLocalTick();
+      return;
+    }
+
+    // Sort newest-expiring countdowns first, then stopwatches by
+    // oldest start. Re-sorted every render so a freshly-added
+    // timer surfaces correctly without bookkeeping.
+    const sorted = sortTimersForDisplay(timers);
+    if (TIMER_STATE.cycleIndex >= sorted.length) TIMER_STATE.cycleIndex = 0;
+    const current = sorted[TIMER_STATE.cycleIndex];
+
+    setTimerText('label', current.label || (current.mode === 'stopwatch' ? 'stopwatch' : 'timer'));
+    setTimerText('mode',  current.mode === 'stopwatch' ? 'UP' : 'DOWN');
+    setTimerText('value', formatTimerValue(current, Date.now()));
+
+    if (sorted.length > 1) showTimerArrows();
+    else                   hideTimerArrows();
+
+    renderTimerDropdown(sorted);
+    updateTimerMuteButton();
+    startTimerLocalTick();
+  }
+
+  function sortTimersForDisplay(timers) {
+    const countdowns = timers
+      .filter(t => t.mode === 'countdown' && typeof t.expiresAt === 'number')
+      .sort((a, b) => a.expiresAt - b.expiresAt);
+    const stopwatches = timers
+      .filter(t => t.mode === 'stopwatch')
+      .sort((a, b) => a.startedAt - b.startedAt);
+    return [...countdowns, ...stopwatches];
+  }
+
+  function formatTimerValue(timer, now) {
+    if (timer.mode === 'countdown' && typeof timer.expiresAt === 'number') {
+      const remaining = Math.max(0, timer.expiresAt - now);
+      return formatTimerMs(remaining);
+    }
+    return formatTimerMs(now - timer.startedAt);
+  }
+
+  function formatTimerMs(ms) {
+    const totalSec = Math.floor(ms / 1000);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    const pad = (n) => String(n).padStart(2, '0');
+    if (h > 0) return `${h}:${pad(m)}:${pad(s)}`;
+    return `${pad(m)}:${pad(s)}`;
+  }
+
+  // Small DOM helpers — keep the render function readable. Defensive
+  // against missing elements so a stray render before the topbar
+  // markup mounts doesn't throw.
+  function setTimerText(field, text) {
+    const el = document.getElementById(`topbar-timer-${field}`);
+    if (el) el.textContent = text;
+  }
+  function showTimerArrows() {
+    document.getElementById('topbar-timer-prev')?.classList.remove('hidden');
+    document.getElementById('topbar-timer-next')?.classList.remove('hidden');
+  }
+  function hideTimerArrows() {
+    document.getElementById('topbar-timer-prev')?.classList.add('hidden');
+    document.getElementById('topbar-timer-next')?.classList.add('hidden');
+  }
+
+  // Public — wired to the arrow buttons via onclick.
+  function cycleTimer(direction) {
+    const sorted = sortTimersForDisplay(TIMER_STATE.timers);
+    if (sorted.length <= 1) return;
+    let next = TIMER_STATE.cycleIndex + direction;
+    if (next < 0)               next = sorted.length - 1;
+    if (next >= sorted.length)  next = 0;
+    TIMER_STATE.cycleIndex = next;
+    renderTimer();
+  }
+
+  function renderTimerDropdown(sorted) {
+    const dd = document.getElementById('topbar-timer-dropdown');
+    if (!dd) return;
+    if (sorted.length <= 1) {
+      dd.innerHTML = '';
+      dd.classList.remove('has-multiple');
+      return;
+    }
+    dd.classList.add('has-multiple');
+    const now = Date.now();
+    dd.innerHTML = sorted.map((t, i) => {
+      const label  = t.label || (t.mode === 'stopwatch' ? 'stopwatch' : 'timer');
+      const mode   = t.mode  === 'stopwatch' ? 'UP' : 'DOWN';
+      const value  = formatTimerValue(t, now);
+      const active = i === TIMER_STATE.cycleIndex ? ' active' : '';
+      return `
+        <div class="topbar-timer-dropdown-row${active}">
+          <span class="row-label">${escapeHtml(label)}</span>
+          <span class="row-mode">${mode}</span>
+          <span class="row-value">${value}</span>
+        </div>`;
+    }).join('');
+  }
+
+  // Public — wired to the mute button via onclick.
+  function toggleTimerMute() {
+    TIMER_STATE.muted = !TIMER_STATE.muted;
+    try { localStorage.setItem(TIMER_MUTE_KEY, TIMER_STATE.muted ? '1' : '0'); }
+    catch { /* private browsing — session-only fallback */ }
+    updateTimerMuteButton();
+  }
+
+  function updateTimerMuteButton() {
+    const btn = document.getElementById('topbar-timer-mute');
+    if (!btn) return;
+    if (TIMER_STATE.muted) {
+      btn.classList.add('muted');
+      btn.title = 'Alarm sound muted — click to enable';
+    } else {
+      btn.classList.remove('muted');
+      btn.title = 'Alarm sound on — click to mute';
+    }
+  }
+
+  function startTimerLocalTick() {
+    if (TIMER_STATE.localTickHandle) return;
+    TIMER_STATE.localTickHandle = setInterval(() => {
+      const now = Date.now();
+
+      // Clear stale flash state. When the flash ends and there are
+      // no remaining timers, the next renderTimer call hides the
+      // container and stops this very tick.
+      if (TIMER_STATE.flashState && now >= TIMER_STATE.flashState.untilMs) {
+        TIMER_STATE.flashState = null;
+        renderTimer();
+        return;
+      }
+
+      // Update the visible value from absolute timestamps. No state
+      // mutation — just text content. Stopwatches count up forever;
+      // countdowns floor at 00:00 until the server expiry fires.
+      if (TIMER_STATE.timers.length === 0) return;
+      const sorted  = sortTimersForDisplay(TIMER_STATE.timers);
+      const current = sorted[TIMER_STATE.cycleIndex];
+      if (!current) return;
+      setTimerText('value', formatTimerValue(current, now));
+
+      // Also refresh dropdown row values when multi-timer mode is
+      // active. Direct DOM update by index — we don't re-render the
+      // dropdown HTML on every tick to avoid mouse-hover flicker.
+      if (sorted.length > 1) {
+        const rows = document.querySelectorAll('#topbar-timer-dropdown .topbar-timer-dropdown-row .row-value');
+        sorted.forEach((t, i) => {
+          if (rows[i]) rows[i].textContent = formatTimerValue(t, now);
+        });
+      }
+    }, 250);
+  }
+
+  function stopTimerLocalTick() {
+    if (TIMER_STATE.localTickHandle) {
+      clearInterval(TIMER_STATE.localTickHandle);
+      TIMER_STATE.localTickHandle = null;
+    }
   }
 
 

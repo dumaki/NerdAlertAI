@@ -68,6 +68,7 @@ import {
   getMonitorMetadata,
   streamMonitorPolls,
 } from './soc-wall';
+import { subscribe as subscribeTimers, listTimers } from './timer-state';
 import type { Source } from '../types/response.types';
 
 // ── New layer imports ────────────────────────────────────────
@@ -1513,6 +1514,70 @@ export function mountUIRoutes(app: Express): void {
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // ── GET /api/timer/stream ──────────────────────────
+  //
+  // Long-lived SSE stream of timer state. The UI opens this once on
+  // boot and consumes both 'state' (full list snapshot) and 'expired'
+  // (single-timer fire event) frames.
+  //
+  // Pattern note: unlike the cron stream which uses a module-level
+  // Set<Response> + a separate broadcast function, this route
+  // subscribes per-connection directly into timer-state. The state
+  // module's subscribe() returns an unsubscribe handle, so the close
+  // handler is one line and there's no global broadcaster to manage.
+  //
+  // Auth: matches the soc-wall / cron-stream pattern — token via
+  // Authorization header OR ?token= query param. Listed in the
+  // index.ts auth-exempt block so EventSource (which can't send
+  // custom headers) can connect via query param.
+  app.get('/api/timer/stream', (req: Request, res: Response) => {
+    const token = (req.headers.authorization?.replace('Bearer ', '') || req.query.token) as string;
+    if (token !== getServerAuthToken()) {
+      res.status(401).end();
+      return;
+    }
+
+    res.setHeader('Content-Type',  'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection',    'keep-alive');
+    res.flushHeaders();
+
+    let clientGone = false;
+
+    // subscribe() invokes the listener synchronously with an initial
+    // 'state' event, so the UI sees current state immediately on
+    // connect — same UX as the soc-wall's 'init' frame.
+    const unsubscribe = subscribeTimers((event) => {
+      if (clientGone) return;
+      try {
+        if (event.kind === 'state') {
+          res.write(`event: state\ndata: ${JSON.stringify({ timers: event.timers })}\n\n`);
+        } else {
+          res.write(`event: expired\ndata: ${JSON.stringify({ expired: event.expired, timers: event.timers })}\n\n`);
+        }
+      } catch {
+        // res.write can throw if the socket died between our
+        // clientGone check and the write — nothing to do, the
+        // close handler will run momentarily.
+      }
+    });
+
+    req.on('close', () => {
+      clientGone = true;
+      unsubscribe();
+    });
+  });
+
+  // ── GET /api/timer/list ──────────────────────────────
+  //
+  // Token-gated snapshot fetch — mirror of /api/cron/jobs. The UI
+  // doesn't actually need this (the SSE stream's initial 'state'
+  // frame covers it), but it's useful for debugging via curl and
+  // for any future non-streaming consumer.
+  app.get('/api/timer/list', (_req: Request, res: Response) => {
+    res.json({ ok: true, timers: listTimers() });
   });
 
 }

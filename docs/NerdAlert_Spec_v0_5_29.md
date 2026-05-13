@@ -274,6 +274,91 @@ If CISA's KEV XML URL turns out to be unstable, swap the
 small adapter. Today this is a "wait for the 404" decision —
 not worth pre-building.
 
+## Deployment notes from prod (2026-05-12 post-merge)
+
+Deployed to the Optiplex (Ubuntu 24.04, `nerdalert@dumaki`
+systemd) the same session v0.5.29 landed on `dev`. The pull
+surfaced three operational artifacts worth recording.
+
+### 1. Config drift between dev and prod
+
+The Optiplex's `config.yaml` had eight `tool_groups` flipped
+to `enabled: true` (wazuh, pihole, crowdsec, pfsense, fail2ban,
+ntopng, loki, influxdb) — the SOC services where credentials
+actually live on the prod box. `git pull` refused to merge
+because my upstream change to the same file would have stomped
+those local edits.
+
+Resolved this session via the standard recovery dance:
+
+```bash
+git stash push -m "prod: enable SOC tool_groups" config.yaml
+git pull origin dev
+git stash pop
+```
+
+Stash pop applied cleanly — my edit (adding `rss:` under
+`tools:`) and prod's edits (flipping `tool_groups:` enabled
+flags) touched disjoint line ranges. No conflict markers.
+
+**Class-of-problem:** this will recur on every pull that
+touches `config.yaml`. The architectural fix is a
+`config.local.yaml` overlay loaded on top of the tracked
+`config.yaml` at boot, with the local file in `.gitignore`.
+Proposed for v0.5.30+ alongside the setup.sh audit.
+
+### 2. npm install gap in the deploy procedure
+
+The prod box was ~14 versions stale (last deploy was
+v0.5.13-era based on the spec doc deletions in the pull diff).
+Pulling head brought in every dep that landed across that
+span at once: `chrono-node`, `@huggingface/transformers`,
+`mathjs`, and others. The build failed with `TS2307: Cannot
+find module` errors because `node_modules/` was out of sync
+with `package.json`.
+
+Resolved by running `npm install` before the build:
+
+```bash
+npm install && npm run build && sudo systemctl restart nerdalert@dumaki
+```
+
+**Class-of-problem:** the deploy procedure documented in
+handoffs and memory was `pull && build && restart`. It should
+be `pull && npm install && build && restart`. `npm install` is
+a no-op when `package-lock.json` matches installed modules, so
+there's no downside to running it every time. Action item for
+v0.5.30 setup audit.
+
+### 3. `Tools : ...` boot-log line not visible
+
+The v0.5.14 spec records `logAvailableTools()` as called at
+boot, printing a `Tools  : tool1, tool2, ...` line that would
+have been the cleanest verification that `rss` registered.
+The line is absent from the journalctl tail of the v0.5.29
+restart. The service is healthy and SOC watchdog cron is
+firing, so this is a missing log signal, not a missing tool.
+
+Two possible causes worth a brief grep next session:
+  - The call was lost in a refactor between v0.5.14 and v0.5.29.
+  - The call fires but its output is sent somewhere journalctl
+    doesn't capture (unlikely — every other `console.log` at
+    boot shows up).
+
+Not blocking — the tool was verified live in Telegram by
+asking Sherman to list registered RSS feeds. Treat the log
+line as a minor regression to investigate, not a deploy
+failure.
+
+### 4. Second restart at 15:56:11 (unexplained)
+
+Journalctl shows a second `SIGTERM received — shutting down`
+14 minutes after the first restart, followed by a clean
+respawn. Origin unknown — probably manual (Ben re-running
+something) but worth a `journalctl -u nerdalert@dumaki
+--since "15:55" --until "15:57"` if a pattern emerges over
+the next 24 hours.
+
 ## Version bump
 
 `package.json` bumps from `0.5.28` to `0.5.29`.

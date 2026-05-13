@@ -138,6 +138,13 @@ tools:
     trust_level: 1         # Outbound HTTP to public feed URLs, no auth.
                            # Same trust profile as web / weather / wikipedia.
 
+  timer:
+    enabled: true
+    trust_level: 1         # Agent-driven countdowns + stopwatches. No network,
+                           # no credentials. State persists in
+                           # ~/.nerdalert/timers.json. UI component is invisible
+                           # when no timers active — strict-superset holds.
+
   host_metrics:
     enabled: true
     trust_level: 1         # Local OS reads only — no auth, no network
