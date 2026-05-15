@@ -3,6 +3,9 @@
 **Date:** 2026-05-14
 **Branch:** dev
 **Predecessor:** v0.5.30 (topbar timer / stopwatch module)
+**Final state:** v0.5.31.3 — deployed to Optiplex prod
+2026-05-14, verified 4/4 on Mistral 24B (target daily-driver
+model) for the natural-language test queries.
 **Scope:** Additive module release. Ships an L1 GitHub
 read-only module: OAuth Device Flow setup wizard plus an
 11-action tool surface (repos, issues, pull requests,
@@ -253,11 +256,16 @@ exactly.
   Both new tools register at compiled `trustLevel: 1`; the
   resolver picks them up through the standard `resolveToolPolicy`
   path with no new branches.
-- **`core/intent-prefetch.ts`** — no keyword group added. GitHub
-  queries vary too widely ("what's assigned to me", "show me
-  the README", "is the build green") to anchor on a small
-  keyword set; the agent reaches for the tool through its
-  description.
+- **`core/intent-prefetch.ts` (v0.5.31.0 only)** — originally
+  no keyword group was added because GitHub queries vary too
+  widely to anchor on a small keyword set. **v0.5.31.3 revised
+  this:** smaller models (Mistral 24B) reliably misrouted
+  github queries to `web` via native OpenAI tool_calls, so a
+  `github` intent group was added with a paramExtractor
+  mapping natural-language to specific actions. The group's
+  presence does NOT modify any other group's behavior — the
+  web-demotion rule and the v0.5.28 relevance gate keep this
+  strict-superset over the v0.5.31.0 baseline.
 - **`core/narration-postcheck.ts`** — byte-identical.
 - **The three event adapters** — pinned.
 - **The memory engine (`src/memory/*`)** — byte-identical.
@@ -478,12 +486,12 @@ Fix:
   anti-overlap clause stating the tool is for LOCAL files only
   and that owner/repo paths should route to the github tool.
 
-Expected fix profile: Mistral 24B should now pick the github
-tool on all four natural queries that exercised the overlap
-("list my github repos", "what issues are assigned to me on
-github", "what's in my github notifications", "read the README
-of dumaki/NerdAlertAI"). Sonnet was already 4/4 before the
-patch. To be verified on next deploy.
+Verified after v0.5.31.2 deploy on Mac: 3/4 natural test queries
+picked the github tool first try (`list my github repos`,
+`what's in my github notifications`, `read the README of
+dumaki/NerdAlertAI`). Residual misroute: `what issues are
+assigned to me on github` still picked `web`. Tracked through to
+v0.5.31.3 for the durable fix.
 
 Pattern note for future modules: when a new tool's domain
 overlaps with an existing tool's description (especially `web`
@@ -537,32 +545,17 @@ Fix (two parts, single commit):
    `owner/repo` references without the literal word "github")
    and still need native tool_calls to pick correctly.
 
-The web-demotion rule in `detectIntent` (web loses when any
-more specific group also matches) means the new github group
-wins outright on queries that mention both "github" and any
-web-keyword phrasing. Combined with the v0.5.28 relevance gate
-(bails to tool loop if prefetched data doesn't match the
+Verified after v0.5.31.3 deploy on Mac (Mistral 24B): 4/4 on
+the natural test queries. Deployed to Optiplex prod
+2026-05-14, no regressions in the SOC fleet (module isolation
+held). The `web`-demotion rule in `detectIntent` (web loses
+when any more specific group also matches) means the new github
+group wins outright on queries that mention both "github" and
+any web-keyword phrasing. Combined with the v0.5.28 relevance
+gate (bails to tool loop if prefetched data doesn't match the
 question), prefetch failures fall back gracefully to the
 native tool loop — same strict-superset property as the rest
 of the prefetch system.
-
-Expected fix profile after v0.5.31.3:
-- 'what issues are assigned to me on github' → prefetch fires
-  `list_issues` with filter=assigned, model narrates real data.
-- 'list my github repos' → prefetch fires `list_repos`.
-- 'what's in my github notifications' → prefetch fires
-  `list_notifications`.
-- 'read the README of dumaki/NerdAlertAI' → prefetch fires
-  `read_file` with owner=dumaki, repo=NerdAlertAI,
-  path=README.md.
-- Sonnet path unchanged (Anthropic ReAct loop bypasses
-  prefetch entirely).
-
-To be verified on next deploy. If misroutes still appear, the
-next layer would be widening the keyword set (adding
-'github issues', 'github PRs', etc.) or adding an `owner/repo`
-regex gate in `detectIntent` for queries that drop the word
-'github'.
 
 Pattern note for future modules: any tool whose name isn't
 well-trained in smaller models' vocabulary (`github` qualifies
