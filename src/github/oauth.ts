@@ -185,6 +185,7 @@ export async function requestDeviceCode(
     // the JSON body. We have to inspect the payload, not just
     // the HTTP status. This is a quirk of OAuth endpoints.
     if (data.error) {
+      console.warn(`[github-oauth] requestDeviceCode: error=${data.error} description="${data.error_description ?? ''}"`);
       return {
         ok:    false,
         error: data.error,
@@ -297,6 +298,14 @@ export async function pollForToken(
     //   slow_down              → we're polling too fast
     //   anything else          → terminal, give up
     if (data.error) {
+      // Diagnostic log. Logs first 8 chars of device_code so
+      // we can correlate with the held value if needed, never
+      // the whole thing. error + description give us the
+      // ground truth from GitHub for debugging mysteries like
+      // "why does it keep saying expired".
+      const dcPrefix = deviceCode.slice(0, 8);
+      console.log(`[github-oauth] pollForToken device_code=${dcPrefix}... error=${data.error} description="${data.error_description ?? ''}"`);
+
       if (data.error === 'authorization_pending') {
         return {
           ok:      false,
@@ -402,6 +411,10 @@ function mapTerminalError(code: string, description?: string): string {
       return 'GitHub no longer recognizes this code. Start setup again to get a fresh one.';
     case 'unsupported_grant_type':
       return 'OAuth App is misconfigured — Device Flow may not be enabled. Check github.com/settings/applications.';
+    case 'device_flow_disabled':
+      return 'The OAuth App does not have Device Flow enabled. Open https://github.com/settings/applications, click the NerdAlertAI app, and tick the "Enable Device Flow" checkbox.';
+    case 'incorrect_client_credentials':
+      return 'GitHub does not recognize this Client ID. The OAuth App may have been deleted, or the Client ID baked into NerdAlert is wrong.';
     default:
       return description ?? `GitHub error: ${code}`;
   }

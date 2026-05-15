@@ -116,9 +116,17 @@ Four actions:
 | Action | Purpose | Required params |
 |---|---|---|
 | `start` | Read playbook, return to agent. | — |
-| `connect` | Request device code from GitHub. | — |
-| `check` | Poll for token using device_code from prior `connect`. | device_code |
+| `connect` | Request device code from GitHub. Stores device_code server-side. | — |
+| `check` | Poll using server-held device_code. No agent-supplied parameters. | — |
 | `save_pat` | Alternative path: validate and store user-supplied PAT. | pat |
+
+**v0.5.31.1 hotfix:** the original v0.5.31 design had the agent
+carry the long opaque `device_code` between `connect` and `check`
+calls. Smaller models (Mistral 24B locally) mangled or
+hallucinated the value, causing GitHub to return `expired_token`
+on every check attempt. The fix moved the `device_code` to
+module-scope state in `github-setup.ts`; the agent now only
+carries the user-facing `user_code` and pacing.
 
 Scopes requested in Device Flow:
 - `read:user` — username, name, profile basics
@@ -272,16 +280,20 @@ exactly.
 | `security-routes.ts` cache-refresh-hook pattern | One block per credential, refresh on write | New `github-token` block |
 | v0.5.6 sources rail | `metadata.sources` populated → automatic citation rendering | Every github-tool action that references a repo/issue/PR |
 
-New pattern introduced: **agent-mediated multi-step OAuth flow**.
-Previous OAuth-shaped flows in the codebase (Telegram bot token,
-LLM provider keys) end at a single token paste. Device Flow
-requires a *conversational* loop: tool returns `user_code`, user
-goes to a URL, tool waits for the user to come back, then polls.
-The pattern: have the orchestration live in the agent's
-conversation context, not in a server-side state machine. The
-agent holds the `device_code` between tool calls; the tool layer
-is stateless. Promotable to §18 patterns if a third
-"agent-paced OAuth" surface adopts it.
+New pattern introduced: **server-side state for agent-paced OAuth
+flows**. Device Flow has a fundamentally conversational shape:
+start the flow, tell the user to go authorize, wait for them to
+return, then poll. The naive approach (v0.5.31.0) was to return
+the opaque `device_code` to the agent and have it pass the value
+back on the next tool call. This worked in development with
+larger models but failed reliably with the Mistral 24B daily-
+driver — LLMs cannot be trusted to carry long opaque tokens
+across tool calls verbatim. The corrected pattern (v0.5.31.1):
+hold the ephemeral state in the tool module, key the
+conversation off short user-facing identifiers (`user_code`)
+only. The agent paces the flow; the server owns the secrets.
+Promotable to §18 patterns; future OAuth-shaped modules (e.g.
+Google Drive, Spotify) should follow this shape by default.
 
 ## Test surface
 
@@ -400,4 +412,33 @@ Still telemetry-driven.
 
 ## Version bump
 
-`package.json` bumps from `0.5.30` to `0.5.31`.
+`package.json` bumps from `0.5.30` to `0.5.31.1` (initial v0.5.31
+release + same-session hotfix bundled together since the bug was
+caught before any deploy).
+
+## v0.5.31.1 hotfix log
+
+Caught during Mac dev-machine testing: the agent could not
+reliably carry the OAuth `device_code` between `connect` and
+`check` tool calls. GitHub returned `expired_token` on every
+check attempt regardless of how quickly the user authorized.
+
+Fix:
+- `src/tools/builtin/github-setup.ts` — introduced module-scope
+  `pendingSetup` state. `connect` writes; `check` reads. The
+  `check` action no longer accepts a `device_code` parameter.
+  Auto-clears on the expiry boundary (`setTimeout` + `.unref()`).
+  New `'connect'` always replaces any prior `pendingSetup`.
+- `src/github/oauth.ts` — added diagnostic `console.log` /
+  `console.warn` lines that record GitHub's error code +
+  description on every failure path, with a truncated
+  device_code prefix for correlation. Never logs the full
+  device_code or the access token.
+- `src/github/oauth.ts:mapTerminalError` — added explicit
+  mappings for `device_flow_disabled` (step-by-step recovery
+  pointing the user at the OAuth App settings page) and
+  `incorrect_client_credentials`.
+- `pendingSetup` cleared on terminal errors so retries start
+  fresh from `connect`.
+- Local expiry pre-check in `check` short-circuits the GitHub
+  round-trip if our wall clock says the window passed.
