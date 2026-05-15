@@ -28,6 +28,7 @@ import { startCron, stopCron, setCronStatusEmitter } from '../cron';
 import { startReminders, stopReminders } from '../reminders';
 import { initGmailCredential } from '../gmail/config';
 import { initGithubCredential } from '../github/config';
+import { initActiveProject } from '../projects/active';
 import { initOpenRouterKey, initAnthropicKey } from '../core/llm-client';
 import { initOpenclawCredential } from '../tools/builtin/soc-client';
 import { logAvailableTools } from '../tools/registry';
@@ -285,6 +286,20 @@ startTelegram().catch((err: unknown) => {
     if (found) console.log('[NerdAlert] GitHub credential loaded from credential store');
   }).catch((err: unknown) => {
     console.error('[NerdAlert] initGithubCredential failed:', err);
+  });
+
+  // ── Active project state (v0.6.0) ───────────────────────
+  // Load the persisted active-project marker from disk so the
+  // singleton in src/projects/active.ts can be read synchronously
+  // by buildSystemPrompt on every turn. Same fire-and-forget shape
+  // as the credential inits above — if it fails (corrupt JSON,
+  // deleted project), the helper logs a one-line warning and the
+  // cache stays null, which means "no active project" and the UX
+  // is identical to a fresh install. Strict-superset preserved.
+  initActiveProject().then(found => {
+    if (found) console.log('[NerdAlert] Active project state loaded');
+  }).catch((err: unknown) => {
+    console.error('[NerdAlert] initActiveProject failed:', err);
   });
 
   // ── LLM provider keys (v0.5.13.x — keychain-backed) ────────────────────

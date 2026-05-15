@@ -36,6 +36,8 @@ import {
 import { getPersonality } from '../personalities';
 import { getLLMConfig, callOpenRouter, callOllama, ORMessage } from './llm-client';
 import { executeTool, type BrokerContext } from './permission-broker';
+import { findEnabledTool } from '../tools/registry';
+import { buildActiveProjectContext } from '../projects/active';
 
 // ---- THE SYSTEM PROMPT ----
 function buildSystemPrompt(): string {
@@ -43,7 +45,20 @@ function buildSystemPrompt(): string {
   const personality   = getPersonality(personalityId);
   const available     = getAvailableTools();
 
+  // Active-project injection (v0.6.0).
+  //
+  // If the project module is enabled AND the user has an active
+  // project AND that project has a NERDALERT.md, prepend the file's
+  // content as PROJECT CONTEXT. Strictly additive — every check
+  // shorts to empty string and falls through cleanly when any
+  // condition isn't met. The module-isolation contract: with
+  // tools.project.enabled: false in config.yaml, findEnabledTool
+  // returns undefined and we skip the helper call entirely.
+  const projectEnabled = findEnabledTool('project') !== undefined;
+  const projectContext = projectEnabled ? buildActiveProjectContext() : '';
+
   return [
+    projectContext,
     personality.buildSystemPrompt({
       agentName:      config.agent.name,
       trustLevel:     config.agent.trust_level,
@@ -52,7 +67,7 @@ function buildSystemPrompt(): string {
     '',
     '--- BEHAVIORAL RULES ---',
     ...personality.rules.map((rule, i) => `${i + 1}. ${rule}`),
-  ].join('\n');
+  ].filter(s => s.length > 0).join('\n');
 }
 
 // ---- MESSAGE TYPES ----

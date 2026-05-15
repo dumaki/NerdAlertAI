@@ -39,6 +39,16 @@
 
 import { NerdAlertTool, NerdAlertResponse, Source } from '../../types/response.types';
 import { getExtractor, explainExtractionError } from './extractors';
+// Active-project state (v0.6.0) — keeps the user's working project
+// across conversation turns and powers the system-prompt injection
+// in agent.ts / ui-routes.ts. The tool layer reads / writes through
+// this module; the singleton owns persistence and the NERDALERT.md
+// prepend used by callers outside this file.
+import {
+  getActiveProject,
+  setActiveProject,
+  clearActiveProject,
+} from '../../projects/active';
 import * as path from 'path';
 import * as fs   from 'fs';
 import * as os   from 'os';
@@ -590,16 +600,281 @@ async function readFile(project: string, relPath: string): Promise<NerdAlertResp
   };
 }
 
+// ── action: switch ──────────────────────────────────────────
+//
+// Set the active project. From this point on the agent's system
+// prompt carries the project's NERDALERT.md as background context
+// for every conversation turn (see agent.ts / ui-routes.ts).
+//
+// Delegates to setActiveProject() which handles name validation,
+// directory-existence check, cache update, and disk persistence.
+// We just present whatever it returns to the user.
+
+async function switchProject(project: string): Promise<NerdAlertResponse> {
+  const result = await setActiveProject(project);
+
+  if (!result.ok) {
+    return {
+      type:    'text',
+      content: result.error,
+      metadata: {},
+    };
+  }
+
+  // If the project has a NERDALERT.md, hint that to the user so they
+  // know context will travel with the conversation. If it doesn't,
+  // the switch still works — the active flag is set, the agent just
+  // won't get the NERDALERT.md prepend on future turns. We keep this
+  // message terse so the chat surface stays clean.
+  const ctxPath = path.join(PROJECTS_ROOT, project, NERDALERT_MD);
+  const hasContext = fs.existsSync(ctxPath);
+
+  const lines = [`Switched to project "${project}".`];
+  if (hasContext) {
+    lines.push(`Project context (NERDALERT.md) will be carried into every turn until you switch or clear.`);
+  } else {
+    lines.push(`This project doesn't have a NERDALERT.md yet — the user can create one at ${ctxPath} to add background context that travels with the conversation.`);
+  }
+
+  return {
+    type:    'text',
+    content: lines.join(' '),
+    metadata: {},
+  };
+}
+
+// ── action: current ─────────────────────────────────────────
+//
+// Report which project is active (if any). Read-only; no state
+// mutation. Used by the agent when the user asks "what project am
+// I in?" — picked up via the project group's paramExtractor in
+// intent-prefetch.ts.
+
+async function currentProject(): Promise<NerdAlertResponse> {
+  const active = getActiveProject();
+
+  if (!active) {
+    return {
+      type:    'text',
+      content:
+        'No active project. Use the switch action with a project name to start working in one, ' +
+        'or the projects action to see what\'s available.',
+      metadata: {},
+    };
+  }
+
+  const ctxPath = path.join(PROJECTS_ROOT, active, NERDALERT_MD);
+  const hasContext = fs.existsSync(ctxPath);
+
+  const lines = [`Active project: ${active}.`];
+  if (hasContext) {
+    lines.push(`Project context (NERDALERT.md) is carried into every conversation turn.`);
+  } else {
+    lines.push(`This project doesn't have a NERDALERT.md — background context isn't being carried automatically.`);
+  }
+
+  return {
+    type:    'text',
+    content: lines.join(' '),
+    metadata: {},
+  };
+}
+
+// ── action: clear ────────────────────────────────────────────
+//
+// Forget the active project. Used when the user wants to exit
+// project context for a turn or many turns (general questions
+// that aren't about any specific project).
+
+async function clearActive(): Promise<NerdAlertResponse> {
+  const previous = getActiveProject();
+  await clearActiveProject();
+
+  if (!previous) {
+    return {
+      type:    'text',
+      content: 'No active project was set.',
+      metadata: {},
+    };
+  }
+
+  return {
+    type:    'text',
+    content: `Cleared active project (was "${previous}"). Project context will no longer be carried into conversation turns.`,
+    metadata: {},
+  };
+}
+
+// ── action: search ───────────────────────────────────────────
+//
+// Full-text search across one project's text files. Returns lines
+// containing the query (case-insensitive substring match), with
+// file path and line number for each hit.
+//
+// Bounded by SEARCH_MAX_HITS and SEARCH_MAX_FILE_BYTES so a giant
+// project or a giant file can't take the tool out. Binary files
+// (BINARY_EXT) are skipped to avoid grepping through garbled bytes.
+// Extractor-backed formats (PDF, DOCX, etc.) are NOT searched in
+// this MVP — chunked extraction belongs to the v0.6+ document
+// indexing work, not the search-grep-for-text path.
+//
+// Path safety reuses safeResolveInProject for every hit so a path
+// returned to the user can't reference anything outside the project
+// root. Mirrors the read-path discipline.
+//
+// Sources rail gets one Source per file matched, so the user can
+// click through to the underlying file via the existing file://
+// rendering.
+
+const SEARCH_MAX_HITS       = 30;       // total lines surfaced to model
+const SEARCH_MAX_FILE_BYTES = 500_000;  // skip files larger than this
+const SEARCH_MAX_LINE_LEN   = 240;      // truncate long matched lines
+
+async function searchProject(
+  project: string,
+  query:   string,
+): Promise<NerdAlertResponse> {
+  if (!isValidProjectName(project)) {
+    return {
+      type:    'text',
+      content: `Invalid project name "${project}". Project names use letters, numbers, dot, dash, or underscore.`,
+      metadata: {},
+    };
+  }
+  if (!query || query.trim().length < 2) {
+    return {
+      type:    'text',
+      content: 'Search requires a query of at least 2 characters.',
+      metadata: {},
+    };
+  }
+
+  const projectRoot = path.join(PROJECTS_ROOT, project);
+  if (!fs.existsSync(projectRoot)) {
+    return {
+      type:    'text',
+      content: `No project named "${project}" exists yet.`,
+      metadata: {},
+    };
+  }
+
+  // Collect every file in the project (reuse the walker the list
+  // action already uses — it honors SKIP_DIRS, depth caps, and the
+  // symlink-skip safety rule we want here too).
+  const allEntries: FileEntry[] = [];
+  await walkProject(projectRoot, projectRoot, 0, allEntries);
+
+  const lowerQuery = query.toLowerCase();
+  const hits: { file: string; line: number; text: string }[] = [];
+  const matchedFiles = new Set<string>();
+
+  for (const entry of allEntries) {
+    if (hits.length >= SEARCH_MAX_HITS) break;
+    if (entry.isDir) continue;
+
+    const ext = path.extname(entry.relPath).toLowerCase();
+    if (BINARY_EXT.has(ext)) continue;
+    // Skip extractor-backed formats too — grepping their packaged
+    // bytes returns noise. Future v0.6+ work indexes their extracted
+    // text into a separate store; for now we just sidestep them.
+    if (getExtractor(ext)) continue;
+
+    // Use safeResolveInProject for the existence/symlink discipline
+    // the rest of the tool uses. The path was produced by walkProject
+    // so it's already inside the root, but we keep the canonical
+    // resolver in the path so any future change to that function
+    // covers this code too.
+    let absPath: string;
+    try {
+      absPath = safeResolveInProject(project, entry.relPath);
+    } catch {
+      continue;
+    }
+
+    if (entry.size > SEARCH_MAX_FILE_BYTES) continue;
+
+    let content: string;
+    try {
+      content = await fs.promises.readFile(absPath, 'utf8');
+    } catch {
+      continue;
+    }
+
+    const lines = content.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      if (hits.length >= SEARCH_MAX_HITS) break;
+      const line = lines[i];
+      if (line.toLowerCase().includes(lowerQuery)) {
+        const truncated = line.length > SEARCH_MAX_LINE_LEN
+          ? line.slice(0, SEARCH_MAX_LINE_LEN) + '…'
+          : line;
+        hits.push({
+          file: entry.relPath,
+          line: i + 1,
+          text: truncated.trim(),
+        });
+        matchedFiles.add(entry.relPath);
+      }
+    }
+  }
+
+  if (hits.length === 0) {
+    return {
+      type:    'text',
+      content: `No matches for "${query}" in project "${project}".`,
+      metadata: {},
+    };
+  }
+
+  // Build the response. Group hits by file for readability.
+  const byFile = new Map<string, typeof hits>();
+  for (const hit of hits) {
+    const arr = byFile.get(hit.file) ?? [];
+    arr.push(hit);
+    byFile.set(hit.file, arr);
+  }
+
+  const outLines: string[] = [
+    `Found ${hits.length} match${hits.length === 1 ? '' : 'es'} for "${query}" in project "${project}":`,
+    '',
+  ];
+  for (const [file, fileHits] of byFile) {
+    outLines.push(`${file}`);
+    for (const hit of fileHits) {
+      outLines.push(`  L${hit.line}: ${hit.text}`);
+    }
+    outLines.push('');
+  }
+  if (hits.length >= SEARCH_MAX_HITS) {
+    outLines.push(`(results capped at ${SEARCH_MAX_HITS}; refine the query for narrower output)`);
+  }
+
+  // Sources rail: one per matched file. file:// URL points at the
+  // absolute path so the UI's link rendering works the same as read().
+  const sources: Source[] = Array.from(matchedFiles).map(rel => ({
+    label: `${project}/${rel}`,
+    url:   `file://${path.join(projectRoot, rel)}`,
+  }));
+
+  return {
+    type:    'text',
+    content: outLines.join('\n'),
+    metadata: { sources },
+  };
+}
+
 // ── Tool export ───────────────────────────────────────────────
 
 const projectTool: NerdAlertTool = {
   name: 'project',
 
   description: `
-Read, list, and discover files the user has placed under their NerdAlert
-projects directory. This is the right tool whenever the user references a
-file, document, or upload — including phrases like "the file I just dropped",
-"this NDA", "my notes", or any specific filename.
+Read, list, switch, search, and discover files the user has placed under their
+NerdAlert projects directory. This is the right tool whenever the user references
+a file, document, or upload — including phrases like "the file I just dropped",
+"this NDA", "my notes", or any specific filename. It is ALSO the right tool when
+the user wants to switch their working context to a specific project, ask which
+project they're in, or search across project files.
 
 This tool is for LOCAL files only. If the user references an 'owner/repo'
 GitHub path (e.g. 'dumaki/NerdAlertAI'), or asks to read a file from a
@@ -620,6 +895,26 @@ Actions:
     matches the drag-and-drop upload destination. If the project has a
     NERDALERT.md at its root, that file is automatically prepended as
     PROJECT CONTEXT (Hermes pattern) — you do NOT need to read it separately.
+
+  switch — set the active project. Pass "project". From this turn forward the
+    agent's system prompt carries that project's NERDALERT.md as background
+    context for every conversation. Use this when the user says "switch to
+    project X", "let's work on X", "open the X project", or otherwise signals
+    they want to scope the conversation to a specific project.
+
+  current — report which project is active. Zero parameters. Use this when
+    the user asks "what project am I in?", "which project is active?", or
+    similar. If no project is active the tool says so plainly.
+
+  clear — forget the active project. Zero parameters. Use this when the user
+    says "clear the project", "exit project mode", "no project for now", or
+    similar. After this, the system prompt no longer carries NERDALERT.md
+    context.
+
+  search — full-text search across one project's text files. Pass "query"
+    (the search string) and optionally "project" (defaults to "inbox"). Returns
+    matching lines with file and line-number references. Binary and extractor-
+    backed formats (PDF, DOCX, etc.) are skipped — use read for those.
 
 Files dropped into the chat via drag-and-drop or the paperclip button land
 in the "inbox" project. So when the user says "what's in this PDF I just
@@ -656,16 +951,20 @@ contents verbatim. Cite the source naturally when it matters.
     properties: {
       action: {
         type: 'string',
-        enum: ['projects', 'list', 'read'],
-        description: 'projects = list all projects, list = list files in one project, read = return one file\'s contents.',
+        enum: ['projects', 'list', 'read', 'switch', 'current', 'clear', 'search'],
+        description: 'projects = list all projects, list = list files in one project, read = return one file\'s contents, switch = set the active project, current = report which project is active, clear = forget the active project, search = grep one project\'s text files.',
       },
       project: {
         type: 'string',
-        description: 'Project name. Optional for list/read — defaults to "inbox" (the drag-and-drop destination). Ignored for the projects action.',
+        description: 'Project name. Optional for list/read/search — defaults to "inbox" (the drag-and-drop destination). Required for switch. Ignored for projects/current/clear.',
       },
       path: {
         type: 'string',
         description: 'For read: relative path of the file inside the project (e.g. "NDA.pdf" or "notes/q3.md"). Required for read.',
+      },
+      query: {
+        type: 'string',
+        description: 'For search: the substring to search for (case-insensitive, minimum 2 characters). Required for search.',
       },
     },
     required: ['action'],
@@ -675,6 +974,7 @@ contents verbatim. Cite the source naturally when it matters.
     const action  = params.action  as string;
     const project = ((params.project as string | undefined)?.trim()) || INBOX_PROJECT;
     const filePath = (params.path as string | undefined)?.trim() ?? '';
+    const query    = (params.query as string | undefined)?.trim() ?? '';
 
     try {
       if (action === 'projects') {
@@ -696,9 +996,44 @@ contents verbatim. Cite the source naturally when it matters.
         return await readFile(project, filePath);
       }
 
+      if (action === 'switch') {
+        // switch deliberately does NOT default to inbox — "switch"
+        // without an explicit name is almost always a mistake.
+        // The agent should ask the user which project, or list
+        // projects first. Require an explicit project name here.
+        const rawProject = (params.project as string | undefined)?.trim();
+        if (!rawProject) {
+          return {
+            type:    'text',
+            content: 'The switch action requires a "project" parameter. Use the projects action to see what\'s available.',
+            metadata: {},
+          };
+        }
+        return await switchProject(rawProject);
+      }
+
+      if (action === 'current') {
+        return await currentProject();
+      }
+
+      if (action === 'clear') {
+        return await clearActive();
+      }
+
+      if (action === 'search') {
+        if (!query) {
+          return {
+            type:    'text',
+            content: 'The search action requires a "query" parameter.',
+            metadata: {},
+          };
+        }
+        return await searchProject(project, query);
+      }
+
       return {
         type:    'text',
-        content: `Unknown action "${action}". Use projects, list, or read.`,
+        content: `Unknown action "${action}". Use projects, list, read, switch, current, clear, or search.`,
         metadata: {},
       };
 

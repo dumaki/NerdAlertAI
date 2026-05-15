@@ -1161,11 +1161,95 @@ const INTENT_MAP: Record<string, IntentGroup> = {
       'list files', 'files in',
       'project folder', 'project inbox',
       'in the project',
+      // v0.6.0 — active-project switching / status / search phrasings.
+      // 'switch to' and 'work on' are anchored enough not to false-
+      // positive on unrelated uses; the paramExtractor below decides
+      // whether to fire switch/current/clear/search. 'search' is left
+      // OUT of keywords — it's web's turf; search routing happens
+      // when the existing project keywords ALSO fire plus a verb in
+      // the extractor.
+      'switch to', 'switch project', 'switch projects',
+      'work on', 'open the project', 'open project',
+      'active project', 'current project', 'which project',
+      'what project am i', 'clear project', 'exit project', 'no project',
     ],
     tools:         ['project'],
     defaultParams: { action: 'list' },
     paramExtractor: (msg: string, history?: HistoryTurn[]) => {
       const fileRe = /\b([A-Za-z0-9_-][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]{0,9})\b/;
+      const lower  = msg.toLowerCase();
+
+      // v0.6.0 — active-project status / control phrasings. These
+      // come FIRST because they're unambiguous: "clear project"
+      // never refers to a file, "switch to X" never refers to a
+      // file, etc. Putting them ahead of the filename check keeps
+      // them from being stolen by stray filename-shaped tokens.
+
+      // "clear project" / "exit project mode" / "no project" → clear
+      if (
+        /\bclear\s+(?:the\s+)?(?:active\s+)?project\b/.test(lower) ||
+        /\bexit\s+project(?:\s+mode)?\b/.test(lower) ||
+        /\bno\s+(?:active\s+)?project(?:\s+for\s+now)?\b/.test(lower)
+      ) {
+        return { action: 'clear' };
+      }
+
+      // "what project am I in" / "which project is active" / "current project" → current
+      if (
+        /\bwhat\s+project\s+(?:am\s+i\s+in|is\s+(?:active|current|set))/.test(lower) ||
+        /\bwhich\s+project\s+(?:am\s+i\s+in|is\s+(?:active|current|set))/.test(lower) ||
+        /\bcurrent\s+(?:active\s+)?project\b/.test(lower) ||
+        /\bactive\s+project\b/.test(lower)
+      ) {
+        return { action: 'current' };
+      }
+
+      // "switch to <name>" / "open the <name> project" / "work on <name>" → switch
+      // Project-name regex matches the same character class
+      // isValidProjectName uses (letters, digits, dot, dash,
+      // underscore) so anything that wouldn't be valid downstream
+      // isn't matched here either.
+      const switchPatterns = [
+        /\bswitch\s+(?:to\s+(?:the\s+)?(?:project\s+)?|projects?\s+to\s+)([A-Za-z0-9._-]+)/i,
+        /\bopen\s+(?:the\s+)?([A-Za-z0-9._-]+)\s+project\b/i,
+        /\bopen\s+(?:the\s+)?project\s+([A-Za-z0-9._-]+)/i,
+        /\bwork\s+on\s+(?:the\s+)?([A-Za-z0-9._-]+)\s+project\b/i,
+        /\blet'?s\s+work\s+on\s+(?:the\s+)?([A-Za-z0-9._-]+)\b/i,
+      ];
+      for (const re of switchPatterns) {
+        const m = msg.match(re);
+        if (m && m[1]) {
+          return { action: 'switch', project: m[1] };
+        }
+      }
+
+      // "search <query> in <project> project" / "find <query> in <project> project" → search
+      // Anchored on a search verb AND an 'in <project> project' tail
+      // so it doesn't steal generic web 'find me X' queries that the
+      // web group handles. The web demotion in detectIntent already
+      // drops web when project matches, so this branch winning is the
+      // correct behavior.
+      const searchProjectMatch =
+        msg.match(/\b(?:search|find|grep)\s+(?:for\s+)?"([^"]+)"\s+in\s+(?:my\s+|the\s+)?([A-Za-z0-9._-]+)\s+project\b/i) ||
+        msg.match(/\b(?:search|find|grep)\s+(?:for\s+)?(.+?)\s+in\s+(?:my\s+|the\s+)?([A-Za-z0-9._-]+)\s+project\b/i);
+      if (searchProjectMatch && searchProjectMatch[1] && searchProjectMatch[2]) {
+        return {
+          action:  'search',
+          query:   searchProjectMatch[1].trim().replace(/[?.!]+$/, ''),
+          project: searchProjectMatch[2].trim(),
+        };
+      }
+      // "search <query> in my files / in the project / in the inbox" —
+      // no explicit project name, default to inbox.
+      const searchInbox =
+        msg.match(/\b(?:search|find|grep)\s+(?:for\s+)?"([^"]+)"\s+in\s+(?:my\s+files|the\s+project|the\s+inbox|inbox)\b/i) ||
+        msg.match(/\b(?:search|find|grep)\s+(?:for\s+)?(.+?)\s+in\s+(?:my\s+files|the\s+project|the\s+inbox|inbox)\b/i);
+      if (searchInbox && searchInbox[1]) {
+        return {
+          action: 'search',
+          query:  searchInbox[1].trim().replace(/[?.!]+$/, ''),
+        };
+      }
 
       // 1. Filename-shaped token in the current message wins — most
       //    reliable signal. Matches things like NDA.pdf, q3-notes.md,
@@ -1175,8 +1259,6 @@ const INTENT_MAP: Record<string, IntentGroup> = {
       if (fileMatch) {
         return { action: 'read', path: fileMatch[1] };
       }
-
-      const lower = msg.toLowerCase();
 
       // 2. Pronominal follow-up — "repeat the file verbatim", "read it
       //    again", "what's in this doc". The current message has no

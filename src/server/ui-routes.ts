@@ -25,7 +25,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { config }                                from '../config/loader';
 import { getServerAuthToken }                    from './auth';
 import { getPersonality }                        from '../personalities';
-import { getAvailableTools, toAnthropicFormat, toOpenAIFormat } from '../tools/registry';
+import { getAvailableTools, toAnthropicFormat, toOpenAIFormat, findEnabledTool } from '../tools/registry';
+import { buildActiveProjectContext }              from '../projects/active';
 import {
   getLLMConfig,
   getActiveModel,
@@ -893,11 +894,22 @@ export function mountUIRoutes(app: Express): void {
       const agentId     = (req.body as any).agentId   ?? cfg.agent?.personality ?? 'sherman';
       const agentName   = (req.body as any).agentName  ?? cfg.agent?.name        ?? 'Sherman';
       const personality = getPersonality(agentId);
-      const systemPrompt = personality.buildSystemPrompt({
+
+      // Active-project injection (v0.6.0). Same shape as agent.ts:
+      // when the project module is enabled AND an active project is
+      // set AND it has a NERDALERT.md, prepend the file's content as
+      // PROJECT CONTEXT. Strictly additive — empty string when any
+      // condition fails, no observable change to v0.5.31 behavior
+      // when the project module is disabled.
+      const projectEnabled = findEnabledTool('project') !== undefined;
+      const projectContext = projectEnabled ? buildActiveProjectContext() : '';
+
+      const personalityPrompt = personality.buildSystemPrompt({
         agentName,
         trustLevel:     cfg.agent?.trust_level  ?? 1,
         availableTools: getAvailableTools().map(t => t.name),
       });
+      const systemPrompt = projectContext + personalityPrompt;
 
       const messages: Anthropic.MessageParam[] = [
         ...conversationHistory,
