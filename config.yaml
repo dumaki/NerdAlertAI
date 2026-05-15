@@ -166,8 +166,17 @@ tools:
     trust_level: 1         # Agent can manage jobs at L1
 
   github:
-    enabled: false
-    trust_level: 1
+    enabled: true
+    trust_level: 1         # Read-only access to repos, issues, PRs, notifications.
+                           # OAuth Device Flow via 'github-setup' tool, token in
+                           # the OS keychain (or file fallback). Disabling this
+                           # entry hides the tool from the agent; the credential
+                           # stays in the keychain untouched.
+
+  github-setup:
+    enabled: true
+    trust_level: 1         # Onboarding wizard. Writes to keychain only.
+                           # No filesystem mutations outside docs read-only.
 
   plex:
     enabled: false

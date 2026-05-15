@@ -95,7 +95,7 @@ function loopbackOnly(req: Request, res: Response, next: NextFunction) {
 
 const ALLOWED: Record<string, { description: string; minLen: number; maxLen: number }> = {
   'gmail-app-password':     { description: 'Gmail App Password (16 chars, may include spaces)', minLen: 16, maxLen: 64 },
-  'github-pat':             { description: 'GitHub Personal Access Token',                      minLen: 30, maxLen: 200 },
+  'github-token':           { description: 'GitHub access token (OAuth Device Flow or Personal Access Token). Run github-setup for the guided OAuth flow.', minLen: 30, maxLen: 200 },
   'telegram-bot-token':     { description: 'Telegram Bot Token',                                minLen: 40, maxLen: 80 },
   'sonarr-api-key':         { description: 'Sonarr API key',                                    minLen: 16, maxLen: 64 },
   'radarr-api-key':         { description: 'Radarr API key',                                    minLen: 16, maxLen: 64 },
@@ -249,6 +249,20 @@ export function mountSecurityRoutes(app: Express): void {
           await initGmailCredential();
         } catch (e: any) {
           console.warn('[security] gmail cache refresh after credential write failed:', e?.message);
+        }
+      }
+
+      // Same pattern for GitHub. Refreshing here means the user can
+      // paste a PAT in the panel and immediately use the github tool
+      // — no server restart needed. The github-setup tool also writes
+      // through this path (via setCredential) for the OAuth flow, so
+      // this hook covers both setup paths.
+      if (name === 'github-token') {
+        try {
+          const { initGithubCredential } = require('../github/config');
+          await initGithubCredential();
+        } catch (e: any) {
+          console.warn('[security] github cache refresh after credential write failed:', e?.message);
         }
       }
 

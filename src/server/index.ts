@@ -27,6 +27,7 @@ import { startTelegram } from '../telegram';
 import { startCron, stopCron, setCronStatusEmitter } from '../cron';
 import { startReminders, stopReminders } from '../reminders';
 import { initGmailCredential } from '../gmail/config';
+import { initGithubCredential } from '../github/config';
 import { initOpenRouterKey, initAnthropicKey } from '../core/llm-client';
 import { initOpenclawCredential } from '../tools/builtin/soc-client';
 import { logAvailableTools } from '../tools/registry';
@@ -272,6 +273,18 @@ startTelegram().catch((err: unknown) => {
     if (found) console.log('[NerdAlert] Gmail credential loaded from credential store');
   }).catch((err: unknown) => {
     console.error('[NerdAlert] initGmailCredential failed:', err);
+  });
+
+  // Pull github-token from the keychain (or file backend) once at boot.
+  // After this resolves, the github tool's isGithubConfigured() returns
+  // true synchronously and getGithubToken() hands out the bearer for
+  // outbound API calls. If the token is missing or the keychain read
+  // fails, the github tool returns its friendly not_configured message
+  // and the user can run 'github setup' to (re)connect.
+  initGithubCredential().then(found => {
+    if (found) console.log('[NerdAlert] GitHub credential loaded from credential store');
+  }).catch((err: unknown) => {
+    console.error('[NerdAlert] initGithubCredential failed:', err);
   });
 
   // ── LLM provider keys (v0.5.13.x — keychain-backed) ────────────────────

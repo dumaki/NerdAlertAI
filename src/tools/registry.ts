@@ -24,6 +24,8 @@ import mapsTool        from './builtin/maps-tool';
 import memoryTool      from './builtin/memory-tool';
 import gmailTool       from './builtin/gmail-tool';
 import gmailSetupTool  from './builtin/gmail-setup';
+import githubTool      from './builtin/github-tool';
+import githubSetupTool from './builtin/github-setup';
 import helpTool        from './builtin/help-tool';
 import weatherTool     from './builtin/weather-tool';
 import rssTool         from './builtin/rss-tool';
@@ -69,6 +71,8 @@ const ALL_TOOLS: NerdAlertTool[] = [
   projectTool,
   gmailTool,
   gmailSetupTool,
+  githubTool,
+  githubSetupTool,
   cronManagerTool,
 
   // SOC — Wazuh SIEM
