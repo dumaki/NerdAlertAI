@@ -322,12 +322,17 @@ an additional web search:
   - Current date or time  → get_datetime
   - Local system metrics (CPU, memory, disk)  → host_metrics
   - Email and calendar  → gmail / google_calendar
+  - GitHub repos, issues, PRs, READMEs, notifications, anything about
+    the user's own GitHub account or an 'owner/repo' reference  → github
+  - Files the user uploaded locally (the user's NerdAlert projects)  → project
   - Stored user context (name, location, preferences)  → memory
 
-USE WEB FOR: news, current events, specific URLs, CVE lookups,
-vendor documentation, project READMEs, breaking developments,
-GitHub issues, security advisories, anything not covered by a
-specialized tool above.
+USE WEB FOR: news, current events, specific URLs you've been handed,
+CVE lookups, vendor documentation, breaking developments, security
+advisories, anything not covered by a specialized tool above.
+Do NOT use web for anything GitHub-related — the github tool is
+authoritative for that domain and will return real data; web would
+only produce generic search results that look right but aren't.
 
 Actions:
   search — Query DuckDuckGo for a topic. Returns a summary, key facts,
@@ -337,9 +342,11 @@ Actions:
     search bar).
 
   fetch — Retrieve the text content of a specific URL. Good for: reading
-    a documentation page, a GitHub issue, a changelog, a CVE detail page
-    when you already have the URL. Returns stripped text capped at 800
-    characters with a truncation notice if longer.
+    a documentation page, a changelog, a CVE detail page when you
+    already have the URL. Returns stripped text capped at 800 characters
+    with a truncation notice if longer. Do NOT use fetch on github.com
+    URLs — use the github tool instead, which returns structured data
+    and respects the user's auth.
 
 All results include source attribution via metadata.sources — the
 sources rail renders these as a collapsed footer below the response.

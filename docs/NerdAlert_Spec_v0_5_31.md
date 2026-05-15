@@ -412,9 +412,11 @@ Still telemetry-driven.
 
 ## Version bump
 
-`package.json` bumps from `0.5.30` to `0.5.31.1` (initial v0.5.31
-release + same-session hotfix bundled together since the bug was
-caught before any deploy).
+`package.json` bumps from `0.5.30` to `0.5.31.2` (initial v0.5.31
+release + two same-session hotfixes: v0.5.31.1 fixed the device-
+code-handling bug, v0.5.31.2 resolved tool-description overlaps
+that caused smaller models to pick `web` or `project` for github
+queries).
 
 ## v0.5.31.1 hotfix log
 
@@ -442,3 +444,52 @@ Fix:
   fresh from `connect`.
 - Local expiry pre-check in `check` short-circuits the GitHub
   round-trip if our wall clock says the window passed.
+
+## v0.5.31.2 hotfix log
+
+Caught during Mac dev-machine testing with Mistral Small 24B as
+the daily-driver model: the github tool was discoverable
+(3/4 natural queries worked end to end) but Mistral picked
+overlapping tools (`web`, `project`) for two test cases. Root
+cause: tool descriptions, not tool routing.
+
+The `web` tool's description literally listed "GitHub issues"
+and "project READMEs" in its USE WEB FOR section. Mistral was
+reading the descriptions correctly and obeying them — the bug
+was that the descriptions were stale.
+
+Fix:
+- `src/tools/builtin/web-tool.ts` — removed `GitHub issues` and
+  `project READMEs` from the USE WEB FOR list. Added `github`
+  and `project` to the "DEFAULT TO SPECIALIZED TOOLS FIRST"
+  routing table with explicit triggers (any github mention,
+  owner/repo references). Added a DO NOT use web for github
+  clause. Also updated the `fetch` action description to
+  redirect github.com URLs to the github tool.
+- `src/tools/builtin/github-tool.ts` — rewrote the description
+  with an explicit USE THIS TOOL FOR ANY GITHUB QUERY header,
+  enumerated triggers (github mentions, owner/repo format, PR /
+  issue / README references), and explicit DO NOT use web /
+  project for github clauses. Added "For READMEs use
+  path: 'README.md'" as a concrete example on the read_file
+  action.
+- `src/tools/builtin/project-tool.ts` — added a one-paragraph
+  anti-overlap clause stating the tool is for LOCAL files only
+  and that owner/repo paths should route to the github tool.
+
+Expected fix profile: Mistral 24B should now pick the github
+tool on all four natural queries that exercised the overlap
+("list my github repos", "what issues are assigned to me on
+github", "what's in my github notifications", "read the README
+of dumaki/NerdAlertAI"). Sonnet was already 4/4 before the
+patch. To be verified on next deploy.
+
+Pattern note for future modules: when a new tool's domain
+overlaps with an existing tool's description (especially `web`
+which is a default fallback), edit the existing tool's
+description as part of the new module's release. The new tool
+can claim its domain in its own description all it wants; if
+the old tool is still claiming the same domain, smaller models
+will split the difference and pick whichever tool's description
+they read first. Promotable to §18 patterns once the pattern
+shows up in a third release.

@@ -601,6 +601,11 @@ projects directory. This is the right tool whenever the user references a
 file, document, or upload — including phrases like "the file I just dropped",
 "this NDA", "my notes", or any specific filename.
 
+This tool is for LOCAL files only. If the user references an 'owner/repo'
+GitHub path (e.g. 'dumaki/NerdAlertAI'), or asks to read a file from a
+GitHub repository, use the 'github' tool with action 'read_file' instead.
+NerdAlert projects are local folders; GitHub repos live on github.com.
+
 Actions:
   projects — list all available projects (top-level folders) with file counts
     and last-modified time. Zero parameters. Use this when the user asks

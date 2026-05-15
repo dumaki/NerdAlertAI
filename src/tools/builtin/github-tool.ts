@@ -60,22 +60,32 @@ const githubTool: NerdAlertTool = {
   name: 'github',
 
   description: `Access GitHub repos, issues, pull requests, and notifications (read-only).
-Use this when the user asks about:
-  - their GitHub activity, issues, or pull requests
-  - a specific repo's details, README, or source files
-  - what's assigned to them on GitHub
-  - their GitHub notifications
+
+USE THIS TOOL FOR ANY GITHUB QUERY. This is the authoritative tool for:
+  - any query that mentions 'github', 'repo', 'PR', 'pull request', or 'issue'
+  - 'owner/repo' references (e.g. 'dumaki/NerdAlertAI', 'facebook/react')
+  - reading READMEs, source files, or any file inside a GitHub repository
+  - issues or pull requests assigned to, opened by, or mentioning the user
+  - the user's GitHub notifications inbox
+  - questions about a specific GitHub repository's details (stars, language, last commit)
+
+DO NOT use the 'web' tool for GitHub queries even when phrased as a URL
+or a search — web search returns generic results that look right but
+aren't actually the user's data. DO NOT use the 'project' tool for
+'owner/repo' references — those are GitHub paths, not local project
+folders. Local projects live in the user's NerdAlert workspace; GitHub
+repos live on github.com.
 
 Actions:
 'whoami'             — return the connected GitHub username and profile.
 'list_repos'         — list user's repos. Optional: sort, visibility, perPage.
 'repo_info'          — get one repo's metadata. Requires: owner, repo.
-'search_repos'       — search all of GitHub. Requires: query.
-'list_issues'        — issues filtered by relationship. Optional: filter (assigned|created|mentioned|all), repo, state.
+'search_repos'       — search all of GitHub for repos. Requires: query.
+'list_issues'        — issues filtered by relationship. Optional: filter (assigned|created|mentioned|all), repo, state. Default filter: assigned.
 'list_pulls'         — pull requests, same filter shape as list_issues.
 'read_issue'         — one issue body + comments. Requires: owner, repo, number.
 'read_pull'          — one PR body + comments + file changes. Requires: owner, repo, number.
-'read_file'          — file contents at a path. Requires: owner, repo, path. Optional: ref (branch/tag/commit).
+'read_file'          — file contents at a path. Requires: owner, repo, path. Optional: ref (branch/tag/commit). For READMEs use path: 'README.md'.
 'list_notifications' — unread notifications by default. Optional: all (include read), perPage.
 'test'               — sanity-check the GitHub connection.
 
