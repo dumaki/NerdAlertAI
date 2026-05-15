@@ -412,11 +412,12 @@ Still telemetry-driven.
 
 ## Version bump
 
-`package.json` bumps from `0.5.30` to `0.5.31.2` (initial v0.5.31
-release + two same-session hotfixes: v0.5.31.1 fixed the device-
-code-handling bug, v0.5.31.2 resolved tool-description overlaps
-that caused smaller models to pick `web` or `project` for github
-queries).
+`package.json` bumps from `0.5.30` to `0.5.31.3` (initial v0.5.31
+release + three same-session hotfixes: v0.5.31.1 fixed the device-
+code-handling bug, v0.5.31.2 resolved tool-description overlaps,
+v0.5.31.3 wired github intent-prefetch (with a registry reshuffle
+as defense in depth) to remove tool-selection ambiguity for smaller
+models).
 
 ## v0.5.31.1 hotfix log
 
@@ -493,3 +494,81 @@ the old tool is still claiming the same domain, smaller models
 will split the difference and pick whichever tool's description
 they read first. Promotable to §18 patterns once the pattern
 shows up in a third release.
+
+## v0.5.31.3 hotfix log
+
+v0.5.31.2 test follow-up: README query went from 2/4 retries to
+1/1 (fixed by description tightening). The 'what issues are
+assigned to me on github' query still routed to `web` despite
+the explicit anti-routing clauses added to both tool
+descriptions.
+
+Diagnosis: Mistral was picking `web` via native OpenAI
+tool_calls, not via prefetch (prefetch wasn't firing for this
+query — no intent group claimed it). The native tool-selection
+had to choose between `web` and `github` from the tool list,
+and smaller models occasionally got that wrong even with
+tightened descriptions.
+
+Fix (two parts, single commit):
+
+1. **Github intent-prefetch wiring** (`src/core/intent-prefetch.ts`).
+   Added a `github` intent group with anchor keywords (`github`,
+   `pull request`, `pull requests`) and a paramExtractor that
+   maps natural-language patterns to specific github tool actions:
+     - `owner/repo` + `README` → `read_file` with path README.md
+     - bare `owner/repo` → `repo_info`
+     - `issues` + relationship anchor → `list_issues` with filter
+     - `pull requests` / `PR` + relationship anchor → `list_pulls`
+     - `notifications` → `list_notifications`
+     - `repos` → `list_repos`
+     - `who am I` → `whoami`
+     - fallback → `list_repos` (substantive default)
+
+   The github tool now runs server-side before the model sees
+   anything; the model just narrates pre-fetched data. The
+   model never gets to choose between `web` and `github`
+   because the answer is already in its context.
+
+2. **Registry order reshuffle** (`src/tools/registry.ts`).
+   Moved `githubTool`, `githubSetupTool`, `projectTool`, and
+   `rssTool` ahead of `webTool` in `ALL_TOOLS`. Defense in
+   depth for queries that don't trigger prefetch (e.g.
+   `owner/repo` references without the literal word "github")
+   and still need native tool_calls to pick correctly.
+
+The web-demotion rule in `detectIntent` (web loses when any
+more specific group also matches) means the new github group
+wins outright on queries that mention both "github" and any
+web-keyword phrasing. Combined with the v0.5.28 relevance gate
+(bails to tool loop if prefetched data doesn't match the
+question), prefetch failures fall back gracefully to the
+native tool loop — same strict-superset property as the rest
+of the prefetch system.
+
+Expected fix profile after v0.5.31.3:
+- 'what issues are assigned to me on github' → prefetch fires
+  `list_issues` with filter=assigned, model narrates real data.
+- 'list my github repos' → prefetch fires `list_repos`.
+- 'what's in my github notifications' → prefetch fires
+  `list_notifications`.
+- 'read the README of dumaki/NerdAlertAI' → prefetch fires
+  `read_file` with owner=dumaki, repo=NerdAlertAI,
+  path=README.md.
+- Sonnet path unchanged (Anthropic ReAct loop bypasses
+  prefetch entirely).
+
+To be verified on next deploy. If misroutes still appear, the
+next layer would be widening the keyword set (adding
+'github issues', 'github PRs', etc.) or adding an `owner/repo`
+regex gate in `detectIntent` for queries that drop the word
+'github'.
+
+Pattern note for future modules: any tool whose name isn't
+well-trained in smaller models' vocabulary (`github` qualifies
+despite being a household name, because tool-name training
+signal is different from concept familiarity) benefits from
+prefetch wiring even when description tightening seems
+sufficient on paper. Description-only fixes work for Sonnet
+immediately; smaller models often need the data already in
+context.

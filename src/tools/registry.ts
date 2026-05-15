@@ -64,15 +64,27 @@ const ALL_TOOLS: NerdAlertTool[] = [
   memoryTool,
   helpTool,
   weatherTool,
-  webTool,
-  rssTool,
-  timerTool,
-  hostMetricsTool,
-  projectTool,
-  gmailTool,
-  gmailSetupTool,
+
+  // Specialized tools that overlap with `web` go BEFORE `web` in the
+  // list. Small models (Mistral 24B observed in v0.5.31.2 testing)
+  // have a positional bias when scoring tools — they read top to
+  // bottom and can pre-commit to a near-match before they reach a
+  // better one. Putting specialized tools first means "is this a
+  // github / project / rss query?" gets answered before "could this
+  // be a web search?". Web's description still routes these domains
+  // away from itself (see web-tool.ts), but ordering is belt-and-
+  // braces for models that don't read every description thoroughly.
   githubTool,
   githubSetupTool,
+  projectTool,
+  rssTool,
+
+  webTool,
+
+  timerTool,
+  hostMetricsTool,
+  gmailTool,
+  gmailSetupTool,
   cronManagerTool,
 
   // SOC — Wazuh SIEM

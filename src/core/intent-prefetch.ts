@@ -760,6 +760,154 @@ const INTENT_MAP: Record<string, IntentGroup> = {
     tools:         ['gmail'],
     defaultParams: { action: 'list', max_results: 5 },
   },
+
+  // ── GitHub (repos / issues / PRs / notifications, read-only) ──
+  //
+  // Owns the github tool from the prefetch path. Without this group,
+  // smaller models (Mistral 24B observed in v0.5.31 testing) reliably
+  // mis-route 'what issues are assigned to me on github' to the web
+  // tool via native OpenAI tool_calls — 'github' is a less-trained
+  // tool name and 'issues' has strong web-search surface tokens. The
+  // description-tightening hotfixes in v0.5.31.2 and the registry
+  // reshuffle in v0.5.31.3 reduced but didn't eliminate this failure
+  // mode.
+  //
+  // The prefetch path eliminates the failure mode entirely: when 'github'
+  // appears in the message, this group fires, the github tool runs
+  // server-side with the right action, and the model just narrates the
+  // pre-fetched data. The model never gets to choose between web and
+  // github because the data is already in its context.
+  //
+  // KEYWORD STRATEGY
+  // ─────────────────────────────────────
+  // 'github' is the strong anchor — users mention it explicitly in
+  // ~all the failing-case queries observed. 'pull request' / 'pull
+  // requests' added because the phrase is unique to GitHub in normal
+  // usage. Not adding bare 'issues', 'repo', 'PR', 'README',
+  // 'notifications' — those have heavy false-positive risk against
+  // non-github contexts (issue tracking generally, code repos in any
+  // sense, project READMEs, system notifications, etc).
+  //
+  // Owner/repo references ('dumaki/NerdAlertAI') aren't matched by
+  // this group because keyword matching is .includes()-based; regex
+  // detection would require a special-case branch in detectIntent
+  // like datetime/calculate. Acceptable trade-off: the
+  // description-tightening hotfix in v0.5.31.2 already routes those
+  // queries correctly via the native tool loop. Add a regex gate here
+  // only if that regresses.
+  //
+  // PARAM EXTRACTION
+  // ─────────────────────────────────────
+  // The github tool has 11 actions; the paramExtractor picks the
+  // right one based on natural-language patterns in the message.
+  // Order matters — more specific patterns first so 'issues assigned
+  // to me' isn't stolen by a bare 'issues' check. All actions called
+  // here are read-only at L1 — safe to commit on prefetch.
+  //
+  // Default action: list_repos. Returns substantive data the model
+  // can narrate even when the query is vague ('show me github',
+  // 'github status'). whoami would also work as a default but gives
+  // less to narrate; list_repos answers the implicit 'what's on my
+  // github' that bare 'github' queries usually mean.
+  github: {
+    keywords: [
+      'github',
+      'pull request', 'pull requests',
+    ],
+    tools:         ['github'],
+    defaultParams: { action: 'list_repos', perPage: 10 },
+    paramExtractor: (msg: string) => {
+      const lower = msg.toLowerCase();
+
+      // ── owner/repo + README ──────────────────
+      // "read the README of dumaki/NerdAlertAI"
+      // Owner: starts with alphanumeric, then alphanumeric+dash
+      // Repo:  starts with alphanumeric, then alphanumeric+dash/dot/underscore
+      // The pattern won't match URL paths (those have extra slashes)
+      // or filesystem paths (those start with / or have many segments).
+      const ownerRepoMatch = msg.match(
+        /\b([a-zA-Z0-9][a-zA-Z0-9-]*)\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\b/,
+      );
+      if (ownerRepoMatch) {
+        const owner = ownerRepoMatch[1];
+        const repo  = ownerRepoMatch[2];
+        if (/\breadme\b/i.test(lower)) {
+          return { action: 'read_file', owner, repo, path: 'README.md' };
+        }
+        // Bare owner/repo reference — give the model the repo's
+        // metadata so it can answer 'tell me about X/Y' naturally.
+        return { action: 'repo_info', owner, repo };
+      }
+
+      // ── Issues assigned / authored / mentioning ──────────
+      // Combined check: both 'issue/issues' AND a relationship
+      // anchor must be present. Prevents bare 'issues' from
+      // stealing generic queries.
+      if (/\bissues?\b/i.test(lower)) {
+        if (/\b(assigned\s+to\s+me|my)\b/i.test(lower)) {
+          return { action: 'list_issues', filter: 'assigned' };
+        }
+        if (/\b(opened\s+by\s+me|created\s+by\s+me|i\s+(opened|created))\b/i.test(lower)) {
+          return { action: 'list_issues', filter: 'created' };
+        }
+        if (/\b(mention(ing|s|ed)?\s+me|@me)\b/i.test(lower)) {
+          return { action: 'list_issues', filter: 'mentioned' };
+        }
+        // 'github issues' with no specific relationship — default
+        // to assigned, which is what users almost always mean when
+        // they ask without qualifying.
+        return { action: 'list_issues', filter: 'assigned' };
+      }
+
+      // ── Pull requests ────────────────────────
+      // 'pull request' / 'PR' are anchored in keywords so we know
+      // we're in github territory; same relationship-anchor pattern
+      // as issues.
+      if (/\b(prs?|pull\s+requests?)\b/i.test(lower)) {
+        if (/\b(opened\s+by\s+me|created\s+by\s+me|i\s+(opened|created))\b/i.test(lower)) {
+          return { action: 'list_pulls', filter: 'created' };
+        }
+        if (/\b(mention(ing|s|ed)?\s+me|@me)\b/i.test(lower)) {
+          return { action: 'list_pulls', filter: 'mentioned' };
+        }
+        // Default for PR queries: assigned to me (review requests +
+        // direct assignment). Matches the natural 'what PRs are on
+        // my plate' phrasing.
+        return { action: 'list_pulls', filter: 'assigned' };
+      }
+
+      // ── Notifications ───────────────────────
+      // 'notifications' is broad enough to bear false-positive risk
+      // in non-github contexts (Telegram notifications, system
+      // notifications), but it's gated by the 'github' keyword that
+      // already triggered this group, so the user's message has
+      // already been confirmed as github-flavored.
+      if (/\bnotifications?\b/i.test(lower)) {
+        return { action: 'list_notifications' };
+      }
+
+      // ── Repos ───────────────────────────
+      // Same anchor logic. 'repo' / 'repos' / 'repository' /
+      // 'repositories' all match. Default action is list_repos so
+      // a bare 'my repos' is handled here; the regex below is for
+      // narrowing to specific sort/visibility filters in future.
+      if (/\brepos?(itor(y|ies))?\b/i.test(lower)) {
+        return { action: 'list_repos', perPage: 10 };
+      }
+
+      // ── Connection check ─────────────────────
+      // 'who am I' / 'am I connected' / 'my github account' —
+      // these want a connection check, not a data dump.
+      if (/\b(who\s+am\s+i|am\s+i\s+connected|my\s+github\s+account)\b/i.test(lower)) {
+        return { action: 'whoami' };
+      }
+
+      // Fall through to defaultParams (list_repos). Bare 'github'
+      // queries get a useful answer rather than a no-op whoami.
+      return undefined;
+    },
+  },
+
   weather: {
     keywords: ['weather', 'forecast', 'temperature', 'how cold', 'how hot',
                'how warm', 'rain', 'raining', 'snow', 'snowing', 'sunny',
