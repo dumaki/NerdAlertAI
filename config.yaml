@@ -23,6 +23,51 @@ agent:
 cron:
   enabled: true            # Master switch for the cron engine + cron_manager tool
 
+# --- HEARTBEAT MODULE ---
+# Periodic agent-judgment tick. Architecturally distinct from cron:
+#   - cron jobs are USER-AUTHORED schedules with their own job records
+#     and fire deterministic actions ("morning brief at 6am")
+#   - heartbeat is a SINGLE periodic pulse that asks registered module
+#     hooks "is anything worth surfacing?" and only invokes the LLM
+#     when at least one hook returns a signal
+#
+# Designed to avoid the OpenClaw heartbeat failure modes:
+#   - Hard session isolation: heartbeat NEVER touches the chat session
+#   - Deterministic gatekeeper: LLM is skipped when no hook signals
+#   - Bounded prompt builder: hard input-token cap, no full chat history
+#   - Hard tool-disable default: heartbeat runs cannot inherit chat tools
+#   - Output fingerprinting: dedup repeated alerts within a window
+#   - Token budget + circuit breaker: caps runaway cost and self-disables
+#     after consecutive errors
+#
+# Disabled by default. When false, no scheduler is registered, no hooks
+# are called, no boot init runs. Strict-superset preserved.
+heartbeat:
+  enabled: false
+  interval_minutes: 30           # how often the scheduler ticks
+
+  quiet_hours:
+    enabled: true
+    start: "23:00"               # local time (timezone below)
+    end:   "07:00"
+    timezone: "America/Chicago"  # set to your local timezone — IANA format (e.g. "Europe/London", "Asia/Tokyo")
+
+  budget:
+    per_tick_input_cap:  16000   # max input tokens for any single LLM call
+    per_day_token_cap:   500000  # cumulative input+output across all ticks per day
+
+  model:
+    # Default heartbeat model. Heartbeat should NOT burn paid tokens
+    # when a free local model is available. The v0.7 BYOK milestone
+    # will let smart-routing prefer this over the active chat model
+    # for any heartbeat invocation. Override per environment.
+    provider: "ollama"
+    name:     "mistral-small3.2:latest"
+
+  delivery:
+    target:        "telegram"    # where surfaced alerts route
+    routine_quiet: true          # routine signals batched, critical signals immediate
+
 # --- SERVER ---
 server:
   port: 3773               # Overridden by SERVER_PORT in .env if set
