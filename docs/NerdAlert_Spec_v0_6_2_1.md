@@ -1,7 +1,13 @@
 # NerdAlert Spec — v0.6.2.1
 
-**Status:** in-flight (dev branch)
-**Branch:** dev
+**Status:** shipped (dev + main, commit fed6f3d)
+**Verified:** 2026-05-17 — Ben confirmed UI consolidation tested
+clean on first try; dock icon toggles cards panel correctly,
+header buttons fire sendMessage with expected payloads, in-panel
+collapse arrow keeps dock icon highlight in sync, localStorage
+restore preserves expanded state across page reloads, slide-in
+coordination with Email/SOC/Settings/Export remains intact.
+**Branch:** dev → main (fast-forward)
 **Previous spec:** docs/NerdAlert_Spec_v0_6_2.md
 
 ## What this release does

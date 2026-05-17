@@ -43,7 +43,7 @@ cron:
 # Disabled by default. When false, no scheduler is registered, no hooks
 # are called, no boot init runs. Strict-superset preserved.
 heartbeat:
-  enabled: false
+  enabled: true
   interval_minutes: 30           # how often the scheduler ticks
 
   quiet_hours:

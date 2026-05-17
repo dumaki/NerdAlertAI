@@ -1,7 +1,12 @@
 # NerdAlert Spec — v0.6.2.2
 
-**Status:** in-flight (dev branch)
-**Branch:** dev
+**Status:** shipped (dev + main, commit 6c9ff91)
+**Verified:** 2026-05-17 — Ben confirmed the two previous failing
+test cases (chat-bubble on `project.nerdalert` and on a
+`user.*` / `person.*` subject) now correctly route to the
+memory tool with prefetched data. Mistral narrates from real
+memory records instead of misrouting to project / web / wikipedia.
+**Branch:** dev → main (fast-forward)
 **Previous spec:** docs/NerdAlert_Spec_v0_6_2_1.md
 
 ## What this release does
