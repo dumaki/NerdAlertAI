@@ -8489,11 +8489,22 @@ function escapeHtml(str) {
 
   window.injectMemoryPrompt = function(subject, event) {
     if (event) event.stopPropagation();
+    // v0.6.2.2: phrase the prompt so intent-prefetch's memory group
+    // fires server-side. "what do you remember" is an existing memory
+    // keyword in src/core/intent-prefetch.ts; the paramExtractor's
+    // aboutRe captures <subject> as the search query, prefetchTools
+    // injects real memory records into the system prompt, and Mistral
+    // narrates from data instead of guessing a tool. The old wording
+    // "Tell me about <subject>" had two problems: it didn't match any
+    // memory keyword (so prefetch never ran), and the literal word in
+    // structured subjects like "project.nerdalert" / "user.ben" cued
+    // Mistral toward the project / web tool instead of memory.
+    var prompt = 'What do you remember about ' + subject + '?';
     if (typeof window.sendMessage === 'function') {
-      window.sendMessage('Tell me about ' + subject);
+      window.sendMessage(prompt);
     } else {
       var input = document.getElementById('chat-input');
-      if (input) { input.value = 'Tell me about ' + subject; input.focus(); }
+      if (input) { input.value = prompt; input.focus(); }
     }
   };
 
