@@ -3373,6 +3373,29 @@
       font-size: 7px; letter-spacing: 1px;
       background: var(--cyan); color: var(--bg-deepest);
     }
+    /* v0.6.2.1: header actions row inside the expanded cards panel.
+       Replaces the old slide-in MEMORY ENGINE popout's two buttons.
+       Sits between .memory-panel-header (title + collapse arrow)
+       and .memory-panel-body (the People/Projects/General rows). */
+    .memory-panel-actions {
+      display: flex; flex-direction: column; gap: 6px;
+      padding: 10px 14px; border-bottom: 1px solid var(--border);
+      background: var(--bg-base);
+    }
+    .memory-panel-action {
+      width: 100%; padding: 6px 8px;
+      font-family: var(--font-mono); font-size: 9px; letter-spacing: 2px;
+      cursor: pointer; border-radius: 1px;
+      transition: all var(--transition-fast);
+    }
+    .memory-panel-action.primary {
+      color: var(--cyan); background: var(--cyan-dim); border: 1px solid var(--cyan-mid);
+    }
+    .memory-panel-action.primary:hover { background: var(--cyan-mid); }
+    .memory-panel-action.secondary {
+      color: var(--text-dim); background: transparent; border: 1px solid var(--border);
+    }
+    .memory-panel-action.secondary:hover { color: var(--cyan); border-color: var(--cyan-mid); }
   </style>
 </head>
 <body>
@@ -3622,6 +3645,17 @@
       <div class="memory-panel-header">
         <span class="memory-panel-title">MEMORY</span>
         <span class="memory-panel-collapse" onclick="toggleMemoryPanel()" title="Collapse">&rsaquo;</span>
+      </div>
+      <!-- v0.6.2.1: header actions row. Replaces the old slide-in
+           MEMORY ENGINE popout's two buttons. Same sendMessage calls,
+           same payloads — just relocated to live alongside the cards. -->
+      <div class="memory-panel-actions">
+        <button class="memory-panel-action primary" onclick="sendMessage('what do you remember about me')">
+          WHAT DO YOU REMEMBER?
+        </button>
+        <button class="memory-panel-action secondary" onclick="sendMessage('show me recent memory entries')">
+          RECENT ENTRIES
+        </button>
       </div>
       <div class="memory-panel-body">
         <section class="memory-row">
@@ -4912,7 +4946,22 @@
     // Open or close the panel based on view
     if (view === 'email')    { openPanel('email'); loadEmailPanel(); return; }
     if (view === 'soc')      { openPanel('soc'); loadSOCWall(); return; }
-    if (view === 'memory')   { openPanel('memory');   return; }
+    // v0.6.2.1: memory dock icon toggles the right-edge cards panel
+    // instead of opening the slide-in. The old MEMORY ENGINE slide-in
+    // (2-button popout) is gone; its buttons live inside the cards
+    // panel header now. If a different slide-in is currently open, we
+    // close it first so the cards panel can slide back in cleanly
+    // (the .app.panel-open coordination rule keeps memory offscreen
+    // while a slide-in is open).
+    if (view === 'memory') {
+      if (document.getElementById('app').classList.contains('panel-open')) {
+        closePanel();
+      }
+      if (typeof window.toggleMemoryPanel === 'function') {
+        window.toggleMemoryPanel();
+      }
+      return;
+    }
     if (view === 'export')   { openPanel('export');   return; }
     if (view === 'settings') { openPanel('settings'); return; }
     if (view === 'chat')     { closePanel(); }
@@ -4937,9 +4986,6 @@
     } else if (type === 'soc') {
       title.textContent = 'SOC MONITOR';
       body.innerHTML = getSOCPanelHTML();
-    } else if (type === 'memory') {
-      title.textContent = 'MEMORY ENGINE';
-      body.innerHTML = getMemoryPanelHTML();
     } else if (type === 'export') {
       title.textContent = 'EXPORT';
       body.innerHTML = getExportPanelHTML();
@@ -5080,23 +5126,6 @@
         </div>
       `;
     }
-  }
-
-  function getMemoryPanelHTML() {
-    return `
-      <div style="font-size:9px;color:var(--text-muted);letter-spacing:1px;margin-bottom:12px">
-        MEMORY ENGINE // TF-IDF INDEX
-      </div>
-      <div style="font-size:11px;color:var(--text-dim);line-height:1.7">
-        Ask ${activeAgentName} what he remembers:<br><br>
-      </div>
-      <button onclick="sendMessage('what do you remember about me')" style="width:100%;padding:8px;font-family:var(--font-mono);font-size:9px;letter-spacing:2px;color:var(--cyan);background:var(--cyan-dim);border:1px solid var(--cyan-mid);cursor:pointer;border-radius:1px;margin-bottom:8px">
-        WHAT DO YOU REMEMBER?
-      </button>
-      <button onclick="sendMessage('show me recent memory entries')" style="width:100%;padding:8px;font-family:var(--font-mono);font-size:9px;letter-spacing:2px;color:var(--text-dim);background:transparent;border:1px solid var(--border);cursor:pointer;border-radius:1px">
-        RECENT ENTRIES
-      </button>
-    `;
   }
 
   async function switchModel(model) {
@@ -8420,6 +8449,14 @@ function escapeHtml(str) {
       if (stored === 'true') {
         var p = panelEl();
         if (p) { p.classList.remove('collapsed'); p.classList.add('expanded'); }
+        // v0.6.2.1: if the panel restores expanded, reflect that on
+        // the dock icon too. Chat icon's default active state is set
+        // in the rendered HTML; clear it here so only one dock icon
+        // shows as active.
+        var memIcon = document.querySelector('.dock-icon[data-view="memory"]');
+        var chatIcon = document.querySelector('.dock-icon[data-view="chat"]');
+        if (memIcon) memIcon.classList.add('active');
+        if (chatIcon) chatIcon.classList.remove('active');
       }
     } catch (e) { /* localStorage disabled \u2014 fine */ }
     poll();
@@ -8433,6 +8470,16 @@ function escapeHtml(str) {
     p.classList.toggle('collapsed');
     p.classList.toggle('expanded');
     try { localStorage.setItem(LS_KEY, willExpand ? 'true' : 'false'); } catch (e) { /* */ }
+    // v0.6.2.1: keep the dock icon's active state in sync with the
+    // panel's expand state. Without this, collapsing via the panel's
+    // own arrow would leave the memory dock icon stuck visually
+    // active. Mirror the same pattern switchView/closePanel use:
+    // clear all dock icons, then mark the one that reflects the
+    // current view.
+    document.querySelectorAll('.dock-icon').forEach(function(i) { i.classList.remove('active'); });
+    var targetView = willExpand ? 'memory' : 'chat';
+    var dockIcon = document.querySelector('.dock-icon[data-view="' + targetView + '"]');
+    if (dockIcon) dockIcon.classList.add('active');
   };
 
   window.toggleMemoryCard = function(cardEl, event) {
