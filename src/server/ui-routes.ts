@@ -70,6 +70,8 @@ import {
   streamMonitorPolls,
 } from './soc-wall';
 import { subscribe as subscribeTimers, listTimers } from './timer-state';
+import { mountHeartbeatRoutes }    from './heartbeat-routes';
+import { mountMemoryCardsRoute }   from './memory-cards-route';
 import type { Source } from '../types/response.types';
 
 // ── New layer imports ────────────────────────────────────────
@@ -1591,5 +1593,14 @@ export function mountUIRoutes(app: Express): void {
   app.get('/api/timer/list', (_req: Request, res: Response) => {
     res.json({ ok: true, timers: listTimers() });
   });
+
+  // ── v0.6.2 admin surfaces ─────────────────────────────
+  // Heartbeat status pill + memory side panel. Both are pure
+  // read-only routes that consume existing public exports;
+  // mounted here at the bottom of mountUIRoutes so the order
+  // matches the existing convention (one mount function per
+  // top-level surface in this file).
+  mountHeartbeatRoutes(app);
+  mountMemoryCardsRoute(app);
 
 }

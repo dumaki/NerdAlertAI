@@ -3165,6 +3165,214 @@
       color: var(--text);
     }
     .host-suggestion-icon { flex-shrink: 0; margin-top: 1px; }
+
+    /* ==========================================================
+       v0.6.2 — Heartbeat status pill (topbar)
+       ========================================================== */
+    .topbar-heartbeat[hidden] { display: none; }
+    .heartbeat-pill {
+      min-width: auto;
+      padding: 4px 9px;
+      gap: 6px;
+      font-size: 9px;
+      letter-spacing: 1.5px;
+    }
+    .heartbeat-icon  { font-size: 11px; line-height: 1; filter: drop-shadow(0 0 4px currentColor); }
+    .heartbeat-summary { white-space: nowrap; font-variant-numeric: tabular-nums; }
+    /* State colors — single class flip swaps all visual cues at once */
+    .heartbeat-pill-green { color: var(--green); border-color: var(--green); }
+    .heartbeat-pill-green:hover,
+    .topbar-dropdown.open .heartbeat-pill-green {
+      background: var(--green-dim); text-shadow: 0 0 6px var(--green);
+    }
+    .heartbeat-pill-amber { color: var(--amber); border-color: var(--amber); }
+    .heartbeat-pill-amber:hover,
+    .topbar-dropdown.open .heartbeat-pill-amber {
+      background: var(--amber-dim); text-shadow: 0 0 6px var(--amber);
+    }
+    .heartbeat-pill-red { color: var(--red); border-color: var(--red); }
+    .heartbeat-pill-red:hover,
+    .topbar-dropdown.open .heartbeat-pill-red {
+      background: var(--red-dim); text-shadow: 0 0 6px var(--red);
+    }
+    .heartbeat-menu { min-width: 320px; max-width: 380px; padding: 8px; }
+    .heartbeat-menu-section { margin-bottom: 8px; }
+    .heartbeat-menu-section:last-child { margin-bottom: 0; }
+    .heartbeat-menu-title {
+      font-family: var(--font-mono); font-size: 8px; letter-spacing: 2px;
+      color: var(--text-dim); text-transform: uppercase;
+      padding: 0 4px 4px; border-bottom: 1px solid var(--border); margin-bottom: 4px;
+    }
+    .heartbeat-tick-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 4px 6px;
+      font-family: var(--font-mono); font-size: 9px; color: var(--text);
+      border-radius: 1px;
+    }
+    .heartbeat-tick-row:hover { background: var(--bg-elevated); }
+    .heartbeat-tick-time { color: var(--text-dim); flex-shrink: 0; width: 70px; }
+    .heartbeat-tick-status { flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; }
+    .heartbeat-tick-status.ok      { background: var(--green); box-shadow: 0 0 4px var(--green); }
+    .heartbeat-tick-status.skip    { background: var(--text-dim); }
+    .heartbeat-tick-status.error   { background: var(--red);   box-shadow: 0 0 4px var(--red); }
+    .heartbeat-tick-status.silent  { background: var(--border); }
+    .heartbeat-tick-detail {
+      flex: 1; color: var(--text-dim); font-size: 8px; letter-spacing: 0.5px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .heartbeat-reset-btn {
+      width: 100%; padding: 6px;
+      background: var(--red-dim); border: 1px solid var(--red); color: var(--red);
+      font-family: var(--font-mono); font-size: 9px; letter-spacing: 2px;
+      text-transform: uppercase; cursor: pointer; border-radius: 1px;
+      transition: all var(--transition-fast);
+    }
+    .heartbeat-reset-btn:hover {
+      background: var(--red); color: var(--bg-deepest); text-shadow: 0 0 4px var(--red);
+    }
+    .heartbeat-empty {
+      padding: 8px 6px; font-family: var(--font-mono); font-size: 9px;
+      letter-spacing: 1px; color: var(--text-dim); text-align: center; font-style: italic;
+    }
+    .heartbeat-error-text {
+      padding: 4px 6px; font-family: var(--font-mono); font-size: 8px;
+      color: var(--red); word-break: break-word;
+    }
+
+    /* ==========================================================
+       v0.6.2 — Memory side panel (right rail)
+       ========================================================== */
+    .memory-panel {
+      position: fixed; right: 0; top: 40px; bottom: 0;
+      background: var(--bg-raised); border-left: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      z-index: 50;
+      transition: width 0.18s ease, transform 0.18s ease;
+      overflow: hidden;
+    }
+    /* Hide our memory panel when the slide-in side-panel is open,
+       so the side-panel’s close X and right edge stay accessible.
+       State is preserved via localStorage, so return is instantaneous
+       on closePanel(). pointer-events:none prevents the off-screen panel
+       from intercepting clicks while it’s out of view. */
+    .app.panel-open .memory-panel {
+      transform: translateX(100%);
+      pointer-events: none;
+    }
+    /* The chat input bar normally extends to the viewport right
+       edge, where our 32px memory strip overlays it. Add right
+       padding so the SEND button keeps clearance from the strip.
+       When the side-panel is open the strip is hidden, so we
+       restore the original symmetric padding. */
+    .chat-input-bar { padding-right: 60px; }
+    .app.panel-open .chat-input-bar { padding-right: 28px; }
+    .memory-panel.collapsed { width: 32px; }
+    .memory-panel.expanded  { width: 340px; }
+    .memory-panel-strip {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: space-between;
+      width: 32px; height: 100%; padding: 14px 0;
+      cursor: pointer; user-select: none;
+      border-right: 1px solid var(--border);
+    }
+    .memory-panel.expanded .memory-panel-strip { display: none; }
+    .memory-panel-strip:hover { background: var(--cyan-dim); }
+    .memory-panel-strip:hover .memory-panel-label { color: var(--cyan); }
+    .memory-panel-label {
+      writing-mode: vertical-rl; transform: rotate(180deg);
+      font-family: var(--font-mono); font-size: 9px; letter-spacing: 4px;
+      color: var(--text-dim); text-transform: uppercase;
+      transition: color var(--transition-fast);
+    }
+    .memory-panel-badges { display: flex; flex-direction: column; gap: 4px; align-items: center; }
+    .memory-badge {
+      width: 22px; padding: 2px 0;
+      font-family: var(--font-mono); font-size: 8px; letter-spacing: 1px;
+      text-align: center; color: var(--text-dim);
+      background: var(--bg-elevated); border: 1px solid var(--border);
+      border-radius: 1px; font-variant-numeric: tabular-nums;
+    }
+    .memory-panel-expanded { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+    .memory-panel.expanded .memory-panel-expanded { display: flex; }
+    .memory-panel-header {
+      display: flex; align-items: center;
+      padding: 10px 14px; border-bottom: 1px solid var(--border);
+      background: var(--bg-base);
+    }
+    .memory-panel-title {
+      flex: 1; font-family: var(--font-mono); font-size: 10px;
+      letter-spacing: 3px; color: var(--cyan); text-shadow: 0 0 6px var(--cyan);
+      text-transform: uppercase;
+    }
+    .memory-panel-collapse {
+      cursor: pointer; font-size: 14px; color: var(--text-dim);
+      padding: 0 4px; user-select: none; transition: color var(--transition-fast);
+    }
+    .memory-panel-collapse:hover { color: var(--cyan); }
+    .memory-panel-body { flex: 1; overflow-y: auto; padding: 8px 10px; }
+    .memory-row { margin-bottom: 14px; }
+    .memory-row:last-child { margin-bottom: 0; }
+    .memory-row-title {
+      display: flex; align-items: center; gap: 8px; margin: 0 0 6px;
+      font-family: var(--font-mono); font-size: 9px; letter-spacing: 2px;
+      color: var(--text-dim); text-transform: uppercase; font-weight: normal;
+    }
+    .memory-row-count {
+      display: inline-block; min-width: 18px; padding: 1px 5px;
+      background: var(--bg-elevated); border: 1px solid var(--border);
+      color: var(--text-dim); font-size: 8px; letter-spacing: 0;
+      text-align: center; border-radius: 1px; font-variant-numeric: tabular-nums;
+    }
+    .memory-row-cards { display: flex; flex-direction: column; gap: 4px; }
+    .memory-row-empty {
+      padding: 8px 4px; font-family: var(--font-mono); font-size: 9px;
+      color: var(--text-dim); font-style: italic;
+    }
+    .memory-card {
+      background: var(--bg-base); border: 1px solid var(--border); border-radius: 1px;
+      padding: 6px 8px; cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .memory-card:hover { border-color: var(--cyan-mid); background: var(--bg-elevated); }
+    .memory-card-row-1 { display: flex; align-items: center; gap: 6px; }
+    .memory-card-subject {
+      flex: 1; font-family: var(--font-mono); font-size: 9px; letter-spacing: 1px;
+      color: var(--cyan);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .memory-card-chat {
+      cursor: pointer; font-size: 11px; color: var(--text-dim);
+      padding: 0 4px; border-radius: 1px;
+      transition: all var(--transition-fast); flex-shrink: 0;
+    }
+    .memory-card-chat:hover { color: var(--cyan); text-shadow: 0 0 4px var(--cyan); }
+    .memory-card-snippet {
+      margin-top: 4px; font-size: 10px; line-height: 1.4; color: var(--text);
+      overflow: hidden;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    }
+    .memory-card.expanded .memory-card-snippet {
+      -webkit-line-clamp: unset; display: block;
+    }
+    .memory-card-meta {
+      margin-top: 4px; font-family: var(--font-mono); font-size: 8px;
+      letter-spacing: 0.5px; color: var(--text-dim);
+      display: flex; gap: 8px;
+    }
+    .memory-card-dreaming-icon {
+      color: var(--amber); margin-right: 4px;
+      filter: drop-shadow(0 0 3px var(--amber));
+    }
+    .memory-card-active-project {
+      border-color: var(--cyan-mid); background: var(--cyan-dim);
+    }
+    .memory-card-active-project .memory-card-subject { text-shadow: 0 0 4px var(--cyan); }
+    .memory-card-active-project::before {
+      content: 'ACTIVE'; display: inline-block;
+      padding: 1px 4px; margin-right: 6px;
+      font-size: 7px; letter-spacing: 1px;
+      background: var(--cyan); color: var(--bg-deepest);
+    }
   </style>
 </head>
 <body>
@@ -3233,6 +3441,22 @@
     </div>
 
     <div class="topbar-status">
+      <!-- v0.6.2 — Heartbeat status pill. Hidden until the first
+           /api/heartbeat/status response confirms enabled:true. -->
+      <div class="topbar-dropdown topbar-heartbeat" id="heartbeat-dropdown" hidden>
+        <button class="topbar-dropdown-trigger heartbeat-pill heartbeat-pill-green"
+                id="heartbeat-trigger"
+                onclick="toggleHeartbeatPill(event)"
+                aria-label="Heartbeat status">
+          <span class="heartbeat-icon">&#9829;</span>
+          <span class="heartbeat-summary" id="heartbeat-summary">&mdash;</span>
+          <span class="dropdown-chev">&#9662;</span>
+        </button>
+        <div class="topbar-dropdown-menu heartbeat-menu" id="heartbeat-menu">
+          <!-- Populated by JS on each status poll -->
+        </div>
+      </div>
+
       <div class="status-indicator">
         <div class="status-dot" id="status-dot"></div>
         <span id="status-text"></span>
@@ -3380,6 +3604,39 @@
     </div>
     <div class="panel-body" id="panel-body">
       <!-- Content injected by JavaScript -->
+    </div>
+  </aside>
+  <!-- v0.6.2 \u2014 Memory side panel. Always present (memory tool is
+       always on in shipped config); starts collapsed-strip per design.
+       Expanded state persists per-session via localStorage. -->
+  <aside class="memory-panel collapsed" id="memory-panel">
+    <div class="memory-panel-strip" onclick="toggleMemoryPanel()">
+      <span class="memory-panel-label">MEMORY</span>
+      <div class="memory-panel-badges">
+        <span class="memory-badge" id="memory-badge-people">&middot;</span>
+        <span class="memory-badge" id="memory-badge-projects">&middot;</span>
+        <span class="memory-badge" id="memory-badge-general">&middot;</span>
+      </div>
+    </div>
+    <div class="memory-panel-expanded">
+      <div class="memory-panel-header">
+        <span class="memory-panel-title">MEMORY</span>
+        <span class="memory-panel-collapse" onclick="toggleMemoryPanel()" title="Collapse">&rsaquo;</span>
+      </div>
+      <div class="memory-panel-body">
+        <section class="memory-row">
+          <h4 class="memory-row-title">PEOPLE <span class="memory-row-count" id="memory-row-count-people">0</span></h4>
+          <div class="memory-row-cards" id="memory-cards-people"></div>
+        </section>
+        <section class="memory-row">
+          <h4 class="memory-row-title">PROJECTS <span class="memory-row-count" id="memory-row-count-projects">0</span></h4>
+          <div class="memory-row-cards" id="memory-cards-projects"></div>
+        </section>
+        <section class="memory-row">
+          <h4 class="memory-row-title">GENERAL <span class="memory-row-count" id="memory-row-count-general">0</span></h4>
+          <div class="memory-row-cards" id="memory-cards-general"></div>
+        </section>
+      </div>
     </div>
   </aside>
 
@@ -4705,7 +4962,14 @@
 
   function closePanel() {
     closeSOCStream();
-    document.getElementById('app').classList.remove('panel-open');
+    var _app = document.getElementById('app');
+    _app.classList.remove('panel-open');
+    // v0.6.2: clear the inline gridTemplateColumns the resize handler
+    // sets. Inline style otherwise overrides the default CSS rule that
+    // collapses the third column back to 0px, leaving the side-panel
+    // visible after a drag-resize + close sequence. Reset means the
+    // next open returns to the default 320px width.
+    _app.style.gridTemplateColumns = '';
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     document.getElementById('nav-chat')?.classList.add('active');
     document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
@@ -7816,6 +8080,382 @@ function escapeHtml(str) {
   }
 
 
+
+// ==========================================================
+// v0.6.2 \u2014 Heartbeat status pill (topbar)
+// ==========================================================
+// Polls /api/heartbeat/status every 30s. When enabled:false,
+// the pill stays hidden in the DOM (strict invisibility per
+// handoff Q5). When enabled:true, renders the summary + color
+// state and populates the dropdown menu on each poll.
+//
+// Short-circuit on no-change: previous response is held in
+// prevStatusJSON; if the new response stringifies identically,
+// DOM is left untouched. Per handoff: "99% of polls return
+// identical data and can short-circuit the render path."
+// ==========================================================
+
+(function setupHeartbeatPill() {
+  var POLL_MS = 30000;
+  var prevStatusJSON = null;
+  var pollTimer = null;
+
+  function pillEl()    { return document.getElementById('heartbeat-dropdown'); }
+  function trigger()   { return document.getElementById('heartbeat-trigger'); }
+  function summaryEl() { return document.getElementById('heartbeat-summary'); }
+  function menuEl()    { return document.getElementById('heartbeat-menu'); }
+
+  function relativeTime(iso) {
+    if (!iso) return 'never';
+    var ms = Date.now() - new Date(iso).getTime();
+    if (ms < 60000) return 'just now';
+    if (ms < 3600000) return Math.floor(ms / 60000) + 'm ago';
+    if (ms < 86400000) return Math.floor(ms / 3600000) + 'h ago';
+    return Math.floor(ms / 86400000) + 'd ago';
+  }
+
+  function formatTokens(n) {
+    if (n < 1000) return String(n);
+    if (n < 100000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+    return Math.round(n / 1000) + 'k';
+  }
+
+  function colorFor(status) {
+    if (!status || !status.budget) return 'heartbeat-pill-green';
+    var b = status.budget;
+    if (b.errorCircuitOpen) return 'heartbeat-pill-amber';
+    if (b.tokensToday / b.perDayTokenCap > 0.8) return 'heartbeat-pill-amber';
+    var ticks = status.recentTicks || [];
+    var last = ticks.length ? ticks[ticks.length - 1] : null;
+    if (last && last.error) return 'heartbeat-pill-red';
+    return 'heartbeat-pill-green';
+  }
+
+  function summaryText(status) {
+    if (!status || !status.lastTickAt) return 'idle';
+    if (status.budget && status.budget.errorCircuitOpen) return 'circuit open';
+    var rel = relativeTime(status.lastTickAt);
+    var used = formatTokens(status.budget.tokensToday);
+    var cap  = formatTokens(status.budget.perDayTokenCap);
+    return rel + ' \u00b7 ' + used + '/' + cap;
+  }
+
+  function escapeHTML(s) {
+    return String(s).replace(/[&<>"']/g, function(c) {
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+
+  function renderMenu(status) {
+    var menu = menuEl();
+    if (!menu) return;
+    var ticks = (status.recentTicks || []).slice().reverse();
+    var parts = [];
+
+    parts.push('<div class="heartbeat-menu-section">');
+    parts.push('<div class="heartbeat-menu-title">RECENT TICKS</div>');
+    if (ticks.length === 0) {
+      parts.push('<div class="heartbeat-empty">No ticks yet</div>');
+    } else {
+      for (var i = 0; i < ticks.length; i++) {
+        var t = ticks[i];
+        var kind = 'silent', detail = 'idle';
+        if (t.error) { kind = 'error'; detail = 'error: ' + String(t.error).slice(0, 50); }
+        else if (t.skipped) { kind = 'skip'; detail = 'skipped: ' + t.skipped; }
+        else if (t.notificationSent) {
+          kind = 'ok';
+          detail = ((t.signals && t.signals.length) || 0) + ' signal(s) delivered';
+        }
+        else if (t.signals && t.signals.length) {
+          kind = 'ok'; detail = t.signals.length + ' signal(s)';
+        }
+        var tokens = '';
+        if (t.tokensUsed) {
+          tokens = ' \u00b7 ' + ((t.tokensUsed.input || 0) + (t.tokensUsed.output || 0)) + 'tk';
+        }
+        parts.push('<div class="heartbeat-tick-row">');
+        parts.push('<span class="heartbeat-tick-time">' + escapeHTML(relativeTime(t.endedAt || t.startedAt)) + '</span>');
+        parts.push('<span class="heartbeat-tick-status ' + kind + '"></span>');
+        parts.push('<span class="heartbeat-tick-detail">' + escapeHTML(detail + tokens) + '</span>');
+        parts.push('</div>');
+      }
+    }
+    parts.push('</div>');
+
+    var lastDisplayed = ticks[0];
+    if (lastDisplayed && lastDisplayed.error) {
+      parts.push('<div class="heartbeat-menu-section">');
+      parts.push('<div class="heartbeat-menu-title">LAST ERROR</div>');
+      parts.push('<div class="heartbeat-error-text">' + escapeHTML(lastDisplayed.error) + '</div>');
+      parts.push('</div>');
+    }
+
+    if (status.budget && status.budget.errorCircuitOpen) {
+      parts.push('<div class="heartbeat-menu-section">');
+      parts.push('<div class="heartbeat-menu-title">CIRCUIT OPEN</div>');
+      if (status.budget.errorCircuitOpenedAt) {
+        parts.push('<div class="heartbeat-error-text">Tripped ' +
+          escapeHTML(relativeTime(status.budget.errorCircuitOpenedAt)) + '</div>');
+      }
+      parts.push('<button class="heartbeat-reset-btn" onclick="resetHeartbeatCircuit(event)">RESET CIRCUIT</button>');
+      parts.push('</div>');
+    }
+
+    menu.innerHTML = parts.join('');
+  }
+
+  function applyStatus(status) {
+    var el = pillEl();
+    if (!el) return;
+    if (!status || !status.enabled) {
+      el.setAttribute('hidden', '');
+      return;
+    }
+    el.removeAttribute('hidden');
+
+    var btn = trigger();
+    if (btn) {
+      btn.classList.remove('heartbeat-pill-green', 'heartbeat-pill-amber', 'heartbeat-pill-red');
+      btn.classList.add(colorFor(status));
+    }
+    var s = summaryEl();
+    if (s) s.textContent = summaryText(status);
+    renderMenu(status);
+  }
+
+  function poll() {
+    return fetch('/api/heartbeat/status', {
+      headers: { 'Authorization': 'Bearer ' + window.NERDALERT_CONFIG.token }
+    }).then(function(res) {
+      if (!res.ok) return null;
+      return res.json();
+    }).then(function(data) {
+      if (!data) return;
+      var json = JSON.stringify(data);
+      if (json === prevStatusJSON) return;
+      prevStatusJSON = json;
+      applyStatus(data);
+    }).catch(function(err) {
+      console.warn('[heartbeat-pill] poll failed:', err);
+    });
+  }
+
+  function startPolling() {
+    poll();
+    pollTimer = setInterval(poll, POLL_MS);
+  }
+
+  window.toggleHeartbeatPill = function(event) {
+    event.stopPropagation();
+    var el = pillEl();
+    if (el) el.classList.toggle('open');
+  };
+
+  window.resetHeartbeatCircuit = function(event) {
+    event.stopPropagation();
+    fetch('/api/heartbeat/reset-circuit', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + window.NERDALERT_CONFIG.token }
+    }).then(function(res) {
+      if (res.ok) {
+        prevStatusJSON = null;
+        return poll();
+      }
+    }).catch(function(err) {
+      console.warn('[heartbeat-pill] reset failed:', err);
+    });
+  };
+
+  document.addEventListener('click', function(e) {
+    var el = pillEl();
+    if (!el || !el.classList.contains('open')) return;
+    if (!el.contains(e.target)) el.classList.remove('open');
+  });
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startPolling);
+  } else {
+    startPolling();
+  }
+})();
+
+// ==========================================================
+// v0.6.2 \u2014 Memory side panel (right rail)
+// ==========================================================
+// Same shape as the heartbeat pill: 30s polling, short-circuit
+// on no-change, IIFE-scoped with window.X handlers for inline
+// onclick.
+//
+// localStorage key 'nerdalert.memoryPanelExpanded' persists
+// the expand/collapse state per browser. Default is collapsed.
+// ==========================================================
+
+(function setupMemoryPanel() {
+  var POLL_MS = 30000;
+  var LS_KEY  = 'nerdalert.memoryPanelExpanded';
+  var prevCardsJSON = null;
+  var pollTimer = null;
+
+  function panelEl() { return document.getElementById('memory-panel'); }
+
+  function escapeHTML(s) {
+    return String(s).replace(/[&<>"']/g, function(c) {
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+
+  function escapeAttr(s) {
+    // For inline single-quoted onclick payloads. Encodes both
+    // quote variants and the ampersand so the resulting HTML
+    // parses safely.
+    return String(s).replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+  }
+
+  function relativeTime(iso) {
+    if (!iso) return '';
+    var ms = Date.now() - new Date(iso).getTime();
+    if (ms < 60000) return 'just now';
+    if (ms < 3600000) return Math.floor(ms / 60000) + 'm';
+    if (ms < 86400000) return Math.floor(ms / 3600000) + 'h';
+    return Math.floor(ms / 86400000) + 'd';
+  }
+
+  function renderMemoryCard(card) {
+    if (card.kind === 'active-project') {
+      var preview = (card.contextPreview && card.contextPreview.trim())
+        ? escapeHTML(card.contextPreview)
+        : '<em>No NERDALERT.md in this project yet.</em>';
+      var nameAttr = escapeAttr(card.name);
+      return [
+        '<div class="memory-card memory-card-active-project" onclick="toggleMemoryCard(this, event)">',
+        '<div class="memory-card-row-1">',
+        '<span class="memory-card-subject">', escapeHTML(card.name), '</span>',
+        '<span class="memory-card-chat" onclick="injectMemoryPrompt(\'', nameAttr, '\', event)" title="Ask agent about this">&#128172;</span>',
+        '</div>',
+        '<div class="memory-card-snippet">', preview, '</div>',
+        '</div>'
+      ].join('');
+    }
+
+    var dreamingIcon = card.isDreamingSynthesis
+      ? '<span class="memory-card-dreaming-icon" title="From heartbeat dreaming">&#10024;</span>'
+      : '';
+    var meta = [];
+    if (card.lastAccessed) meta.push(relativeTime(card.lastAccessed));
+    if (typeof card.confidence === 'number') meta.push('conf ' + card.confidence.toFixed(2));
+    if (card.tags && card.tags.length) meta.push(card.tags.slice(0, 3).join(', '));
+
+    var subjectAttr = escapeAttr(card.subject);
+    return [
+      '<div class="memory-card" onclick="toggleMemoryCard(this, event)">',
+      '<div class="memory-card-row-1">',
+      dreamingIcon,
+      '<span class="memory-card-subject">', escapeHTML(card.subject), '</span>',
+      '<span class="memory-card-chat" onclick="injectMemoryPrompt(\'', subjectAttr, '\', event)" title="Ask agent about this">&#128172;</span>',
+      '</div>',
+      '<div class="memory-card-snippet">', escapeHTML(card.content), '</div>',
+      meta.length ? '<div class="memory-card-meta">' + escapeHTML(meta.join(' \u00b7 ')) + '</div>' : '',
+      '</div>'
+    ].join('');
+  }
+
+  function renderRow(elId, cards) {
+    var el = document.getElementById(elId);
+    if (!el) return;
+    if (!cards || cards.length === 0) {
+      el.innerHTML = '<div class="memory-row-empty">Nothing yet</div>';
+      return;
+    }
+    el.innerHTML = cards.map(renderMemoryCard).join('');
+  }
+
+  function applyCards(data) {
+    if (!data || !data.ok) return;
+    var peopleCount = (data.people || []).length;
+    var projectsCount = (data.projects || []).length;
+    var generalCount = (data.general || []).length;
+
+    function setBadge(id, n) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = n === 0 ? '\u00b7' : (n > 99 ? '99' : String(n));
+    }
+    setBadge('memory-badge-people',   peopleCount);
+    setBadge('memory-badge-projects', projectsCount);
+    setBadge('memory-badge-general',  generalCount);
+
+    function setRowCount(id, n) {
+      var el = document.getElementById(id);
+      if (el) el.textContent = String(n);
+    }
+    setRowCount('memory-row-count-people',   peopleCount);
+    setRowCount('memory-row-count-projects', projectsCount);
+    setRowCount('memory-row-count-general',  generalCount);
+
+    renderRow('memory-cards-people',   data.people);
+    renderRow('memory-cards-projects', data.projects);
+    renderRow('memory-cards-general',  data.general);
+  }
+
+  function poll() {
+    return fetch('/api/memory/cards', {
+      headers: { 'Authorization': 'Bearer ' + window.NERDALERT_CONFIG.token }
+    }).then(function(res) {
+      if (!res.ok) return null;
+      return res.json();
+    }).then(function(data) {
+      if (!data) return;
+      var json = JSON.stringify(data);
+      if (json === prevCardsJSON) return;
+      prevCardsJSON = json;
+      applyCards(data);
+    }).catch(function(err) {
+      console.warn('[memory-panel] poll failed:', err);
+    });
+  }
+
+  function startPolling() {
+    try {
+      var stored = localStorage.getItem(LS_KEY);
+      if (stored === 'true') {
+        var p = panelEl();
+        if (p) { p.classList.remove('collapsed'); p.classList.add('expanded'); }
+      }
+    } catch (e) { /* localStorage disabled \u2014 fine */ }
+    poll();
+    pollTimer = setInterval(poll, POLL_MS);
+  }
+
+  window.toggleMemoryPanel = function() {
+    var p = panelEl();
+    if (!p) return;
+    var willExpand = p.classList.contains('collapsed');
+    p.classList.toggle('collapsed');
+    p.classList.toggle('expanded');
+    try { localStorage.setItem(LS_KEY, willExpand ? 'true' : 'false'); } catch (e) { /* */ }
+  };
+
+  window.toggleMemoryCard = function(cardEl, event) {
+    if (event && event.target && event.target.classList.contains('memory-card-chat')) return;
+    cardEl.classList.toggle('expanded');
+  };
+
+  window.injectMemoryPrompt = function(subject, event) {
+    if (event) event.stopPropagation();
+    if (typeof window.sendMessage === 'function') {
+      window.sendMessage('Tell me about ' + subject);
+    } else {
+      var input = document.getElementById('chat-input');
+      if (input) { input.value = 'Tell me about ' + subject; input.focus(); }
+    }
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startPolling);
+  } else {
+    startPolling();
+  }
+})();
 </script>
 </body>
 </html>
