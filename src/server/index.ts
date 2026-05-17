@@ -25,6 +25,13 @@ import { mountMemoryRoutes, logMemoryBootCapability } from './memory-routes';
 import { runBackfill } from '../memory/backfill';
 import { startTelegram } from '../telegram';
 import { startCron, stopCron, setCronStatusEmitter } from '../cron';
+import {
+  initBudget,
+  initHeartbeatStore,
+  registerBuiltinHooks,
+  startHeartbeat,
+  stopHeartbeat,
+} from '../heartbeat';
 import { startReminders, stopReminders } from '../reminders';
 import { initGmailCredential } from '../gmail/config';
 import { initGithubCredential } from '../github/config';
@@ -338,6 +345,38 @@ startTelegram().catch((err: unknown) => {
     console.error('[Cron] Failed to start:', err);
   });
 
+  // ── Heartbeat engine (v0.6.1) ─────────────────────────
+  // Periodic agent-judgment tick. Architecturally distinct
+  // from cron — hooks ask "is anything worth surfacing?"
+  // and the LLM is only invoked when at least one hook says
+  // yes. Hard isolation from chat session, hard budget cap,
+  // circuit breaker against retry storms.
+  //
+  // Strict-superset gate: when heartbeat.enabled is false in
+  // config.yaml (the shipped default), none of these init
+  // calls run, no setInterval is installed, no hooks are
+  // registered, and the module is invisible. v0.5.31.3 UX
+  // is byte-identical.
+  //
+  // Order matters:
+  //   1. initBudget    — reads caps from config (must run
+  //                      before any tick reads getBudgetState)
+  //   2. initHeartbeatStore — loads fingerprint cache from
+  //                            disk (must run before any
+  //                            isRecentDuplicate check)
+  //   3. registerBuiltinHooks — wires up memory-dreaming
+  //                              (and any future built-ins)
+  //   4. startHeartbeat — kicks off the setInterval. The
+  //                       first tick fires ~60s after this.
+  if ((config as any).heartbeat?.enabled) {
+    initBudget();
+    initHeartbeatStore();
+    registerBuiltinHooks();
+    startHeartbeat().catch((err: unknown) => {
+      console.error('[Heartbeat] Failed to start:', err);
+    });
+  }
+
   // ── Reminders engine ────────────────────────────────────────
   // Starts the 30-second tick loop that fires due reminders. On
   // first tick, any past-due reminders (server was down when they
@@ -383,6 +422,7 @@ startTelegram().catch((err: unknown) => {
     console.log('[Server] SIGTERM received — shutting down...');
     stopReminders();
     stopCron();
+    stopHeartbeat();
     stopTimerState();
     process.exit(0);
   });
@@ -391,6 +431,7 @@ startTelegram().catch((err: unknown) => {
     console.log('[Server] SIGINT received — shutting down...');
     stopReminders();
     stopCron();
+    stopHeartbeat();
     stopTimerState();
     process.exit(0);
   });

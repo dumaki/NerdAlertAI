@@ -141,6 +141,28 @@ export interface HeartbeatHook {
   description: string;
   enabled:     () => boolean;
   check:       () => Promise<HeartbeatVerdict> | HeartbeatVerdict;
+
+  // ── onDelivered ─────────────────────────────────────────
+  //
+  // Optional post-delivery side-effect callback. When the runner
+  // successfully delivers a signal produced by this hook, the
+  // engine invokes this callback with that exact signal. The hook
+  // owns any "after the user has been notified, do X" work that
+  // belongs to its module — memory-dreaming writes a synthesis
+  // record here so the consolidation lifecycle stays inside the
+  // hook rather than leaking into the engine.
+  //
+  // Contract:
+  //   - Called AFTER recordFingerprint() for the signal, so a
+  //     thrown callback can't prevent dedup tracking
+  //   - Failures are caught and logged by the engine; they DO
+  //     NOT trip the circuit breaker (this is hook-side state,
+  //     not LLM-side cost, so the OpenClaw retry-storm defense
+  //     doesn't apply)
+  //   - Called once per delivered signal whose hookId matches
+  //     this hook's id — a hook that produced no signals this
+  //     tick is never called, even if other hooks delivered
+  onDelivered?: (signal: HeartbeatSignal) => Promise<void> | void;
 }
 
 // ── HeartbeatSuppression ──────────────────────────────────
