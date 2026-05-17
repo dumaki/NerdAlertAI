@@ -369,16 +369,29 @@
        The panel column animates via transition on grid-template-columns.
        ========================================================== */
 
+    /* v0.6.3 — Memory panel now lives in the grid (4th column).
+       Side-panel and memory panel are each driven by CSS variables so
+       the resize handler can mutate one without clobbering the other.
+       Defaults: side-panel collapsed (0px), memory strip visible (32px). */
     .app {
       display: grid;
       grid-template-rows:  48px 1fr;
-      grid-template-columns: 210px 1fr 0px;
+      grid-template-columns: 210px 1fr var(--side-panel-col, 0px) var(--memory-col, 32px);
       height: 100vh;
       transition: grid-template-columns var(--transition);
     }
 
     .app.panel-open {
-      grid-template-columns: 210px 1fr 320px;
+      --side-panel-col: 320px;
+      /* When the slide-in side-panel is open, the memory column
+         collapses to 0 so the side-panel keeps its full width.
+         Same coordination intent as v0.6.2's translateX hack — but
+         the grid itself does the work now, no transform overlay. */
+      --memory-col: 0px;
+    }
+
+    .app.memory-expanded {
+      --memory-col: 340px;
     }
 
     /* ==========================================================
@@ -3240,34 +3253,25 @@
     }
 
     /* ==========================================================
-       v0.6.2 — Memory side panel (right rail)
+       v0.6.2 / v0.6.3 — Memory side panel (right rail)
+       v0.6.3: lives in the .app grid column rather than overlaying
+       chat with position:fixed. Width is governed by the parent
+       grid (via --memory-col); the .collapsed / .expanded classes
+       below only toggle which inner content (strip vs. expanded
+       cards) is visible. .app.panel-open collapses --memory-col
+       to 0 so the slide-in side-panel keeps full width — same
+       coordination intent as the prior translateX rule, now via
+       the grid itself.
        ========================================================== */
     .memory-panel {
-      position: fixed; right: 0; top: 40px; bottom: 0;
       background: var(--bg-raised); border-left: 1px solid var(--border);
       display: flex; flex-direction: column;
-      z-index: 50;
-      transition: width 0.18s ease, transform 0.18s ease;
       overflow: hidden;
+      /* Confine the panel's flex layout to its grid cell so it
+         never bleeds into the chat column during the grid-column
+         transition. */
+      min-width: 0;
     }
-    /* Hide our memory panel when the slide-in side-panel is open,
-       so the side-panel’s close X and right edge stay accessible.
-       State is preserved via localStorage, so return is instantaneous
-       on closePanel(). pointer-events:none prevents the off-screen panel
-       from intercepting clicks while it’s out of view. */
-    .app.panel-open .memory-panel {
-      transform: translateX(100%);
-      pointer-events: none;
-    }
-    /* The chat input bar normally extends to the viewport right
-       edge, where our 32px memory strip overlays it. Add right
-       padding so the SEND button keeps clearance from the strip.
-       When the side-panel is open the strip is hidden, so we
-       restore the original symmetric padding. */
-    .chat-input-bar { padding-right: 60px; }
-    .app.panel-open .chat-input-bar { padding-right: 28px; }
-    .memory-panel.collapsed { width: 32px; }
-    .memory-panel.expanded  { width: 340px; }
     .memory-panel-strip {
       display: flex; flex-direction: column;
       align-items: center; justify-content: space-between;
@@ -4294,7 +4298,10 @@
       const maxWidth = Math.floor(window.innerWidth * 0.5);
       // Panel width = distance from cursor to right edge of viewport
       const newWidth = Math.min(maxWidth, Math.max(MIN_WIDTH, window.innerWidth - e.clientX));
-      app.style.gridTemplateColumns = `210px 1fr ${newWidth}px`;
+      // v0.6.3: write to the CSS variable rather than overwriting
+      // grid-template-columns wholesale — keeps the memory column
+      // (4th in the grid) intact during the drag.
+      app.style.setProperty('--side-panel-col', `${newWidth}px`);
     });
 
     document.addEventListener('mouseup', () => {
@@ -5010,11 +5017,12 @@
     closeSOCStream();
     var _app = document.getElementById('app');
     _app.classList.remove('panel-open');
-    // v0.6.2: clear the inline gridTemplateColumns the resize handler
-    // sets. Inline style otherwise overrides the default CSS rule that
-    // collapses the third column back to 0px, leaving the side-panel
-    // visible after a drag-resize + close sequence. Reset means the
-    // next open returns to the default 320px width.
+    // v0.6.2 / v0.6.3: clear the inline --side-panel-col the resize
+    // handler sets. Inline variable otherwise overrides the
+    // .app.panel-open rule that should collapse the column back to
+    // 0px on close. v0.6.2 cleared gridTemplateColumns; v0.6.3 moved
+    // to the variable so the memory column doesn't get clobbered.
+    _app.style.removeProperty('--side-panel-col');
     _app.style.gridTemplateColumns = '';
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     document.getElementById('nav-chat')?.classList.add('active');
@@ -8449,6 +8457,10 @@ function escapeHtml(str) {
       if (stored === 'true') {
         var p = panelEl();
         if (p) { p.classList.remove('collapsed'); p.classList.add('expanded'); }
+        // v0.6.3: mirror the inner-state toggle onto #app so the
+        // grid column matches the panel's restored expanded width.
+        var appElInit = document.getElementById('app');
+        if (appElInit) appElInit.classList.add('memory-expanded');
         // v0.6.2.1: if the panel restores expanded, reflect that on
         // the dock icon too. Chat icon's default active state is set
         // in the rendered HTML; clear it here so only one dock icon
@@ -8469,6 +8481,11 @@ function escapeHtml(str) {
     var willExpand = p.classList.contains('collapsed');
     p.classList.toggle('collapsed');
     p.classList.toggle('expanded');
+    // v0.6.3: drive the grid column width via a class on #app so the
+    // chat area gets pushed over rather than overlaid. The inner-
+    // content toggle (strip vs. cards) stays on .memory-panel.
+    var appEl = document.getElementById('app');
+    if (appEl) appEl.classList.toggle('memory-expanded', willExpand);
     try { localStorage.setItem(LS_KEY, willExpand ? 'true' : 'false'); } catch (e) { /* */ }
     // v0.6.2.1: keep the dock icon's active state in sync with the
     // panel's expand state. Without this, collapsing via the panel's
