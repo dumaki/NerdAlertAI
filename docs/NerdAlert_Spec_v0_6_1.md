@@ -267,14 +267,6 @@ accumulation as built-in hooks. Pairs with whichever slot
 lands the elevation system.
 
 ### Carried items (not blocking v0.6.1)
-- **Config loader path bug** — `src/config/loader.ts` line 30 uses
-  `path.join(__dirname, '../../config.yaml')` which resolves
-  correctly from ts-node source but wrong from compiled dist
-  (resolves to `dist/config.yaml`, off by one `..`). Blocks
-  `npm start` after `npm run build`; `npm run dev` works fine.
-  Fix: multi-candidate fallback trying both paths. Possibly
-  affects Optiplex deploy — confirm whether the systemd unit
-  has a workaround before fixing.
 - GitHub sidebar/topbar surface
 - GitHub write surface at L3
 - Setup audit + `config.local.yaml` overlay
@@ -336,3 +328,44 @@ lands the elevation system.
   `export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH`
 - Optiplex deploy: `git pull origin dev && npm install &&
   npm run build && sudo systemctl restart nerdalert@dumaki`
+
+## Post-spec addenda
+
+The following landed on dev after this spec was committed,
+as part of the v0.6.1 release cycle. Captured here so the
+spec doc accurately reflects what the v0.6.1 release
+actually delivered, rather than what was originally
+documented at the moment of the first spec commit.
+
+### Config loader path bug fix (commit 75c0767)
+
+`src/config/loader.ts` previously used
+`path.join(__dirname, '../../config.yaml')` which only
+resolved correctly from the ts-node source layout. After
+`npm run build`, the compiled `loader.js` sits one directory
+deeper (`dist/src/config/` vs `src/config/`), making the
+same relative path resolve to `dist/config.yaml` — which
+doesn't exist. This blocked `npm start` against compiled
+dist; `npm run dev` was unaffected.
+
+Fix: a small `findConfigPath()` helper inside the loader
+that tries both candidate paths and uses whichever exists.
+Throws a clear error listing both candidates if neither is
+found, so misconfigured deploys fail fast and visibly.
+
+File map addition:
+- MODIFIED: `src/config/loader.ts` — `findConfigPath()` helper
+  with two-candidate fallback, replacing the one-liner.
+
+Validation:
+- `tsc --noEmit` clean
+- `npm run dev` boots normally (source layout)
+- `npm start` after `npm run build` boots normally
+  (compiled layout — previously broken)
+
+Carry-forward consideration: Optiplex production deploys via
+`npm run build` + systemd, which would have hit the same bug.
+Worth confirming the systemd unit had no quiet workaround
+(e.g., a deploy script copying `config.yaml` into `dist/`)
+before this fix; if one existed, this fix is still strictly
+an improvement and the workaround can be removed.
