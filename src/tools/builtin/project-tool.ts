@@ -49,6 +49,9 @@ import {
   setActiveProject,
   clearActiveProject,
 } from '../../projects/active';
+// Lazy background document indexing — fires after a successful read of
+// any sufficiently large file. No-op when documents.enabled is false.
+import { maybeLazyIndex } from '../../documents/lazy-index';
 import * as path from 'path';
 import * as fs   from 'fs';
 import * as os   from 'os';
@@ -582,6 +585,12 @@ async function readFile(project: string, relPath: string): Promise<NerdAlertResp
       }
     }
   }
+
+  // Fire-and-forget background indexing. No-op when documents.enabled is
+  // false (strict-superset). Never awaits — the read response goes back
+  // immediately. See src/documents/lazy-index.ts for the threshold and
+  // failure-handling contract.
+  void maybeLazyIndex(absPath, stat.size, project);
 
   const fileBody = body.text;
 
