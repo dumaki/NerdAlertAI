@@ -68,6 +68,10 @@ import {
 // v0.5.26.
 import { embed } from '../memory/embedder';
 import { getEmbeddingCapability } from '../memory/capability';
+// v0.6.3.2: documents-enabled check drives the free-tier clip
+// replacement — when documents is on, large project.read overruns get
+// pointed at the documents.search escape hatch instead of "switch model".
+import { config } from '../config/loader';
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -1731,6 +1735,11 @@ export function clipPrefetchForFreeTier(
   results: PrefetchResult[],
   maxChars: number = FREE_TIER_NARRATION_CAP,
 ): PrefetchResult[] {
+  // Read once per call — the config object is module-scope, no cost
+  // to repeated access but the local keeps the per-iteration intent
+  // obvious in the map closure below.
+  const documentsEnabled = !!config.documents?.enabled;
+
   return results.map(r => {
     if (!r.available || r.data.length <= maxChars) return r;
 
@@ -1738,10 +1747,29 @@ export function clipPrefetchForFreeTier(
     // instruction ("narrate what you see as if you retrieved it
     // yourself") makes the model relay this directly as its response
     // rather than wrapping it in third-person commentary.
-    const replacement =
-      `That file is too long for me to summarize at my current model size. ` +
-      `Switch to a stronger model in Settings (Sonnet via the model selector) ` +
-      `and try again, or open the file directly via the Sources panel below.`;
+    //
+    // v0.6.3.2: when the project tool's read overruns AND the documents
+    // module is enabled, the lazy-index hook (src/documents/lazy-index.ts)
+    // has already fired a background indexDocument call from
+    // project-tool.ts's read action. Point the user at the
+    // documents.search escape hatch that handles arbitrary file sizes
+    // via chunked retrieval, instead of the v0.5.x "switch model" copy
+    // which predated chunked retrieval as an option.
+    //
+    // The branch is gated by BOTH tool == 'project' AND documentsEnabled:
+    //   - Other tools (gmail thread dumps, RSS feeds, etc.) overrunning
+    //     the cap aren't backed by the documents engine — "I've indexed
+    //     it" would be a lie. They keep the v0.5.x fallback.
+    //   - documents.enabled=false means lazy-index is a no-op and nothing
+    //     got chunked. Same fallback.
+    const replacement = (r.toolName === 'project' && documentsEnabled)
+      ? `That file is long enough that the full content trips my ` +
+        `current model size. The good news: I've indexed it — ask me ` +
+        `a specific question about its contents (for example, "what ` +
+        `does it say about X") and I'll pull just the relevant passages.`
+      : `That file is too long for me to summarize at my current model size. ` +
+        `Switch to a stronger model in Settings (Sonnet via the model selector) ` +
+        `and try again, or open the file directly via the Sources panel below.`;
 
     return { ...r, data: replacement };
   });
