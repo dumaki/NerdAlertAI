@@ -72,6 +72,7 @@ import {
 import { subscribe as subscribeTimers, listTimers } from './timer-state';
 import { mountHeartbeatRoutes }    from './heartbeat-routes';
 import { mountMemoryCardsRoute }   from './memory-cards-route';
+import { mountDocumentsRoute }     from './documents-route';
 import type { Source } from '../types/response.types';
 
 // ── New layer imports ────────────────────────────────────────
@@ -1602,5 +1603,11 @@ export function mountUIRoutes(app: Express): void {
   // top-level surface in this file).
   mountHeartbeatRoutes(app);
   mountMemoryCardsRoute(app);
+  // Documents module is opt-in (v0.6.3 default off in net-new deploys).
+  // Conditional mount keeps strict-superset: when disabled, the endpoint
+  // is not registered and the UI's documents row never renders.
+  if (config.documents?.enabled) {
+    mountDocumentsRoute(app);
+  }
 
 }

@@ -3642,6 +3642,7 @@
       <div class="memory-panel-badges">
         <span class="memory-badge" id="memory-badge-people">&middot;</span>
         <span class="memory-badge" id="memory-badge-projects">&middot;</span>
+        <span class="memory-badge" id="memory-badge-documents" style="display: none;">&middot;</span>
         <span class="memory-badge" id="memory-badge-general">&middot;</span>
       </div>
     </div>
@@ -3669,6 +3670,13 @@
         <section class="memory-row">
           <h4 class="memory-row-title">PROJECTS <span class="memory-row-count" id="memory-row-count-projects">0</span></h4>
           <div class="memory-row-cards" id="memory-cards-projects"></div>
+        </section>
+        <!-- v0.6.3.4 — Documents row. Hidden until /api/documents/list returns
+             a successful response (module disabled → 404 → row stays hidden).
+             Strict-superset: with documents.enabled false, the row never appears. -->
+        <section class="memory-row" id="memory-row-documents" style="display: none;">
+          <h4 class="memory-row-title">DOCUMENTS <span class="memory-row-count" id="memory-row-count-documents">0</span></h4>
+          <div class="memory-row-cards" id="memory-cards-documents"></div>
         </section>
         <section class="memory-row">
           <h4 class="memory-row-title">GENERAL <span class="memory-row-count" id="memory-row-count-general">0</span></h4>
@@ -8533,6 +8541,176 @@ function escapeHtml(str) {
     // structured subjects like "project.nerdalert" / "user.ben" cued
     // Mistral toward the project / web tool instead of memory.
     var prompt = 'What do you remember about ' + subject + '?';
+    if (typeof window.sendMessage === 'function') {
+      window.sendMessage(prompt);
+    } else {
+      var input = document.getElementById('chat-input');
+      if (input) { input.value = prompt; input.focus(); }
+    }
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startPolling);
+  } else {
+    startPolling();
+  }
+})();
+
+// ==========================================================
+// v0.6.3.4 — Documents row (memory side panel)
+// ==========================================================
+// Companion IIFE to setupMemoryPanel(). Same shape: 30s poll,
+// short-circuit on no-change, IIFE-scoped with window.X handlers
+// for inline onclick.
+//
+// MODULE ISOLATION
+// ────────────────────────────────────────────────────────
+// The documents endpoint (/api/documents/list) is mounted
+// conditionally on the server based on config.documents.enabled.
+// When disabled, the endpoint returns 404; we stop polling and
+// leave the row + badge hidden. The user sees v0.6.3.3 behavior
+// byte-identical when the module is off.
+// ==========================================================
+
+(function setupDocumentsRow() {
+  var POLL_MS = 30000;
+  var prevDocsJSON = null;
+  var pollTimer = null;
+  var stoppedFor404 = false;
+
+  function escapeHTML(s) {
+    return String(s).replace(/[&<>"']/g, function(c) {
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+
+  function escapeAttr(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+  }
+
+  function relativeTime(iso) {
+    if (!iso) return '';
+    var ms = Date.now() - new Date(iso).getTime();
+    if (ms < 60000) return 'just now';
+    if (ms < 3600000) return Math.floor(ms / 60000) + 'm';
+    if (ms < 86400000) return Math.floor(ms / 3600000) + 'h';
+    return Math.floor(ms / 86400000) + 'd';
+  }
+
+  function formatBytes(n) {
+    if (typeof n !== 'number' || !isFinite(n) || n < 0) return '';
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+    return (n / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+  }
+
+  function renderDocumentCard(card) {
+    // Subject line: filename, ellipsis on overflow (matches memory-card-subject).
+    // Snippet: chunk count + token count + projects associated.
+    // Meta: lastReadAt relative + size + embedded status.
+    var filenameAttr = escapeAttr(card.filename);
+
+    var snippetParts = [];
+    snippetParts.push(card.chunkCount + ' chunk' + (card.chunkCount === 1 ? '' : 's'));
+    snippetParts.push(card.totalTokens.toLocaleString() + ' tokens');
+    if (card.projects && card.projects.length) {
+      snippetParts.push('in ' + card.projects.join(', '));
+    }
+    var snippet = escapeHTML(snippetParts.join(' \u00b7 '));
+
+    var meta = [];
+    if (card.lastReadAt) meta.push(relativeTime(card.lastReadAt));
+    var sizeStr = formatBytes(card.byteSize);
+    if (sizeStr) meta.push(sizeStr);
+    meta.push(card.embedded ? 'ready' : 'indexing');
+
+    return [
+      '<div class="memory-card" onclick="toggleDocumentCard(this, event)">',
+      '<div class="memory-card-row-1">',
+      '<span class="memory-card-subject">', escapeHTML(card.filename), '</span>',
+      '<span class="memory-card-chat" onclick="injectDocumentPrompt(\'', filenameAttr, '\', event)" title="Ask agent about this file">&#128172;</span>',
+      '</div>',
+      '<div class="memory-card-snippet">', snippet, '</div>',
+      '<div class="memory-card-meta">', escapeHTML(meta.join(' \u00b7 ')), '</div>',
+      '</div>'
+    ].join('');
+  }
+
+  function renderRow(cards) {
+    var el = document.getElementById('memory-cards-documents');
+    if (!el) return;
+    if (!cards || cards.length === 0) {
+      el.innerHTML = '<div class="memory-row-empty">Nothing indexed yet</div>';
+      return;
+    }
+    el.innerHTML = cards.map(renderDocumentCard).join('');
+  }
+
+  function applyDocuments(data) {
+    if (!data || !data.ok) return;
+    var documents = data.documents || [];
+    var count = documents.length;
+
+    // Show row + badge on first successful fetch. Idempotent on repeat.
+    var rowEl = document.getElementById('memory-row-documents');
+    if (rowEl) rowEl.style.display = '';
+    var badgeEl = document.getElementById('memory-badge-documents');
+    if (badgeEl) badgeEl.style.display = '';
+
+    if (badgeEl) badgeEl.textContent = count === 0 ? '\u00b7' : (count > 99 ? '99' : String(count));
+    var countEl = document.getElementById('memory-row-count-documents');
+    if (countEl) countEl.textContent = String(count);
+
+    renderRow(documents);
+  }
+
+  function poll() {
+    if (stoppedFor404) return Promise.resolve();
+    return fetch('/api/documents/list', {
+      headers: { 'Authorization': 'Bearer ' + window.NERDALERT_CONFIG.token }
+    }).then(function(res) {
+      if (res.status === 404) {
+        // Module disabled — stop polling permanently. Row + badge
+        // stay hidden. Strict-superset achieved without console noise.
+        stoppedFor404 = true;
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        return null;
+      }
+      if (!res.ok) return null;
+      return res.json();
+    }).then(function(data) {
+      if (!data) return;
+      var json = JSON.stringify(data);
+      if (json === prevDocsJSON) return;
+      prevDocsJSON = json;
+      applyDocuments(data);
+    }).catch(function(err) {
+      console.warn('[documents-row] poll failed:', err);
+    });
+  }
+
+  function startPolling() {
+    poll();
+    pollTimer = setInterval(poll, POLL_MS);
+  }
+
+  window.toggleDocumentCard = function(cardEl, event) {
+    if (event && event.target && event.target.classList.contains('memory-card-chat')) return;
+    cardEl.classList.toggle('expanded');
+  };
+
+  window.injectDocumentPrompt = function(filename, event) {
+    if (event) event.stopPropagation();
+    // "What is <filename> about?" is intentionally a natural-language
+    // ask rather than a v0.6.3.3 shape-1 trigger — Shape 1 requires
+    // both a filename AND a query term Y, and the click handler has
+    // only the filename. The phrase routes through whichever tool the
+    // agent finds most appropriate (most likely project.read or
+    // documents.search with a soft fallback), and the user gets a
+    // useful summary in chat either way. Tighter routing for
+    // "click = render full chunks in chat" is deferred to v0.6.3.5+.
+    var prompt = 'What is ' + filename + ' about?';
     if (typeof window.sendMessage === 'function') {
       window.sendMessage(prompt);
     } else {
