@@ -3577,6 +3577,13 @@
       <button class="dock-icon" data-view="memory" onclick="switchView('memory', null)" aria-label="Memory">
         <span class="dock-icon-glyph">◈</span>
       </button>
+      <!-- v0.6.3.4 — Documents tile. Hidden until /api/documents/list returns
+           a successful response; the documents IIFE un-hides on first poll
+           and clicks fire switchView('documents'), which scrolls the memory
+           panel to the documents row without disturbing dock-icon state. -->
+      <button class="dock-icon" data-view="documents" onclick="switchView('documents', null)" aria-label="Documents" style="display: none;">
+        <span class="dock-icon-glyph">▤</span>
+      </button>
       <button class="dock-icon" data-view="export" onclick="switchView('export', null)" aria-label="Export">
         <span class="dock-icon-glyph">⤓</span>
       </button>
@@ -4990,6 +4997,21 @@
       }
       if (typeof window.toggleMemoryPanel === 'function') {
         window.toggleMemoryPanel();
+      }
+      return;
+    }
+    // v0.6.3.4: documents dock tile opens the same memory panel as
+    // the memory tile but pre-scrolls to the documents row. Wired
+    // through openMemoryPanelToDocuments (defined in the documents
+    // IIFE), NOT toggleMemoryPanel, because toggleMemoryPanel
+    // reassigns the active dock icon to memory or chat — overriding
+    // the documents-tile active state we just set above.
+    if (view === 'documents') {
+      if (document.getElementById('app').classList.contains('panel-open')) {
+        closePanel();
+      }
+      if (typeof window.openMemoryPanelToDocuments === 'function') {
+        window.openMemoryPanelToDocuments();
       }
       return;
     }
@@ -8657,6 +8679,11 @@ function escapeHtml(str) {
     if (rowEl) rowEl.style.display = '';
     var badgeEl = document.getElementById('memory-badge-documents');
     if (badgeEl) badgeEl.style.display = '';
+    // v0.6.3.4 (tile): un-hide the dock tile too. Strict-superset
+    // contract: tile, row, and badge all stay hidden when documents
+    // is disabled (404 → poll stops → none of these run).
+    var tileEl = document.querySelector('.dock-icon[data-view="documents"]');
+    if (tileEl) tileEl.style.display = '';
 
     if (badgeEl) badgeEl.textContent = count === 0 ? '\u00b7' : (count > 99 ? '99' : String(count));
     var countEl = document.getElementById('memory-row-count-documents');
@@ -8717,6 +8744,41 @@ function escapeHtml(str) {
       var input = document.getElementById('chat-input');
       if (input) { input.value = prompt; input.focus(); }
     }
+  };
+
+  window.openMemoryPanelToDocuments = function() {
+    // Wired from switchView's 'documents' case. Expands the memory
+    // panel if collapsed and scrolls the documents row into view.
+    //
+    // We deliberately do NOT call window.toggleMemoryPanel here — that
+    // function reassigns the active dock icon to "memory" or "chat",
+    // which would override the "documents" active state switchView
+    // just set. Instead we duplicate just the expand path (class
+    // toggle + grid column + localStorage), leaving dock-icon state
+    // alone for switchView to own.
+    var panel = document.getElementById('memory-panel');
+    if (!panel) return;
+
+    if (panel.classList.contains('collapsed')) {
+      panel.classList.remove('collapsed');
+      panel.classList.add('expanded');
+      var appEl = document.getElementById('app');
+      if (appEl) appEl.classList.add('memory-expanded');
+      try {
+        localStorage.setItem('nerdalert.memoryPanelExpanded', 'true');
+      } catch (e) { /* localStorage disabled — fine */ }
+    }
+
+    // Defer scroll to next frame so the panel has laid out before we
+    // measure the row's target position. The display:none guard is
+    // the last line of defense if a stale click fires after the
+    // module was disabled.
+    requestAnimationFrame(function() {
+      var row = document.getElementById('memory-row-documents');
+      if (row && row.style.display !== 'none') {
+        row.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      }
+    });
   };
 
   if (document.readyState === 'loading') {
