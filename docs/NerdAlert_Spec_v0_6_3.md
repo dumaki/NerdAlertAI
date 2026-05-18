@@ -1,8 +1,13 @@
 # NerdAlert v0.6.3 — Documents module + memory panel push
 
-**Released:** 2026-05-17 (dev branch)
+**Released:** 2026-05-17 (dev branch, pushed to origin/dev)
 **Branch policy:** All work on `dev`; merge to `main` only on explicit
-confirmation. Local commits made; push to `origin/dev` pending approval.
+confirmation.
+
+**Commits on `origin/dev`:**
+- `5942aeb` — memory panel push (Task 1)
+- `6ae38e7` — documents module (Task 2)
+- `4cd3413` — v0.6.3.1 side-panel resize fix (post-ship bug found during testing)
 
 ---
 
@@ -35,6 +40,36 @@ covering the right ~340px of it.
 
 **Commit:** `5942aeb` on `dev` — "v0.6.3-pre: memory panel pushes chat
 instead of overlaying"
+
+---
+
+### 1.1 Side-panel resize math fix (v0.6.3.1)
+
+Found during live testing of the v0.6.3 build. With memory expanded and
+the side panel (SOC / Email) open, releasing a drag-resize and then
+grabbing the handle again would instantly pin the side panel at maxWidth
+and it stayed there until memory was closed.
+
+**Cause:** the mousemove handler computed `newWidth = innerWidth - clientX`,
+which assumed the side panel's right edge IS the viewport's right edge.
+With memory expanded at 340px, the panel's actual right edge sits at
+`innerWidth - 340`, so the math overstated panel width by exactly the
+memory column width on every move. The bias was masked during the first
+drag because mousedown set the initial state correctly, but every
+subsequent grab inherited the bug.
+
+**Fix:** read the live `--memory-col` value via `getComputedStyle()` and
+subtract it from `innerWidth` before computing both `maxWidth` (now 50%
+of AVAILABLE space, not 50% of viewport) and `newWidth`. The CSS variable
+is the single source of truth for all three memory states (0 collapsed-
+under-panel-open, 32 strip, 340 expanded) — no class-name branching.
+
+**Files touched:**
+
+- `src/ui/index.html` (+21 −3)
+- `package.json` 0.6.3 → 0.6.3.1
+
+**Commit:** `4cd3413` on `dev`.
 
 ---
 
@@ -277,14 +312,29 @@ The following checks should pass before pushing v0.6.3 to `origin/dev`:
 
 ---
 
-## v0.6.3.1 candidates
+## v0.6.3.1 candidates (carry-forward to next session)
 
-- Lazy-index integration in `src/tools/builtin/project-tool.ts` `read`
-  action (touches core-adjacent code; verify documents engine standalone
-  first).
-- Documents row in the memory side panel UI.
-- Documents sidebar tile (icon for opening the panel directly to
-  documents view).
+Detailed scope notes live in `docs/HANDOFF_v0_6_3_1.md`.
+
+- **Lazy-index hook in `project-tool` `read` action.** Promoted to top
+  priority based on live testing — closes the "documents feels broken"
+  UX gap where users have to manually index a file before search will
+  surface it. First-read of any file >~5000 chars triggers a background
+  `documents.indexDocument` call. Touches core-adjacent code, so do
+  this with care.
+- **Documents row in the memory side panel UI.** People / Projects /
+  Documents three-row layout. Click a doc card to fire a `get` action
+  in chat; click a chunk-ref pill in a memory card to fire `resolve_refs`.
+- **Documents sidebar tile** — dedicated icon for opening the panel
+  directly to documents view.
+- **Per-turn agent name in console logs.** Currently the boot banner
+  shows the config-default agent, but per-turn logs don't tag which
+  agent actually responded. Surfaces during multi-agent testing.
+- **Tighten Mistral `index` action handling.** Mistral's narration-
+  before-execution quirk surfaced as "Done. Book1.xlsx is indexed"
+  without actually firing the tool. Claude self-corrected on the next
+  turn via list/index/search; Mistral may not. Consider a system-prompt
+  guardrail or a per-turn tool-call verification step.
 
 ## v0.6.4 candidates
 
