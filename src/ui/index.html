@@ -4295,10 +4295,26 @@
 
     document.addEventListener('mousemove', e => {
       if (!isDragging) return;
-      const maxWidth = Math.floor(window.innerWidth * 0.5);
-      // Panel width = distance from cursor to right edge of viewport
-      const newWidth = Math.min(maxWidth, Math.max(MIN_WIDTH, window.innerWidth - e.clientX));
-      // v0.6.3: write to the CSS variable rather than overwriting
+      // v0.6.3.1: account for the memory column on the right edge of the
+      // grid. The side panel's drag handle is on its LEFT edge; its
+      // right edge sits at (innerWidth - memoryColPx), NOT at
+      // innerWidth. Without this offset, the cursor‐to‐right‐edge math
+      // overstates the panel width by exactly the memory column width
+      // (340px when expanded). The bug surfaced as: open memory → open
+      // side panel → drag once to a non‐max size → release → grab
+      // handle again, and any mousemove instantly pins the side panel
+      // at maxWidth, where it stayed until memory was closed.
+      //
+      // We read the live --memory-col value from computed style so the
+      // math stays correct across all three memory states (0 collapsed,
+      // 32 strip, 340 expanded) without branching on classes here.
+      const memColPx = parseFloat(getComputedStyle(app).getPropertyValue('--memory-col')) || 0;
+      const available = window.innerWidth - memColPx;
+      const maxWidth = Math.floor(available * 0.5);
+      // Panel width = distance from cursor to the side panel's actual
+      // right edge (which is the LEFT edge of the memory column).
+      const newWidth = Math.min(maxWidth, Math.max(MIN_WIDTH, available - e.clientX));
+      // Write to the CSS variable rather than overwriting
       // grid-template-columns wholesale — keeps the memory column
       // (4th in the grid) intact during the drag.
       app.style.setProperty('--side-panel-col', `${newWidth}px`);

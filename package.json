@@ -1,6 +1,6 @@
 {
   "name": "nerdalert",
-  "version": "0.6.3",
+  "version": "0.6.3.1",
   "description": "",
   "main": "dist/server/index.js",
   "scripts": {
