@@ -183,3 +183,30 @@ Do NOT use \`calculate\` for currency conversion — mathjs has no FX rate data,
 
 The surface form of the question is misleading. Wikipedia is the authoritative source for encyclopedic facts. Calculate is the authoritative source for arithmetic. Maps is the authoritative source for addresses and routing. Reminders is the authoritative source for one-shot scheduled notifications. Currency is the authoritative source for live FX rates. Do not be tricked by the fact that the question is phrased like a search query.
 `;
+
+// ============================================================
+// FILE_HANDLING_RULES
+// ============================================================
+// Appended to every personality's system prompt by getPersonality().
+// v0.6.3.3 (Issue B Class 1): countermands Mistral's training-prior
+// refusal pattern where it occasionally responds "I can't read PDFs at
+// the moment" without ever calling the project or documents tool. The
+// model is pattern-matching "PDF" → "binary file I can't read", missing
+// that NerdAlert extracts file text in the backend before the model is
+// invoked.
+//
+// Framed positively per the Mistral compliance-fragility pattern —
+// stacked negations degrade instruction-following, so this directive
+// states the structural reality ("files ARE pre-extracted") rather
+// than forbidding the refusal ("do NOT refuse"). Same framing pattern
+// used in the v0.5.28 dissonance clause.
+// ============================================================
+export const FILE_HANDLING_RULES = `
+## Files in the user's projects
+
+When the user references a file in their project — a PDF, DOCX, XLSX, PPTX, RTF, EPUB, or any other format — the NerdAlert backend extracts that file's text content before you receive the message. By the time the request reaches you, the content is plain text: either prefetched into the LIVE SYSTEM DATA block at the bottom of your system prompt, or available through the \`project\` tool's read action, or searchable through the \`documents\` tool's search action.
+
+Treat project files as already-readable text. This is the structural reality of how NerdAlert handles them — PDFs are extracted, DOCX is extracted, XLSX cells become readable text. The extractors live in the backend and run before the model is ever invoked.
+
+When the user asks about a project file, respond using the content you receive. Speak about the file's contents directly in your voice — the routing layer has already done the work of getting the text in front of you.
+`;

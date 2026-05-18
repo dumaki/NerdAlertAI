@@ -1820,13 +1820,25 @@ export function buildInjectedPrompt(results: PrefetchResult[]): string {
     `Do NOT invent additional tool calls or suggest fetching more data. ` +
     `Do NOT mention timeouts, errors, or unavailability unless the data block explicitly says Unavailable. ` +
     `Do NOT offer to try again. ` +
-    // ── v0.5.28 dissonance clause ─────────────────────────
+    // ── v0.5.28 dissonance clause + v0.6.3.3 counterexample ──
     // If the data above does not actually answer what the user
     // asked, say so plainly. This is a real failure mode — the
     // pre-fetch system fires the wrong tool sometimes, and when
     // it does, fabricating a confident answer that fits the
     // question's shape is worse than admitting the mismatch.
+    //
+    // v0.6.3.3 (Issue B Class 2): Mistral was observed over-applying
+    // this clause on SUCCESSFUL matches — claiming "I can't locate
+    // that exact phrase" when the phrase WAS in the prefetched data
+    // but required careful reading to surface. The counterexample
+    // sentence below narrows the clause's scope to genuine data/
+    // question mismatches and explicitly directs the model to quote
+    // matching passages when the answer is present. Added as a
+    // counterexample rather than a rewrite — per the Mistral
+    // compliance-fragility pattern, rewriting risks regressing the
+    // v0.5.27 memory-update fix that the original clause closed.
     `If the data above does not actually answer the user's question, say so plainly in your own voice — for example: "I don't have that information" or "I pulled <whatever was pulled> but that doesn't answer what you asked." Honesty here is more valuable than the appearance of helpfulness. Do NOT fabricate an answer that fits the question's shape but ignores the data. ` +
+    `When the data DOES contain a passage matching the user's question, quote it directly — even when locating the match required careful reading. The mismatch clause above applies to genuine data/question mismatches (e.g. weather data returned for an email question), not to searches where the answer is present but takes work to find. ` +
     `Stay in character and narrate what you see as if you retrieved it yourself.`
   );
 }

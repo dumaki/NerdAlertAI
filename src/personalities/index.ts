@@ -10,7 +10,7 @@
 //   Done.
 // ============================================================
 
-import { Personality, CREDENTIAL_REFUSAL_RULES, TOOL_BEHAVIOUR_RULES } from './base';
+import { Personality, CREDENTIAL_REFUSAL_RULES, TOOL_BEHAVIOUR_RULES, FILE_HANDLING_RULES } from './base';
 import sherman from './sherman';
 import kenny   from './kenny';
 import brett   from './brett';
@@ -55,16 +55,26 @@ export function getPersonality(id: string): Personality {
 }
 
 // Wraps a personality so its buildSystemPrompt automatically appends the
-// shared credential-refusal rules and tool behaviour rules. The original
-// personality object is not mutated — we return a new object that delegates
-// to the original.
+// shared rules every personality inherits. The original personality object
+// is not mutated — we return a new object that delegates to the original.
+//
+// Three shared blocks are appended in order:
+//   1. CREDENTIAL_REFUSAL_RULES — never accept secrets in chat
+//   2. TOOL_BEHAVIOUR_RULES     — how to call tools, when not to stack
+//   3. FILE_HANDLING_RULES      — project files arrive as pre-extracted text
+//
+// Despite the name, this function now appends more than just security
+// rules; FILE_HANDLING_RULES is a structural-reality directive (v0.6.3.3,
+// Issue B Class 1) rather than a security boundary. Name preserved because
+// renaming would touch every personality without functional benefit.
 function wrapWithSecurityRules(p: Personality): Personality {
   return {
     ...p,
     buildSystemPrompt: (params) =>
       p.buildSystemPrompt(params) +
       '\n\n' + CREDENTIAL_REFUSAL_RULES +
-      '\n\n' + TOOL_BEHAVIOUR_RULES,
+      '\n\n' + TOOL_BEHAVIOUR_RULES +
+      '\n\n' + FILE_HANDLING_RULES,
   };
 }
 
