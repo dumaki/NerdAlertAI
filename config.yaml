@@ -198,6 +198,12 @@ tools:
     enabled: true
     trust_level: 1         # Sandboxed reads under ~/.nerdalert/projects/
 
+  documents:
+    enabled: true
+    trust_level: 1         # L1 covers index/search/list/get/reindex/resolve_refs.
+                           # forget is gated to L2 INSIDE the tool's execute()
+                           # — destructive (drops chunks + embeddings + original).
+
   gmail:
     enabled: true         # Will be enabled when Gmail module is built
     trust_level: 1
@@ -293,6 +299,32 @@ voice:
     models_dir: ~/.nerdalert/whisper-models
     model: base.en
     max_recording_seconds: 60
+
+# --- DOCUMENTS MODULE ---
+# Chunked, embedding-indexed document store (v0.6.3). Originals live at
+# ~/.nerdalert/documents/<content-hash>.<ext>, chunks at
+# ~/.nerdalert/documents/chunks.jsonl, embeddings share the existing
+# memory-embeddings.json store under the `doc:` key namespace (reserved by
+# v0.5.26).
+#
+# Same module-isolation contract as voice and memory.semantic: setting
+# enabled: false (or removing the block) collapses the tool out of the
+# registry, prevents any documents-* path under ~/.nerdalert/documents/
+# from being created, and leaves the rest of the UX byte-identical to
+# v0.6.2.x. Setting it true ships the tool but does NOT auto-index
+# anything — indexing is explicit via the documents tool's index action,
+# or via the (deferred) lazy-read path in project.read.
+#
+# Embedding capability is INHERITED from memory.semantic.* — if the
+# bge-base model is installed and that block is enabled, document chunks
+# get embedded as they're indexed. If not, the documents tool still
+# works (the search action falls back to substring matching across
+# chunks) but semantic recall is degraded.
+#
+# v0.6.3 ships index, reindex, search, list, get, resolve_refs (L1), and
+# forget (L2). Lazy-index on first project.read is deferred to v0.6.3.1.
+documents:
+  enabled: true
 
 # --- MEMORY MODULE — SEMANTIC SUB-BLOCK ---
 # Optional toggle for hybrid (TF-IDF + embedding) search. The core memory

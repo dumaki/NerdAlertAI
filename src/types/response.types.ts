@@ -172,6 +172,7 @@ export interface AgentConfig {
   };
   voice?: VoiceConfig;       // optional — absent = module disabled, no /api/tts route
   memory?: MemoryConfig;     // optional — absent = pure TF-IDF, no semantic search
+  documents?: DocumentsConfig; // optional — absent / disabled = tool hidden, no chunk store
 }
 
 // --- VOICE MODULE CONFIG ---
@@ -262,4 +263,27 @@ export interface MemoryConfig {
     model_path?: string;                   // default ~/.nerdalert/embeddings/bge-base-en-v1.5
     blend_weight?: number;                 // default 0.5; range 0.0–1.0
   };
+}
+
+// --- DOCUMENTS MODULE CONFIG ---
+// Toggleable module for chunked, embedding-indexed document storage
+// (v0.6.3). When the block is absent OR enabled is false:
+//   - The documents tool is filtered out of the registry by config.tools
+//     gating (see config.yaml's tools.documents entry).
+//   - No ~/.nerdalert/documents/* files are created.
+//   - The documents intent-prefetch group still fires on keyword match
+//     but the tool call produces "tool unavailable" — the prefetch
+//     pipeline's existing unavailable-tool handling renders this
+//     cleanly.
+//
+// Embedding capability is inherited from memory.semantic.*; this block
+// has no embedding-specific knobs. If memory.semantic is disabled the
+// documents tool falls back to substring search across chunks, which
+// is fine for small corpora.
+//
+// Future toggles (chunk size / overlap, lazy-index on project.read,
+// auto-snapshot retention) will land as nested fields here without
+// breaking existing configs.
+export interface DocumentsConfig {
+  enabled: boolean;
 }

@@ -1107,6 +1107,113 @@ const INTENT_MAP: Record<string, IntentGroup> = {
   // "What's in the inbox?" still routes to email, which is the more
   // common meaning. File inbox queries land via filename or via
   // "what files" / "what projects" phrasings.
+  // ── Documents (chunked content retrieval, v0.6.3) ────────────
+  //
+  // Sibling of the project group. Project owns FILE PRESENCE (what files
+  // exist, what their raw bytes contain); this group owns RETRIEVAL
+  // INSIDE CONTENT ("what does the contract say about termination",
+  // "find every passage about X", "search across my docs"). Both groups
+  // can fire on a message; the project-vs-documents demotion below picks
+  // the winner based on whether the message implies search or listing.
+  //
+  // KEYWORD STRATEGY
+  // ───────────────────────────────────────────
+  // Anchored on verbs/phrases that imply retrieval INSIDE a document:
+  // "what does the document say about", "find in the file", "search the
+  // doc", "across my documents", "passages about". Generic phrases like
+  // "the file" / "the doc" / "the pdf" are LEFT to the project group
+  // (they imply read, not search) — the demotion below routes search-
+  // flavored queries here even when both groups match.
+  //
+  // PREFETCH PARAMS
+  // ────────────────────────────────────────────
+  // The default action is "search" with no scope filter. The extractor
+  // pulls the query out of common shapes:
+  //   "what does the doc say about X"       → query=X
+  //   "find X in my documents"               → query=X
+  //   "search the docs for X"                → query=X
+  //   "across my docs, anything about X"     → query=X
+  // If no clean query emerges, the action stays "list" so the model gets
+  // a useful response (here's what's indexed) rather than a no-op.
+  documents: {
+    keywords: [
+      // Search/retrieval-flavored phrasings
+      'in the document', 'in this document', 'in the doc', 'in the pdf',
+      'in the contract', 'in the file',
+      'across my docs', 'across my documents', 'across the docs',
+      'across all docs', 'across all documents',
+      'what does the document say', 'what does the doc say',
+      'what does the pdf say', 'what does the contract say',
+      'what does the file say',
+      'find in the document', 'find in the doc', 'find in the file',
+      'find in the pdf', 'search the doc', 'search the document',
+      'search the docs', 'search the pdf', 'search the file',
+      'search my docs', 'search my documents',
+      'passage about', 'passages about', 'the part about',
+      'the section about', 'the chunk',
+      // Direct admin‐style probes the agent might surface
+      'index this', 'index the file', 'index the document',
+      'index the pdf', 'reindex',
+    ],
+    tools: ['documents'],
+    defaultParams: { action: 'list' },
+    paramExtractor: (msg: string) => {
+      const lower = msg.toLowerCase()
+
+      // ── Index / reindex imperatives ────────────────────────
+      // "index <filename>" / "reindex <filename>" — extract the
+      // filename-shaped token and route to the right action. Mirrors
+      // the project group's filename detection.
+      const filenameRe = /\b([A-Za-z0-9_-][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]{0,9})\b/
+      if (/\breindex\b/.test(lower)) {
+        // reindex needs a doc_id, which the user almost never has on
+        // hand. Fall through to list so the model surfaces ids first.
+        return { action: 'list' }
+      }
+      if (/\bindex\s+(this|the\s+(file|document|pdf|doc))\b/.test(lower)) {
+        const m = msg.match(filenameRe)
+        if (m) return { action: 'index', path: m[1] }
+        // No filename in the message — the agent will need a follow-up.
+        // Returning list gives it the current state to work from.
+        return { action: 'list' }
+      }
+
+      // ── Search queries ───────────────────────────────────
+      // "what does the doc say about X" → query=X
+      // "find X in the document"         → query=X
+      // "search the docs for X"          → query=X
+      // "passages about X" / "the part about X" → query=X
+      const aboutMatch =
+        msg.match(/\b(?:what\s+does\s+(?:the\s+)?(?:document|doc|pdf|contract|file)\s+say\s+about)\s+(.+?)[?.!]*\s*$/i) ||
+        msg.match(/\b(?:passages?|the\s+part|the\s+section|the\s+chunk)\s+about\s+(.+?)[?.!]*\s*$/i)
+      if (aboutMatch && aboutMatch[1]) {
+        return { action: 'search', query: aboutMatch[1].trim() }
+      }
+
+      const findInMatch =
+        msg.match(/\bfind\s+(.+?)\s+in\s+(?:the\s+|my\s+|this\s+)?(?:documents?|docs?|pdf|file|contract)\b/i)
+      if (findInMatch && findInMatch[1]) {
+        return { action: 'search', query: findInMatch[1].trim().replace(/[?.!]+$/, '') }
+      }
+
+      const searchForMatch =
+        msg.match(/\bsearch\s+(?:the\s+|my\s+|all\s+)?(?:documents?|docs?|pdf|files?|contract)\s+for\s+(.+?)[?.!]*\s*$/i) ||
+        msg.match(/\bsearch\s+(?:the\s+|my\s+|all\s+)?(?:documents?|docs?|pdf|files?|contract)\s+(.+?)[?.!]*\s*$/i)
+      if (searchForMatch && searchForMatch[1]) {
+        return { action: 'search', query: searchForMatch[1].trim() }
+      }
+
+      const acrossMatch =
+        msg.match(/\bacross\s+(?:my\s+|the\s+|all\s+)?(?:documents?|docs?)(?:[,.]?)\s*(?:anything\s+about\s+|about\s+)?(.+?)[?.!]*\s*$/i)
+      if (acrossMatch && acrossMatch[1]) {
+        return { action: 'search', query: acrossMatch[1].trim() }
+      }
+
+      // No clean extraction — fall through to defaultParams (list).
+      return undefined
+    },
+  },
+
   project: {
     keywords: [
       // File-extension probes — .includes() requires the dot, so this
@@ -1396,6 +1503,34 @@ export function detectIntent(message: string): string[] {
     if (/\b(files?|docs?|folder|pdf|attachments?)\b/i.test(message)) {
       const kept = matched.filter(g => g !== 'gmail');
       console.log(`[NerdAlert] Intent demoted gmail (file-scope vocabulary present): ${kept.join(', ')}`);
+      matched = kept;
+    }
+  }
+
+  // ── documents vs. project: search beats list (v0.6.3) ─────────────
+  // Both groups overlap on file/doc/pdf vocabulary. The right tie-break is
+  // INTENT-shaped: when the message implies retrieval inside content
+  // ("what does it say about X", "find Y in the docs", "search for Z",
+  // "across my documents"), documents wins because it can surface the
+  // specific passage. When the message implies listing or reading whole
+  // files ("what files do I have", "show me NDA.pdf", "read this"),
+  // project wins because its read action returns the full content the
+  // user is asking for.
+  //
+  // The default tie-break (no signal either way) is documents-loses,
+  // project-wins. Reasoning: a bare "the file" / "the pdf" reference is
+  // far more often a read request than a search request, and project's
+  // read action is the more useful fallback. Documents joins back in
+  // only when the message carries explicit search/retrieval signal.
+  if (matched.includes('documents') && matched.includes('project')) {
+    const searchSignal = /\b(what\s+does|find|search|passage|passages|the\s+part\s+about|the\s+section\s+about|across\s+(?:my|the|all)\s+(?:docs?|documents?))\b/i.test(message);
+    if (searchSignal) {
+      const kept = matched.filter(g => g !== 'project');
+      console.log(`[NerdAlert] Intent demoted project (search-inside-content signal): ${kept.join(', ')}`);
+      matched = kept;
+    } else {
+      const kept = matched.filter(g => g !== 'documents');
+      console.log(`[NerdAlert] Intent demoted documents (no search signal, default to project): ${kept.join(', ')}`);
       matched = kept;
     }
   }

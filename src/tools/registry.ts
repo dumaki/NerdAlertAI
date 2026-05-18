@@ -32,6 +32,7 @@ import rssTool         from './builtin/rss-tool';
 import timerTool       from './builtin/timer-tool';
 import hostMetricsTool from './builtin/host-metrics';
 import projectTool     from './builtin/project-tool';
+import documentsTool   from './builtin/documents-tool';
 import { webTool }         from './builtin/web-tool';
 import { cronManagerTool } from './builtin/cron-manager';
 
@@ -77,6 +78,7 @@ const ALL_TOOLS: NerdAlertTool[] = [
   githubTool,
   githubSetupTool,
   projectTool,
+  documentsTool,
   rssTool,
 
   webTool,
