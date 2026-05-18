@@ -202,9 +202,38 @@ async function doSearch(params: Record<string, unknown>): Promise<NerdAlertRespo
   if (query.length < 2) {
     return asResponse('The search action requires a "query" parameter of at least 2 characters.')
   }
-  const limit   = typeof params.limit === 'number' ? params.limit : undefined
-  const project = (params.project as string | undefined)?.trim() || undefined
-  const docId   = (params.doc_id  as string | undefined)?.trim() || undefined
+  const limit    = typeof params.limit === 'number' ? params.limit : undefined
+  const project  = (params.project  as string | undefined)?.trim() || undefined
+  let   docId    = (params.doc_id   as string | undefined)?.trim() || undefined
+  const filename = (params.filename as string | undefined)?.trim() || undefined
+
+  // v0.6.3.3: filename → doc_id resolution. When prefetch routes a
+  // filename-named query here ("what does NA.pdf say about X"),
+  // we receive a filename, not a doc_id. Resolve via listDocuments()
+  // which already supports project filtering. filename wins over a
+  // user-supplied doc_id — filename is the human-facing identifier
+  // and is what prefetch will pass; the model rarely has a doc_id
+  // in hand, and when it does, the prefetch path doesn't pass it.
+  //
+  // Match is case-insensitive on the stored filename. If multiple
+  // indexed docs share the same basename across projects (allowed:
+  // same content-hash across multiple projects produces one record
+  // with both project associations), the project filter narrows the
+  // match; without a project filter, the first match wins, which
+  // is fine because they're the same doc_id anyway (content-hash-
+  // keyed).
+  if (filename) {
+    const all = listDocuments({ project })
+    const match = all.find(d => d.filename.toLowerCase() === filename.toLowerCase())
+    if (!match) {
+      const scopeMsg = project ? ` in project "${project}"` : ''
+      return asResponse(
+        `No indexed document named "${filename}"${scopeMsg}. ` +
+        `Use the list action to see what's indexed, or the index action to add it.`
+      )
+    }
+    docId = match.id
+  }
 
   const results = await searchDocuments(query, { limit, project, doc_id: docId })
 
@@ -370,8 +399,9 @@ Actions:
     docs need a fresh upload via index).
 
   search \u2014 retrieve top-N chunks matching a query. Pass "query" (the search
-    string). Optional "project" or "doc_id" to scope the search. Optional
-    "limit" (default 5). Returns chunk text with score + filename + chunk index
+    string). Optional "project", "doc_id", or "filename" to scope the search
+    (filename is case-insensitive — use this when the user names the file
+    directly). Optional "limit" (default 5). Returns chunk text with score + filename + chunk index
     so you can cite the source naturally.
 
   list \u2014 enumerate indexed documents with their chunk counts and project
@@ -423,6 +453,10 @@ Stable across reindex of the same content.
       query: {
         type: 'string',
         description: 'For search: the query text (minimum 2 chars).',
+      },
+      filename: {
+        type: 'string',
+        description: 'For search: scope to a single document by its filename (case-insensitive). Useful when the user names the file directly, e.g. "what does Q4.pdf say about revenue". Resolves to a doc_id internally via listDocuments().',
       },
       limit: {
         type: 'number',

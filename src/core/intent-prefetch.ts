@@ -1187,6 +1187,71 @@ const INTENT_MAP: Record<string, IntentGroup> = {
       // "find X in the document"         → query=X
       // "search the docs for X"          → query=X
       // "passages about X" / "the part about X" → query=X
+      //
+      // v0.6.3.3 (filename-aware): mirrors the five-shape gate in
+      // detectIntent above. Each shape pulls BOTH the filename AND
+      // the query out so the documents tool's search action can
+      // resolve filename → doc_id and scope the result.
+      //
+      // Placed FIRST so a filename match takes precedence over the
+      // generic 'document/doc/pdf/contract/file' patterns below.
+      // The shape order mirrors the gate so adding a new shape in
+      // one place reminds you to add the corresponding extractor
+      // in the other.
+      //
+      // Shape 2: "check/search/scan/grep <filename> for <query>" /
+      //          "look in/through/inside <filename> for <query>"
+      const imperativeFilenameMatch = msg.match(
+        /\b(?:check|search|scan|grep|look\s+(?:in|through|inside)|comb\s+through|hunt\s+through)\s+([A-Za-z0-9_-][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]{0,9})\s+for\s+(.+?)[?.!]*\s*$/i
+      )
+      if (imperativeFilenameMatch && imperativeFilenameMatch[1] && imperativeFilenameMatch[2]) {
+        const rawQuery = imperativeFilenameMatch[2].trim().replace(/^['"]+|['"]+$/g, '')
+        return { action: 'search', query: rawQuery, filename: imperativeFilenameMatch[1].trim() }
+      }
+
+      // Shape 3: "find/locate/spot/show me/pull up <query> in <filename>"
+      const locateInFilenameMatch = msg.match(
+        /\b(?:find|locate|spot|show\s+me|pull\s+up|surface)\s+(.+?)\s+in\s+([A-Za-z0-9_-][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]{0,9})\b/i
+      )
+      if (locateInFilenameMatch && locateInFilenameMatch[1] && locateInFilenameMatch[2]) {
+        const rawQuery = locateInFilenameMatch[1].trim().replace(/^['"]+|['"]+$/g, '')
+        return { action: 'search', query: rawQuery, filename: locateInFilenameMatch[2].trim() }
+      }
+
+      // Shape 1: predicate — "what does <filename> say about <query>" /
+      //                     "does <filename> mention <query>"
+      // Accepts bare "does" as well as "what does", and makes the
+      // 'about' connector optional so transitive verbs like "mention X"
+      // (no 'about') extract cleanly.
+      const filenameVerbMatch = msg.match(
+        /\b(?:what\s+does|does)\s+([A-Za-z0-9_-][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]{0,9})\s+(?:say|mention|discuss|cover|contain|reference|talk\s+about|touch\s+on)s?(?:\s+about)?\s+(.+?)[?.!]*\s*$/i
+      )
+      if (filenameVerbMatch && filenameVerbMatch[1] && filenameVerbMatch[2]) {
+        const rawQuery = filenameVerbMatch[2].trim().replace(/^['"]+|['"]+$/g, '')
+        return { action: 'search', query: rawQuery, filename: filenameVerbMatch[1].trim() }
+      }
+
+      // Shape 4: existence — "any mention/reference/passage of <query>
+      //                       in <filename>" / "anything about <query>
+      //                       in <filename>"
+      const existenceMatch = msg.match(
+        /\b(?:any\s+(?:mention|reference|passage|part|section)|anything)\s+(?:of|about)\s+(.+?)\s+in\s+([A-Za-z0-9_-][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]{0,9})\b/i
+      )
+      if (existenceMatch && existenceMatch[1] && existenceMatch[2]) {
+        const rawQuery = existenceMatch[1].trim().replace(/^['"]+|['"]+$/g, '')
+        return { action: 'search', query: rawQuery, filename: existenceMatch[2].trim() }
+      }
+
+      // Shape 5: location — "where in <filename> is <query>" /
+      //                     "where does <filename> mention <query>"
+      const whereMatch =
+        msg.match(/\bwhere\s+in\s+([A-Za-z0-9_-][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]{0,9})\s+(?:is|does\s+it\s+(?:say|mention|discuss))\s+(.+?)[?.!]*\s*$/i) ||
+        msg.match(/\bwhere\s+does\s+([A-Za-z0-9_-][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]{0,9})\s+(?:say|mention|discuss|cover|reference)s?\s+(.+?)[?.!]*\s*$/i)
+      if (whereMatch && whereMatch[1] && whereMatch[2]) {
+        const rawQuery = whereMatch[2].trim().replace(/^['"]+|['"]+$/g, '')
+        return { action: 'search', query: rawQuery, filename: whereMatch[1].trim() }
+      }
+
       const aboutMatch =
         msg.match(/\b(?:what\s+does\s+(?:the\s+)?(?:document|doc|pdf|contract|file)\s+say\s+about)\s+(.+?)[?.!]*\s*$/i) ||
         msg.match(/\b(?:passages?|the\s+part|the\s+section|the\s+chunk)\s+about\s+(.+?)[?.!]*\s*$/i)
@@ -1428,6 +1493,37 @@ function escapeForRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, (m) => '\\' + m);
 }
 
+// ── hasDocumentsSearchShape ──────────────────────────────
+//
+// Returns true if the message contains any of the documents group's
+// search-intent shapes for filename-named queries. Shared by the gate
+// (documents branch in detectIntent's .filter() below) AND the
+// documents-vs-project demotion further down, so both stay in sync
+// when new shapes are added.
+//
+// Adding a new shape = updating ONE function. The gate's filename-
+// presence check is separate from this helper because the demotion's
+// outer conditional (matched.includes('project')) already implies a
+// filename-like reference in the message — the helper just needs to
+// detect the search-intent verb shape.
+//
+// All shapes are documented in detail in the gate's comment block.
+function hasDocumentsSearchShape(message: string): boolean {
+  // Shape 1: predicate — "what does/does X.pdf say/mention/..."
+  if (/\b(?:what\s+does|does)\s+\S*?\.[A-Za-z][A-Za-z0-9]{0,9}\s+(?:say|mention|discuss|cover|contain|reference|talk\s+about|touch\s+on)s?\b/i.test(message)) return true;
+  // Shape 2: imperative search — "check/search/scan/grep X.pdf for Y"
+  if (/\b(?:check|search|scan|grep|look\s+(?:in|through|inside)|comb\s+through|hunt\s+through)\s+\S*?\.[A-Za-z][A-Za-z0-9]{0,9}\s+for\b/i.test(message)) return true;
+  // Shape 3: locate — "find/locate/spot/show me Y in X.pdf"
+  if (/\b(?:find|locate|spot|show\s+me|pull\s+up|surface)\s+.+?\s+in\s+\S*?\.[A-Za-z][A-Za-z0-9]{0,9}\b/i.test(message)) return true;
+  // Shape 4: existence — "any mention/passage of Y in X.pdf",
+  //                     "anything about Y in X.pdf"
+  if (/\b(?:any\s+(?:mention|reference|passage|part|section)|anything|is\s+there\s+(?:any|anything))\b/i.test(message)
+      && /\b(?:about|of|for|on|regarding|mentioning|in)\b/i.test(message)) return true;
+  // Shape 5: location — "where in/does X.pdf ..."
+  if (/\bwhere\s+(?:in|does)\b.*\.[A-Za-z][A-Za-z0-9]{0,9}/i.test(message)) return true;
+  return false;
+}
+
 export function detectIntent(message: string): string[] {
   const lower = message.toLowerCase();
   let matched = Object.entries(INTENT_MAP)
@@ -1455,6 +1551,40 @@ export function detectIntent(message: string): string[] {
         // no numbers won't fire prefetch, which is fine because the
         // calculator tool can't do anything without numbers anyway.
         return /\d+\s*[+\-*\/^]\s*\d+/.test(message);
+      }
+      if (groupName === 'documents') {
+        // v0.6.3.3: documents fires either via standard keyword match
+        // OR via a filename-shaped query gate. The gate fixes queries
+        // like "what does Betcha.pdf say about Mr. Party Pooper" —
+        // the documents keywords require a generic "the doc/the pdf/
+        // the file" phrasing, so when the user names an actual
+        // filename, the project group's '.pdf' extension keyword
+        // steals the match alone and the documents-vs-project
+        // demotion never runs (documents wasn't in the matched list
+        // to demote project against).
+        //
+        // The gate combines a filename-presence check with the
+        // hasDocumentsSearchShape helper above. The helper enumerates
+        // five distinct phrasing shapes (predicate / imperative
+        // search / locate / existence / location — see its comment
+        // block) and is also called by the documents-vs-project
+        // demotion below, so the two stay in sync.
+        //
+        // All shapes share the negative property: bare reads ("Read
+        // X.pdf", "Open X.pdf", "Show me X.pdf") do not match,
+        // because they express a read intent rather than content
+        // interrogation. The corresponding extractor patterns in the
+        // documents paramExtractor pull filename+query out for each
+        // shape so the documents tool's search action gets a
+        // doc_id-scoped query.
+        //
+        // Downstream: when this gate fires, project ALSO matches via
+        // '.pdf'. Both end up in `matched`; the demotion below uses
+        // hasDocumentsSearchShape to confirm search intent and drops
+        // project.
+        if (group.keywords.some(k => lower.includes(k))) return true;
+        const filenameRe = /\b([A-Za-z0-9_-][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]{0,9})\b/;
+        return filenameRe.test(message) && hasDocumentsSearchShape(message);
       }
       return group.keywords.some(k => lower.includes(k));
     })
@@ -1527,7 +1657,18 @@ export function detectIntent(message: string): string[] {
   // read action is the more useful fallback. Documents joins back in
   // only when the message carries explicit search/retrieval signal.
   if (matched.includes('documents') && matched.includes('project')) {
-    const searchSignal = /\b(what\s+does|find|search|passage|passages|the\s+part\s+about|the\s+section\s+about|across\s+(?:my|the|all)\s+(?:docs?|documents?))\b/i.test(message);
+    // v0.6.3.3: searchSignal combines the original v0.6.3 narrow set
+    // (which covers the keyword-path case where documents fired via
+    // a phrase like "in the doc" or "across my docs") with the
+    // hasDocumentsSearchShape helper (which covers the gate path
+    // where documents fired via a filename-named query like "check
+    // NA.pdf for X" or "any mention of Y in NA.pdf"). Without the
+    // helper here, the gate could fire documents while the demotion
+    // still dropped it on tie-break, because the original regex
+    // didn't know about verbs like 'check', 'scan', 'any mention'.
+    const searchSignal =
+      /\b(what\s+does|find|search|passage|passages|the\s+part\s+about|the\s+section\s+about|across\s+(?:my|the|all)\s+(?:docs?|documents?))\b/i.test(message)
+      || hasDocumentsSearchShape(message);
     if (searchSignal) {
       const kept = matched.filter(g => g !== 'project');
       console.log(`[NerdAlert] Intent demoted project (search-inside-content signal): ${kept.join(', ')}`);
