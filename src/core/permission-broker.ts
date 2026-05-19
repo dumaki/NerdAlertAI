@@ -71,6 +71,14 @@ export interface BrokerContext {
   maxModelTrustLevel?: number;
   /** Friendly model identifier for error messages. Optional. */
   modelLabel?: string;
+  /**
+   * Friendly name of the agent currently responding (e.g. "Sherman").
+   * Used to suffix per-turn `[NerdAlert]` log lines with `(via ${name})`
+   * so journalctl tails stay legible across personality switches in a
+   * long session. Optional; the broker itself never reads this field —
+   * it's diagnostic metadata for log emitters. v0.6.3.4 (Q4).
+   */
+  agentName?: string;
 }
 
 /** Standardized result every adapter receives. */

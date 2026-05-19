@@ -332,6 +332,7 @@ async function handleAnthropicStream(
   initialMessages: Anthropic.MessageParam[],
   tools:           Anthropic.Tool[],
   trustLevel:      number,
+  agentName:       string,
 ): Promise<void> {
 
   const llm = getLLMConfig();
@@ -383,6 +384,7 @@ async function handleAnthropicStream(
   const brokerContext: BrokerContext = {
     userTrustLevel: trustLevel,
     modelLabel: llm.model,
+    agentName,
   };
 
   try {
@@ -429,6 +431,7 @@ async function handleOllamaStream(
   initialMessages: Anthropic.MessageParam[],
   prefetchSources: Source[],
   trustLevel:      number,
+  agentName:       string,
 ): Promise<void> {
 
   const llm = getLLMConfig();
@@ -438,7 +441,7 @@ async function handleOllamaStream(
   // skip the probe and route straight to pseudo-tool.
   if (noNativeToolSupport.has(bareModel)) {
     console.log(`[capability-cache] ${bareModel} → pseudo-tool (cached)`);
-    return handlePseudoToolStream(res, systemPrompt, initialMessages, prefetchSources, trustLevel, 'ollama');
+    return handlePseudoToolStream(res, systemPrompt, initialMessages, prefetchSources, trustLevel, agentName, 'ollama');
   }
 
   // Convert Anthropic MessageParam history → ORMessage via the
@@ -466,6 +469,7 @@ async function handleOllamaStream(
   const brokerContext: BrokerContext = {
     userTrustLevel: trustLevel,
     modelLabel: llm.model,
+    agentName,
   };
 
   try {
@@ -530,6 +534,7 @@ async function handlePseudoToolStream(
   initialMessages:   Anthropic.MessageParam[],
   prefetchSources:   Source[],
   trustLevel:        number,
+  agentName:         string,
   transportOverride?: 'openrouter' | 'ollama',
 ): Promise<void> {
 
@@ -560,6 +565,7 @@ async function handlePseudoToolStream(
   const brokerContext: BrokerContext = {
     userTrustLevel: trustLevel,
     modelLabel: llm.model,
+    agentName,
   };
 
   try {
@@ -936,7 +942,7 @@ export function mountUIRoutes(app: Express): void {
       let prefetchResults: PrefetchResult[] = [];
 
       if (needsPrefetch) {
-        const detectedGroups = detectIntent(safeMessage);
+        const detectedGroups = detectIntent(safeMessage, agentName);
 
         if (detectedGroups.length > 0) {
           const historyTurns: HistoryTurn[] = conversationHistory
@@ -953,7 +959,7 @@ export function mountUIRoutes(app: Express): void {
 
           prefetchResults = await prefetchTools(
             detectedGroups,
-            { userTrustLevel: trustLevel, modelLabel: llm.model },
+            { userTrustLevel: trustLevel, modelLabel: llm.model, agentName },
             safeMessage,
             historyTurns,
           );
@@ -1101,7 +1107,7 @@ export function mountUIRoutes(app: Express): void {
       // handleNarrationStream's existence.
       if (llm.provider === 'anthropic') {
         const tools = toAnthropicFormat(getAvailableTools()) as Anthropic.Tool[];
-        await handleAnthropicStream(res, systemPrompt, messages, tools, trustLevel);
+        await handleAnthropicStream(res, systemPrompt, messages, tools, trustLevel, agentName);
       } else if (shouldNarrate) {
         const outcome = await handleNarrationStream(
           res,
@@ -1126,9 +1132,9 @@ export function mountUIRoutes(app: Express): void {
             `[narration] postcheck bail (${outcome.reason}) → tool loop fallback`
           );
           if (llm.provider === 'ollama') {
-            await handleOllamaStream(res, systemPrompt, messages, [], trustLevel);
+            await handleOllamaStream(res, systemPrompt, messages, [], trustLevel, agentName);
           } else {
-            await handlePseudoToolStream(res, systemPrompt, messages, [], trustLevel);
+            await handlePseudoToolStream(res, systemPrompt, messages, [], trustLevel, agentName);
           }
         }
       } else if (llm.provider === 'ollama') {
@@ -1139,10 +1145,10 @@ export function mountUIRoutes(app: Express): void {
         // didn't run; prefetchSources is empty when no tool returned
         // data). In the gate-bail case it strips the misroute data
         // out of the model's input so the tool loop runs clean.
-        await handleOllamaStream(res, systemPrompt, messages, [], trustLevel);
+        await handleOllamaStream(res, systemPrompt, messages, [], trustLevel, agentName);
       } else {
         // OpenRouter — same bail behavior as the Ollama branch.
-        await handlePseudoToolStream(res, systemPrompt, messages, [], trustLevel);
+        await handlePseudoToolStream(res, systemPrompt, messages, [], trustLevel, agentName);
       }
 
       const saveable = [

@@ -1524,8 +1524,13 @@ function hasDocumentsSearchShape(message: string): boolean {
   return false;
 }
 
-export function detectIntent(message: string): string[] {
+export function detectIntent(message: string, agentName?: string): string[] {
   const lower = message.toLowerCase();
+  // v0.6.3.4 (Q4): per-turn agent name suffix appended to every
+  // [NerdAlert] log line below. Empty when caller omits the arg —
+  // preserves the pre-v0.6.3.4 log shape exactly for any caller
+  // (CLI tools, tests) that doesn't have an agent identity to thread.
+  const viaSuffix = agentName ? ` (via ${agentName})` : '';
   let matched = Object.entries(INTENT_MAP)
     .filter(([groupName, group]) => {
       if (groupName === 'datetime') {
@@ -1610,7 +1615,7 @@ export function detectIntent(message: string): string[] {
   // to the demote list, but web is the only case today.
   if (matched.includes('web') && matched.length > 1) {
     const kept = matched.filter(g => g !== 'web');
-    console.log(`[NerdAlert] Intent demoted web (more specific match): ${kept.join(', ')}`);
+    console.log(`[NerdAlert] Intent demoted web (more specific match): ${kept.join(', ')}${viaSuffix}`);
     matched = kept;
   }
 
@@ -1636,7 +1641,7 @@ export function detectIntent(message: string): string[] {
   if (matched.includes('project') && matched.includes('gmail')) {
     if (/\b(files?|docs?|folder|pdf|attachments?)\b/i.test(message)) {
       const kept = matched.filter(g => g !== 'gmail');
-      console.log(`[NerdAlert] Intent demoted gmail (file-scope vocabulary present): ${kept.join(', ')}`);
+      console.log(`[NerdAlert] Intent demoted gmail (file-scope vocabulary present): ${kept.join(', ')}${viaSuffix}`);
       matched = kept;
     }
   }
@@ -1671,17 +1676,17 @@ export function detectIntent(message: string): string[] {
       || hasDocumentsSearchShape(message);
     if (searchSignal) {
       const kept = matched.filter(g => g !== 'project');
-      console.log(`[NerdAlert] Intent demoted project (search-inside-content signal): ${kept.join(', ')}`);
+      console.log(`[NerdAlert] Intent demoted project (search-inside-content signal): ${kept.join(', ')}${viaSuffix}`);
       matched = kept;
     } else {
       const kept = matched.filter(g => g !== 'documents');
-      console.log(`[NerdAlert] Intent demoted documents (no search signal, default to project): ${kept.join(', ')}`);
+      console.log(`[NerdAlert] Intent demoted documents (no search signal, default to project): ${kept.join(', ')}${viaSuffix}`);
       matched = kept;
     }
   }
 
   if (matched.length > 0) {
-    console.log(`[NerdAlert] Intent detected: ${matched.join(', ')}`);
+    console.log(`[NerdAlert] Intent detected: ${matched.join(', ')}${viaSuffix}`);
   }
   return matched;
 }
@@ -1764,7 +1769,12 @@ export async function prefetchTools(
     });
   }
 
-  console.log(`[NerdAlert] Prefetch results: ${results.map(r => `${r.toolName}=${r.available ? 'ok' : 'unavailable'}`).join(', ')}`);
+  // v0.6.3.4 (Q4): suffix the per-turn log line with the agent name
+  // when the caller threaded one through BrokerContext. Same shape as
+  // detectIntent's viaSuffix above; read from the context here because
+  // prefetchTools doesn't take agentName as a separate parameter.
+  const viaSuffix = brokerContext.agentName ? ` (via ${brokerContext.agentName})` : '';
+  console.log(`[NerdAlert] Prefetch results: ${results.map(r => `${r.toolName}=${r.available ? 'ok' : 'unavailable'}`).join(', ')}${viaSuffix}`);
   return results;
 }
 

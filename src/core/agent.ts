@@ -192,13 +192,23 @@ export async function chat(
       // (core/permission-broker.ts → executeTool). v0.7 BYOK will
       // populate maxModelTrustLevel; until then it stays undefined,
       // meaning "no model-level cap, only the user trust level applies."
+      // v0.6.3.4 (Q4): include agentName in the broker context so the
+      // prefetchTools log line picks it up (the CLI path doesn't run
+      // prefetch today, but threading agentName through keeps every
+      // BrokerContext build consistent with the UI path). The local
+      // viaSuffix is reused below to tag the per-turn Tool call /
+      // Tool result / Tool error log lines.
+      const agentName = config.agent.name;
+      const viaSuffix = ` (via ${agentName})`;
+
       const brokerContext: BrokerContext = {
         userTrustLevel: config.agent.trust_level,
         modelLabel:     llm.model,
+        agentName,
       };
 
       for (const toolCall of toolUseBlocks) {
-        console.log(`[NerdAlert] Tool call: ${toolCall.name}`, toolCall.input);
+        console.log(`[NerdAlert] Tool call: ${toolCall.name}${viaSuffix}`, toolCall.input);
 
         // Route through the broker. It looks up the tool, enforces
         // trust + enabled-state, executes, catches throws, and returns
@@ -214,9 +224,9 @@ export async function chat(
         );
 
         if (result.error) {
-          console.error(`[NerdAlert] Tool error: ${toolCall.name} → ${result.output}`);
+          console.error(`[NerdAlert] Tool error: ${toolCall.name} → ${result.output}${viaSuffix}`);
         } else {
-          console.log(`[NerdAlert] Tool result: ${toolCall.name} completed`);
+          console.log(`[NerdAlert] Tool result: ${toolCall.name} completed${viaSuffix}`);
         }
 
         toolResults.push({
