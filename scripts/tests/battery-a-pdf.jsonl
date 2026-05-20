@@ -1,0 +1,25 @@
+// Battery A — PDF read refusals (Class 1)
+// Tests whether Mistral correctly calls the file-read tool rather than
+// refusing to read PDFs based on its pretraining prior.
+//
+// Baseline results from v0.6.3.4 sweep (11 queries, 8/11 pass, 27% failure rate).
+// Three distinct failure shapes documented:
+//   - class1-refusal: verbatim refusal without attempting the tool
+//   - routing-miss:  query routed to wrong intent (web vs project/documents)
+//
+// Update the "baseline" field after each sweep if the result changes.
+// This enables regression and fix tracking in the summary report.
+//
+// NOTE: pdf-class1-brett-06 (indexing handoff) query is a placeholder —
+// confirm the exact query used in the v0.6.3.4 sweep and update if known.
+{"id":"pdf-class1-sherman-01","battery":"A","agent":"Sherman","agentId":"sherman","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"What's in the Betcha PDF?","expect":{"type":"no_refusal"},"tags":["class1","pdf-refusal","sherman"],"baseline":"fail","notes":"v0.6.3.4 FAIL: verbatim Class 1 refusal. narration-postcheck bailed (no-data-reference), tool loop retried, Mistral refused again on retry."}
+{"id":"pdf-class1-sherman-02","battery":"A","agent":"Sherman","agentId":"sherman","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"Show me the contents of NA_S01E03_-_Betcha_Won_t.pdf","expect":{"type":"no_refusal"},"tags":["class1","pdf-refusal","sherman"],"baseline":"fail","notes":"v0.6.3.4 FAIL: 'I currently don't have the ability to access or display the contents of PDF files.' Verbatim Class 1."}
+{"id":"pdf-class1-sherman-03","battery":"A","agent":"Sherman","agentId":"sherman","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"Read me NA_S01E03_-_Betcha_Won_t.pdf","expect":{"type":"no_refusal"},"tags":["class1","pdf-refusal","sherman"],"baseline":"pass","notes":"v0.6.3.4 PASS: graceful long-file response. Regression guard."}
+{"id":"pdf-class1-sherman-04","battery":"A","agent":"Sherman","agentId":"sherman","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"Open the Betcha Won't script and tell me what happens in act 2","expect":{"type":"no_refusal"},"tags":["class1","pdf-refusal","sherman"],"baseline":"pass","notes":"v0.6.3.4 PASS: correct act 2 summary. Regression guard."}
+{"id":"pdf-class1-sherman-05","battery":"A","agent":"Sherman","agentId":"sherman","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"Read NA_S01E03_-_Betcha_Won_t.pdf and summarize","expect":{"type":"no_refusal"},"tags":["class1","pdf-refusal","sherman"],"baseline":"pass","notes":"v0.6.3.4 PASS: correct summary. Regression guard."}
+{"id":"pdf-class1-brett-01","battery":"A","agent":"Brett","agentId":"brett","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"Read me NA_S01E08_-_Goodnerds.pdf","expect":{"type":"no_refusal"},"tags":["class1","pdf-refusal","brett"],"baseline":"pass","notes":"v0.6.3.4 PASS. Regression guard."}
+{"id":"pdf-class1-brett-02","battery":"A","agent":"Brett","agentId":"brett","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"what does goodnerds pdf say","expect":{"type":"no_refusal"},"tags":["class1","pdf-refusal","brett"],"baseline":"pass","notes":"v0.6.3.4 PASS: correct content. Minor 'my bad, I misremembered' self-correction preamble — not a refusal. Regression guard."}
+{"id":"pdf-class1-brett-03","battery":"A","agent":"Brett","agentId":"brett","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"open goodnerds pdf","expect":{"type":"no_refusal"},"tags":["class1","pdf-refusal","brett"],"baseline":"pass","notes":"v0.6.3.4 PASS. Regression guard."}
+{"id":"pdf-class1-brett-04","battery":"A","agent":"Brett","agentId":"brett","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"pull up the goodnerds pdf and give me the gist","expect":{"type":"routing","intent":"project"},"tags":["routing-miss","brett"],"baseline":"fail","notes":"v0.6.3.4 FAIL: routing miss — intent matched 'web' instead of project/documents. 'gist' + 'pull up' outweighed project keywords in the score. Different failure shape from Class 1."}
+{"id":"pdf-class1-brett-05","battery":"A","agent":"Brett","agentId":"brett","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"whats in goodnerds pdf","expect":{"type":"no_refusal"},"tags":["class1","pdf-refusal","brett"],"baseline":"pass","notes":"v0.6.3.4 PASS: correct content. Regression guard."}
+{"id":"pdf-class1-brett-06","battery":"A","agent":"Brett","agentId":"brett","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"Index the Goodnerds PDF for me","expect":{"type":"tool_called","tool":"documents.index"},"tags":["indexing","brett"],"baseline":"pass","notes":"v0.6.3.4 PASS: indexing handoff, lazy-index fired. PLACEHOLDER query — confirm exact wording from v0.6.3.4 sweep and update."}

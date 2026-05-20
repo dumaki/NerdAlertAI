@@ -71,3 +71,8 @@ data/reminders.db-shm
 docs/specDocs/
 docs/handoffs/
 
+# === BATCH RUNNER RESULTS ===
+# Test run output is ephemeral — timestamped JSONL files generated
+# by scripts/batch-runner.ts. Never committed; re-run to regenerate.
+scripts/test-results/
+

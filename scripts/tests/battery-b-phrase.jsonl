@@ -1,0 +1,26 @@
+// Battery B — Phrase-search false negatives (Class 2)
+// Tests whether the hasDocumentsSearchShape() routing correctly sends
+// varied query phrasings to documents.search rather than the agent
+// hallucinating an answer or over-applying the dissonance clause.
+//
+// Five shapes per agent: predicate / imperative / locate / existence / location
+// True negatives (ladybug, clowns) verify the agent reports "not found"
+// honestly rather than inventing content or refusing to check.
+//
+// Baseline results from v0.6.3.4 sweep: 10/10 pass. All cases are
+// regression guards — if any fail, the dissonance fix from v0.6.3.3
+// has broken. Investigate immediately.
+//
+// NOTE: Exact queries from the original v0.6.3.4 sweep are not recorded
+// in the spec. These are representative queries for each shape. Confirm
+// and update with exact sweep queries if available.
+{"id":"phrase-class2-sherman-01","battery":"B","agent":"Sherman","agentId":"sherman","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"What does the Betcha script say about the talent show?","expect":{"type":"tool_called","tool":"documents"},"tags":["class2","phrase-search","sherman","shape:predicate"],"baseline":"pass","notes":"v0.6.3.4 PASS — shape:predicate. Regression guard."}
+{"id":"phrase-class2-sherman-02","battery":"B","agent":"Sherman","agentId":"sherman","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"Find mentions of the bet in the Betcha script","expect":{"type":"tool_called","tool":"documents"},"tags":["class2","phrase-search","sherman","shape:imperative"],"baseline":"pass","notes":"v0.6.3.4 PASS — shape:imperative. Regression guard."}
+{"id":"phrase-class2-sherman-03","battery":"B","agent":"Sherman","agentId":"sherman","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"Where in the Betcha script does the main conflict happen?","expect":{"type":"tool_called","tool":"documents"},"tags":["class2","phrase-search","sherman","shape:locate"],"baseline":"pass","notes":"v0.6.3.4 PASS — shape:locate. Regression guard."}
+{"id":"phrase-class2-sherman-04","battery":"B","agent":"Sherman","agentId":"sherman","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"Does the Betcha script have any ladybugs in it?","expect":{"type":"tool_called","tool":"documents"},"tags":["class2","phrase-search","sherman","shape:existence","true-negative"],"baseline":"pass","notes":"v0.6.3.4 PASS — shape:existence. TRUE NEGATIVE: ladybug not in doc. Model correctly reports absent without over-applying dissonance clause."}
+{"id":"phrase-class2-sherman-05","battery":"B","agent":"Sherman","agentId":"sherman","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"What part of the script takes place at school?","expect":{"type":"tool_called","tool":"documents"},"tags":["class2","phrase-search","sherman","shape:location"],"baseline":"pass","notes":"v0.6.3.4 PASS — shape:location. Regression guard."}
+{"id":"phrase-class2-brett-01","battery":"B","agent":"Brett","agentId":"brett","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"What does the Goodnerds script say about the main characters?","expect":{"type":"tool_called","tool":"documents"},"tags":["class2","phrase-search","brett","shape:predicate"],"baseline":"pass","notes":"v0.6.3.4 PASS — shape:predicate. Regression guard."}
+{"id":"phrase-class2-brett-02","battery":"B","agent":"Brett","agentId":"brett","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"Find any clown references in the Goodnerds pdf","expect":{"type":"tool_called","tool":"documents"},"tags":["class2","phrase-search","brett","shape:imperative","true-negative"],"baseline":"pass","notes":"v0.6.3.4 PASS — shape:imperative. TRUE NEGATIVE: clowns not in doc. Correctly reported absent."}
+{"id":"phrase-class2-brett-03","battery":"B","agent":"Brett","agentId":"brett","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"Where does the opening scene take place in Goodnerds?","expect":{"type":"tool_called","tool":"documents"},"tags":["class2","phrase-search","brett","shape:locate"],"baseline":"pass","notes":"v0.6.3.4 PASS — shape:locate. Regression guard."}
+{"id":"phrase-class2-brett-04","battery":"B","agent":"Brett","agentId":"brett","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"Is there any mention of a computer lab in the Goodnerds script?","expect":{"type":"tool_called","tool":"documents"},"tags":["class2","phrase-search","brett","shape:existence"],"baseline":"pass","notes":"v0.6.3.4 PASS — shape:existence. Regression guard."}
+{"id":"phrase-class2-brett-05","battery":"B","agent":"Brett","agentId":"brett","model":"ollama/mistral-small3.2:24b-instruct-q4_K_M","query":"What section of Goodnerds is set in the cafeteria?","expect":{"type":"tool_called","tool":"documents"},"tags":["class2","phrase-search","brett","shape:location"],"baseline":"pass","notes":"v0.6.3.4 PASS — shape:location. Regression guard."}
