@@ -355,6 +355,46 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+// ── Partial-name resolution (v0.6.3.5) ─────────────────────
+//
+// Resolve a colloquial stem ("goodnerds") to an actual file when no
+// exact path matches. The intent-prefetch project extractor now emits
+// { action: 'read', path: '<stem>' } for casual references like
+// "goodnerds pdf" (see extractColloquialFileStem); without resolution,
+// readFile's fs.existsSync check fails and the user gets "No file at
+// inbox/goodnerds" instead of the script.
+//
+// Walks the project's files (reusing walkProject, so the same depth /
+// entry caps and symlink/dotfile skips apply) and substring-matches
+// the stem against basenames, case-insensitive. Returns:
+//   - exactly one match  → { relPath } so readFile can open it
+//   - more than one      → { candidates } for the agent to disambiguate
+//   - zero               → { candidates: [] }
+//
+// Scoped to the passed project (defaults to inbox — the drag-and-drop
+// destination where testers' files land). Exact dotted paths never
+// reach here: readFile only calls this on the not-found branch.
+async function resolveStemInProject(
+  project: string,
+  stem:    string,
+): Promise<{ relPath?: string; candidates: string[] }> {
+  const projectRoot = path.join(PROJECTS_ROOT, project);
+  if (!isValidProjectName(project) || !fs.existsSync(projectRoot)) {
+    return { candidates: [] };
+  }
+
+  const out: FileEntry[] = [];
+  await walkProject(projectRoot, projectRoot, 0, out);
+
+  const needle  = stem.toLowerCase();
+  const matches = out
+    .filter(e => !e.isDir && path.basename(e.relPath).toLowerCase().includes(needle))
+    .map(e => e.relPath);
+
+  if (matches.length === 1) return { relPath: matches[0], candidates: matches };
+  return { candidates: matches };
+}
+
 // ── action: read ──────────────────────────────────────────────
 
 function isProbablyBinary(filePath: string): boolean {
@@ -409,6 +449,28 @@ async function readFile(project: string, relPath: string): Promise<NerdAlertResp
   }
 
   if (!fs.existsSync(absPath)) {
+    // v0.6.3.5: exact path didn't resolve. If the caller passed a
+    // colloquial stem ("goodnerds") rather than a full filename, try
+    // to resolve it against the project's files by case-insensitive
+    // basename substring match. One hit → read it; several → list the
+    // candidates so the agent can disambiguate; none → the original
+    // not-found message. The recursion is bounded: resolved paths come
+    // from walkProject, which only emits files that exist, so the
+    // re-entry takes the normal read path, not this branch again.
+    const { relPath: resolved, candidates } = await resolveStemInProject(project, relPath);
+    if (resolved) {
+      return await readFile(project, resolved);
+    }
+    if (candidates.length > 1) {
+      return {
+        type:    'text',
+        content:
+          `"${relPath}" matches more than one file in "${project}": ` +
+          candidates.join(', ') +
+          `. Tell me which one and I'll read it.`,
+        metadata: {},
+      };
+    }
     return {
       type:    'text',
       content: `No file at "${project}/${relPath}". Use the list action to see what's available.`,

@@ -1436,6 +1436,20 @@ const INTENT_MAP: Record<string, IntentGroup> = {
         return { action: 'read', path: fileMatch[1] };
       }
 
+      // 1b. Colloquial file stem (v0.6.3.5) — "goodnerds pdf" →
+      //     "goodnerds". No dotted filename in the message; pass the
+      //     stem as the path. The project tool's read action resolves
+      //     a partial stem against the project's file list by
+      //     case-insensitive basename substring match (see
+      //     project-tool.ts resolveStemInProject). Placed after the
+      //     dotted match (exact filenames always win) and before the
+      //     pronominal follow-up (a stem in THIS message beats a
+      //     filename pulled from history).
+      const colloquialStem = extractColloquialFileStem(msg);
+      if (colloquialStem) {
+        return { action: 'read', path: colloquialStem };
+      }
+
       // 2. Pronominal follow-up — "repeat the file verbatim", "read it
       //    again", "what's in this doc". The current message has no
       //    filename but is clearly referring to one. Walk recent
@@ -1491,6 +1505,104 @@ function escapeForRegex(s: string): string {
   // mean "the matched substring", so we use a function form
   // of replace to avoid that interpretation.
   return s.replace(/[.*+?^${}()|[\]\\]/g, (m) => '\\' + m);
+}
+
+// ── Colloquial file reference (v0.6.3.5) ─────────────────────
+//
+// Detects a casual document reference: a name token immediately
+// followed by a file-type noun, with NO dotted extension. Catches
+// "goodnerds pdf", "the betcha script", "budget spreadsheet" — the
+// dot-less form that every gate and extractor in this file misses.
+//
+// WHY THIS EXISTS
+// ─────────────────────────────────────────────────────────────
+// Every filename path here is dot-anchored (\.[ext]). The full
+// "NA_S01E08_-_Goodnerds.pdf" matches; the casual "goodnerds pdf"
+// matches nothing, so the query leaks to the web group (via
+// 'pull up' / 'find') or fires no group at all and drops to an
+// unguided tool-loop selection. The v0.6.3.4 Battery A sweep showed
+// Brett's "goodnerds pdf" queries routing to web ("Goodness of God"
+// search garbage) for exactly this reason.
+//
+// SHAPE: <name> <filetype-noun>
+//   - name: ≥2 chars, letters/digits/'-_, NOT a determiner, question
+//     word, common file-verb, preposition, or filetype noun itself.
+//     The stopword set keeps "the pdf" (→ "the"), "read file"
+//     (→ "read"), "summarize document" (→ "summarize") from being
+//     mis-captured as filename stems — those generic references are
+//     already handled by the project keywords.
+//   - filetype-noun: pdf, doc, docx, document, file, script, etc.
+//
+// extractColloquialFileStem returns the captured stem (for the
+// extractors to resolve against the file list) or null.
+// hasColloquialFileReference is the boolean form for the gate.
+
+const COLLOQUIAL_FILETYPE_NOUNS = [
+  'pdf', 'pdfs', 'doc', 'docs', 'docx', 'document', 'documents',
+  'file', 'files', 'script', 'scripts', 'spreadsheet', 'csv',
+  'txt', 'readme',
+].join('|');
+
+// Tokens that are NOT valid name stems. Determiners/question-words
+// would mis-capture ("the pdf" → "the"); common file-verbs would
+// capture the verb ("read file" → "read"); filetype nouns in the
+// name slot are nonsense ("pdf file" → "pdf").
+const COLLOQUIAL_NAME_STOPWORDS = new Set<string>([
+  // determiners / possessives
+  'the', 'this', 'that', 'these', 'those', 'an', 'my', 'your', 'his',
+  'her', 'its', 'our', 'their', 'some', 'any', 'another', 'each',
+  'every', 'one',
+  // question / relative words
+  'what', 'which', 'whose', 'who', 'where', 'when', 'how', 'why',
+  // prepositions / conjunctions / copulas
+  'in', 'of', 'on', 'for', 'about', 'and', 'or', 'with', 'from',
+  'into', 'at', 'by', 'are', 'was', 'were',
+  // common file-verbs and conversational filler
+  'open', 'read', 'show', 'pull', 'send', 'save', 'delete', 'write',
+  'edit', 'view', 'get', 'give', 'tell', 'find', 'search', 'check',
+  'scan', 'grep', 'list', 'index', 'reindex', 'attach', 'upload',
+  'download', 'fetch', 'load', 'print', 'share', 'summarize',
+  'summarise', 'parse', 'analyze', 'analyse', 'review', 'close',
+  'create', 'make', 'add', 'remove', 'see', 'want', 'need', 'please',
+  'here', 'there', 'me', 'it',
+  // filetype nouns can't themselves be a name stem
+  'pdf', 'pdfs', 'doc', 'docs', 'docx', 'document', 'documents',
+  'file', 'files', 'script', 'scripts', 'spreadsheet', 'csv',
+  'txt', 'readme',
+]);
+
+// Built once at module load. Source reused (with the 'g' flag) inside
+// extractColloquialFileStem so we can iterate every <name> <noun>
+// pair and skip stopword stems rather than bailing on the first.
+const COLLOQUIAL_REF_RE = new RegExp(
+  '\\b([A-Za-z0-9][A-Za-z0-9_\'-]+)\\s+(?:' + COLLOQUIAL_FILETYPE_NOUNS + ')\\b',
+  'i',
+);
+
+export function extractColloquialFileStem(message: string): string | null {
+  // If a dotted filename is present, the dot-anchored gates and
+  // extractors own the query — never reinterpret a dotted match as a
+  // colloquial stem.
+  if (/\b[A-Za-z0-9_-][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]{0,9}\b/.test(message)) {
+    return null;
+  }
+  // Iterate all <name> <filetype> pairs, return the first whose name
+  // isn't a stopword. Handles "summarize the document goodnerds pdf"
+  // where an earlier pair ("the document") has a stopword stem but a
+  // later one ("goodnerds pdf") is the real reference.
+  const re = new RegExp(COLLOQUIAL_REF_RE.source, 'gi');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(message)) !== null) {
+    const stem = m[1];
+    if (stem && !COLLOQUIAL_NAME_STOPWORDS.has(stem.toLowerCase())) {
+      return stem;
+    }
+  }
+  return null;
+}
+
+function hasColloquialFileReference(message: string): boolean {
+  return extractColloquialFileStem(message) !== null;
 }
 
 // ── hasDocumentsSearchShape ──────────────────────────────
@@ -1590,6 +1702,18 @@ export function detectIntent(message: string, agentName?: string): string[] {
         if (group.keywords.some(k => lower.includes(k))) return true;
         const filenameRe = /\b([A-Za-z0-9_-][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]{0,9})\b/;
         return filenameRe.test(message) && hasDocumentsSearchShape(message);
+      }
+      if (groupName === 'project') {
+        // v0.6.3.5: project fires on its keyword list OR on a colloquial
+        // file reference ("goodnerds pdf") with no dotted extension.
+        // Without the colloquial branch, casual filename references match
+        // no project keyword ('.pdf' needs the dot, 'the pdf' needs the
+        // article adjacent), fire nothing specific, and leak to web. The
+        // read default is correct here: the documents-vs-project demotion
+        // below still pulls search-shaped queries toward documents when
+        // documents also fires.
+        if (group.keywords.some(k => lower.includes(k))) return true;
+        return hasColloquialFileReference(message);
       }
       return group.keywords.some(k => lower.includes(k));
     })
