@@ -990,6 +990,13 @@ const INTENT_MAP: Record<string, IntentGroup> = {
       // Capture imperatives — anchored phrases only
       'remember that', 'remember this', 'please remember',
       'note that', 'save this', 'store this',
+      // v0.6.3.6: colloquial save-a-memory imperatives. "save a memory"
+      // and "save a note" are natural phrasings that missed the gate
+      // because the existing captures required "save this" (demonstrative)
+      // not "save a <noun>" (indefinite). Without these, a query like
+      // "save a memory that X" routes to project when X contains a
+      // filename reference, and Mistral narrates a fake save.
+      'save a memory', 'save a note', 'log a note', 'log that',
       // Recall — explicit memory-verb queries
       'do you remember', 'what do you remember',
       'what do you know about me', 'do you know about me',
@@ -1012,7 +1019,10 @@ const INTENT_MAP: Record<string, IntentGroup> = {
       // "remember that I prefer dark roast" → capture
       // "note that the cron job runs at 3am"  → capture
       // "save this: project deadline is June 12" → capture
-      const captureRe = /^(?:please\s+)?(?:remember|note|save|store)\s+(?:that|this:?)\s+(.+?)[.!?]*\s*$/i;
+      // "save a memory that X" / "log a note that X" → capture (v0.6.3.6)
+      // The optional "a <noun>" group handles indefinite-article forms;
+      // "log" added to the verb set for "log that" / "log a note that".
+      const captureRe = /^(?:please\s+)?(?:remember|note|save|store|log)\s+(?:a\s+(?:memory|note|thought|reminder)\s+)?(?:that|this:?)\s+(.+?)[.!?]*\s*$/i;
       const captureMatch = msg.match(captureRe);
       if (captureMatch) {
         const content = captureMatch[1].trim();
