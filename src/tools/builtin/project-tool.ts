@@ -386,9 +386,9 @@ async function resolveStemInProject(
   const out: FileEntry[] = [];
   await walkProject(projectRoot, projectRoot, 0, out);
 
-  const needle  = stem.toLowerCase();
+  const needle  = stem.toLowerCase().replace(/['\u2019\s_\-]/g, '')
   const matches = out
-    .filter(e => !e.isDir && path.basename(e.relPath).toLowerCase().includes(needle))
+    .filter(e => !e.isDir && path.basename(e.relPath).toLowerCase().replace(/['\u2019\s_\-]/g, '').includes(needle))
     .map(e => e.relPath);
 
   if (matches.length === 1) return { relPath: matches[0], candidates: matches };
