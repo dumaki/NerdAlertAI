@@ -115,7 +115,29 @@ async function doIndex(params: Record<string, unknown>): Promise<NerdAlertRespon
     return asResponse(`Cannot index: ${err instanceof Error ? err.message : String(err)}`)
   }
   if (!fs.existsSync(absPath)) {
-    return asResponse(`No file at "${project}/${filePath}". Use the project tool's list action to see what's available.`)
+    // v0.6.3.6: stem fallback — filePath may be a colloquial stem like
+    // "goodnerds" rather than a full filename. Walk the project root
+    // (one level) and substring-match basenames case-insensitively.
+    // Normalization strips apostrophes, spaces, hyphens, and underscores
+    // so "won't" matches "won_t" and "betcha won't" matches "Betcha_Won_t".
+    // Mirrors resolveStemInProject in project-tool.ts.
+    const projectRoot   = path.join(PROJECTS_ROOT, project)
+    const normalizedNeedle = filePath.toLowerCase().replace(/[' \u2019\s_\-]/g, '')
+    let stemResolved    = false
+    if (fs.existsSync(projectRoot)) {
+      const entries = fs.readdirSync(projectRoot, { withFileTypes: true })
+      const match   = entries.find(
+        e => e.isFile() &&
+          path.basename(e.name).toLowerCase().replace(/[' \u2019\s_\-]/g, '').includes(normalizedNeedle)
+      )
+      if (match) {
+        absPath       = path.join(projectRoot, match.name)
+        stemResolved  = true
+      }
+    }
+    if (!stemResolved) {
+      return asResponse(`No file at "${project}/${filePath}". Use the project tool's list action to see what's available.`)
+    }
   }
 
   let buffer: Buffer

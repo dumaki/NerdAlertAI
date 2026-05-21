@@ -1168,6 +1168,11 @@ const INTENT_MAP: Record<string, IntentGroup> = {
       // Direct admin‐style probes the agent might surface
       'index this', 'index the file', 'index the document',
       'index the pdf', 'reindex',
+      // v0.6.3.6: colloquial index imperatives — "index the Goodnerds PDF",
+      // "index the Betcha Won't PDF". The bare keywords above only match
+      // when the type noun follows 'the' directly (no name in between).
+      // The paramExtractor colloquial branch below handles stem extraction.
+      'index a ', 'index my ',
     ],
     tools: ['documents'],
     defaultParams: { action: 'list' },
@@ -1189,6 +1194,20 @@ const INTENT_MAP: Record<string, IntentGroup> = {
         if (m) return { action: 'index', path: m[1] }
         // No filename in the message — the agent will need a follow-up.
         // Returning list gives it the current state to work from.
+        return { action: 'list' }
+      }
+
+      // v0.6.3.6: colloquial index imperative — "index the Goodnerds PDF",
+      // "index the Betcha Won't PDF so I can search it".
+      // extractColloquialFileStem pulls "goodnerds" from "goodnerds pdf"
+      // (the same helper used by the project read and documents search
+      // paths). The stem is passed as path; doIndex in documents-tool.ts
+      // falls back to a stem walk when safeResolveInProject misses.
+      if (/\bindex\b/.test(lower)) {
+        const stem = extractColloquialFileStem(msg)
+        if (stem) return { action: 'index', path: stem }
+        // 'index' verb present but no colloquial reference — fall
+        // through to list so the agent can show what's already indexed.
         return { action: 'list' }
       }
 
