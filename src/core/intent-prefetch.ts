@@ -1252,6 +1252,31 @@ const INTENT_MAP: Record<string, IntentGroup> = {
         return { action: 'search', query: rawQuery, filename: whereMatch[1].trim() }
       }
 
+      // Shape 6 (v0.6.3.5): colloquial predicate — "what does <stem>
+      // pdf say/mention/... about <query>". The dotless twin of Shape 1.
+      // Two-step extraction: the stem comes from extractColloquialFileStem
+      // (the same helper the gate uses, so capture and gate never drift),
+      // then we strip everything up to and including the predicate verb to
+      // isolate the query tail. Passing filename: <stem> lets the documents
+      // tool's substring resolver map "goodnerds" → the indexed doc_id
+      // (see documents-tool.ts doSearch fallback). Placed after the five
+      // dotted shapes so a literal filename always takes the exact path.
+      const colloquialStem = extractColloquialFileStem(msg)
+      if (colloquialStem) {
+        // Strip the leading "what does <stem> <noun> <verb> [about]" frame,
+        // leaving the query. The verb list mirrors Shape 1 / Shape 6 in
+        // hasDocumentsSearchShape. 'about' is optional so transitive
+        // phrasings ("mention ethernet") extract as cleanly as "say about
+        // ethernet".
+        const colloquialQueryMatch = msg.match(
+          /\b(?:what\s+does|does)\b.*?\b(?:say|mention|discuss|cover|contain|reference|talk\s+about|touch\s+on)s?(?:\s+about)?\s+(.+?)[?.!]*\s*$/i
+        )
+        if (colloquialQueryMatch && colloquialQueryMatch[1]) {
+          const rawQuery = colloquialQueryMatch[1].trim().replace(/^['"]+|['"]+$/g, '')
+          return { action: 'search', query: rawQuery, filename: colloquialStem }
+        }
+      }
+
       const aboutMatch =
         msg.match(/\b(?:what\s+does\s+(?:the\s+)?(?:document|doc|pdf|contract|file)\s+say\s+about)\s+(.+?)[?.!]*\s*$/i) ||
         msg.match(/\b(?:passages?|the\s+part|the\s+section|the\s+chunk)\s+about\s+(.+?)[?.!]*\s*$/i)
@@ -1633,6 +1658,17 @@ function hasDocumentsSearchShape(message: string): boolean {
       && /\b(?:about|of|for|on|regarding|mentioning|in)\b/i.test(message)) return true;
   // Shape 5: location — "where in/does X.pdf ..."
   if (/\bwhere\s+(?:in|does)\b.*\.[A-Za-z][A-Za-z0-9]{0,9}/i.test(message)) return true;
+  // Shape 6 (v0.6.3.5): colloquial predicate — "what does <stem> pdf
+  // say/mention/... about Y" with NO dotted extension. The colloquial
+  // twin of Shape 1: same predicate verbs, but the file is named by a
+  // dotless stem ("goodnerds pdf") instead of a literal filename. Gated
+  // on hasColloquialFileReference so it only fires when a real <stem>
+  // <filetype-noun> pair is present, not on bare "what does it say".
+  // Without this shape the documents gate stays dot-anchored and
+  // colloquial in-file search falls to a whole-file project.read.
+  if (/\b(?:what\s+does|does)\b/i.test(message)
+      && /\b(?:say|mention|discuss|cover|contain|reference|talk\s+about|touch\s+on)\b/i.test(message)
+      && hasColloquialFileReference(message)) return true;
   return false;
 }
 
@@ -1701,7 +1737,16 @@ export function detectIntent(message: string, agentName?: string): string[] {
         // project.
         if (group.keywords.some(k => lower.includes(k))) return true;
         const filenameRe = /\b([A-Za-z0-9_-][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]{0,9})\b/;
-        return filenameRe.test(message) && hasDocumentsSearchShape(message);
+        if (filenameRe.test(message) && hasDocumentsSearchShape(message)) return true;
+        // v0.6.3.5: colloquial twin of the filename gate. When the file
+        // is named by a dotless stem ("what does goodnerds pdf say about
+        // ethernet"), filenameRe fails but Shape 6 in hasDocumentsSearchShape
+        // matches. hasColloquialFileReference is the stem-presence check
+        // (the colloquial analog of filenameRe.test) so the two conditions
+        // stay structurally parallel: file-reference present AND a search
+        // shape present. The documents-vs-project demotion below then
+        // drops project (searchSignal includes hasDocumentsSearchShape).
+        return hasColloquialFileReference(message) && hasDocumentsSearchShape(message);
       }
       if (groupName === 'project') {
         // v0.6.3.5: project fires on its keyword list OR on a colloquial

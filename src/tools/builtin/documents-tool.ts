@@ -225,14 +225,35 @@ async function doSearch(params: Record<string, unknown>): Promise<NerdAlertRespo
   if (filename) {
     const all = listDocuments({ project })
     const match = all.find(d => d.filename.toLowerCase() === filename.toLowerCase())
-    if (!match) {
-      const scopeMsg = project ? ` in project "${project}"` : ''
-      return asResponse(
-        `No indexed document named "${filename}"${scopeMsg}. ` +
-        `Use the list action to see what's indexed, or the index action to add it.`
-      )
+    if (match) {
+      docId = match.id
+    } else {
+      // v0.6.3.5: exact-equality miss — fall back to a case-insensitive
+      // basename SUBSTRING match. The intent-prefetch colloquial path
+      // (Shape 6) passes a dotless stem like "goodnerds" as filename;
+      // exact equality against "NA_S01E08_-_Goodnerds.pdf" never hits,
+      // so without this the colloquial in-file search dead-ends on the
+      // not-found message below. Mirrors resolveStemInProject in
+      // project-tool.ts. Exact filenames always take the equality path
+      // above and never reach here — strict-superset preserved.
+      const partial = all.filter(d => d.filename.toLowerCase().includes(filename.toLowerCase()))
+      if (partial.length === 1) {
+        docId = partial[0].id
+      } else if (partial.length > 1) {
+        const scopeMsg = project ? ` in project "${project}"` : ''
+        return asResponse(
+          `"${filename}" matches more than one indexed document${scopeMsg}: ` +
+          partial.map(d => d.filename).join(', ') +
+          `. Tell me which one and I'll search it.`
+        )
+      } else {
+        const scopeMsg = project ? ` in project "${project}"` : ''
+        return asResponse(
+          `No indexed document named "${filename}"${scopeMsg}. ` +
+          `Use the list action to see what's indexed, or the index action to add it.`
+        )
+      }
     }
-    docId = match.id
   }
 
   const results = await searchDocuments(query, { limit, project, doc_id: docId })
