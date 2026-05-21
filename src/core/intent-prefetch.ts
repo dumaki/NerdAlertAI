@@ -1172,7 +1172,7 @@ const INTENT_MAP: Record<string, IntentGroup> = {
       // "index the Betcha Won't PDF". The bare keywords above only match
       // when the type noun follows 'the' directly (no name in between).
       // The paramExtractor colloquial branch below handles stem extraction.
-      'index a ', 'index my ',
+      'index a ', 'index my ', 'index the ',
     ],
     tools: ['documents'],
     defaultParams: { action: 'list' },
@@ -1871,7 +1871,12 @@ export function detectIntent(message: string, agentName?: string): string[] {
     // didn't know about verbs like 'check', 'scan', 'any mention'.
     const searchSignal =
       /\b(what\s+does|find|search|passage|passages|the\s+part\s+about|the\s+section\s+about|across\s+(?:my|the|all)\s+(?:docs?|documents?))\b/i.test(message)
-      || hasDocumentsSearchShape(message);
+      || hasDocumentsSearchShape(message)
+      // v0.6.3.6: index + colloquial filename is a documents.index signal,
+      // not a project.read signal. Without this, "index the Goodnerds PDF"
+      // fires both groups but documents loses the tie-break because
+      // searchSignal is false (index is not a search-shape verb).
+      || (/\bindex\b/i.test(message) && hasColloquialFileReference(message));
     if (searchSignal) {
       const kept = matched.filter(g => g !== 'project');
       console.log(`[NerdAlert] Intent demoted project (search-inside-content signal): ${kept.join(', ')}${viaSuffix}`);
