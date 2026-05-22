@@ -12,6 +12,7 @@
 
 import { NerdAlertTool } from '../types/response.types';
 import { config }        from '../config/loader';
+import { getOverride }   from './runtime-overrides';
 
 // ── Imports ──────────────────────────────────────────────────
 
@@ -170,34 +171,60 @@ interface ResolvedPolicy {
 }
 
 function resolveToolPolicy(tool: NerdAlertTool): ResolvedPolicy {
-  // Step 1: per-tool override wins outright.
+  // -- Base policy: per-tool override -> group -> compiled default --
+  // The original v0.5.x resolution chain, unchanged in behavior -- just
+  // assigned into `base` instead of returned early, so the v0.6.4
+  // overlay below can sit on top of whatever config produces.
+  let base: ResolvedPolicy;
+
+  // Step 1: per-tool override wins outright (and skips group matching,
+  // exactly as before -- the early-return became an if/else).
   const perTool = config.tools?.[tool.name];
   if (perTool) {
-    return {
+    base = {
       enabled:                perTool.enabled,
       effectiveMinTrustLevel: Math.max(tool.trustLevel, perTool.trust_level ?? 0),
     };
-  }
+  } else {
+    // Step 3 default, possibly overwritten by Step 2 group match.
+    base = {
+      enabled:                true,
+      effectiveMinTrustLevel: tool.trustLevel,
+    };
 
-  // Step 2: first group whose prefix matches.
-  const groups = config.tool_groups;
-  if (groups) {
-    for (const groupName of Object.keys(groups)) {
-      const group = groups[groupName];
-      if (tool.name.startsWith(group.prefix)) {
-        return {
-          enabled:                group.enabled,
-          effectiveMinTrustLevel: Math.max(tool.trustLevel, group.trust_level ?? 0),
-        };
+    // Step 2: first group whose prefix matches (YAML key order).
+    const groups = config.tool_groups;
+    if (groups) {
+      for (const groupName of Object.keys(groups)) {
+        const group = groups[groupName];
+        if (tool.name.startsWith(group.prefix)) {
+          base = {
+            enabled:                group.enabled,
+            effectiveMinTrustLevel: Math.max(tool.trustLevel, group.trust_level ?? 0),
+          };
+          break;
+        }
       }
     }
   }
 
-  // Step 3: nothing matched - use compiled defaults.
-  return {
-    enabled:                true,
-    effectiveMinTrustLevel: tool.trustLevel,
-  };
+  // -- v0.6.4 runtime overlay -- ENABLED BIT ONLY --
+  // The Tool Toggle Panel writes per-tool flips into the in-memory
+  // overlay (runtime-overrides.ts). When an entry exists for this tool,
+  // it wins over BOTH per-tool config and group config for the enabled
+  // bit -- but never touches effectiveMinTrustLevel. A UI toggle can
+  // therefore make a tool visible/hidden, but can never make it callable
+  // below its trust floor (getAvailableTools still applies the trust
+  // gate on top of this result).
+  //
+  // Strict-superset: overlay empty => getOverride() === undefined =>
+  // `base` returns untouched, identical to pre-v0.6.4 behavior.
+  const override = getOverride(tool.name);
+  if (override !== undefined) {
+    base.enabled = override;
+  }
+
+  return base;
 }
 
 export function getAvailableTools(): NerdAlertTool[] {
@@ -281,4 +308,118 @@ export function logAvailableTools(): void {
     return;
   }
   console.log(`  Tools  : ${available.map(t => t.name).join(', ')}`);
+}
+
+// -- Tool panel state (v0.6.4) ---------------------------------
+//
+// Read-only snapshot powering the Tool Toggle Panel. Built here (not in
+// the route) so ALL_TOOLS and the private resolveToolPolicy stay
+// encapsulated. Mirrors documents-route consuming engine.listDocuments().
+//
+// SHAPE
+//   groups[]      one entry per config.tool_groups key that has at least
+//                 one tool loaded. Carries member rows so the UI renders
+//                 a master row + expander. Master on/off is derived
+//                 client-side from members (all enabled = master on).
+//   standalone[]  every tool NOT claimed by a group prefix. UI groups
+//                 these by effectiveMinTrustLevel into L-level rows.
+//   agentTrustLevel  the global gate, so the UI can mark a row
+//                 "requires Lx" when its min trust exceeds the agent's.
+//
+// canSaveDefault (v0.6.4 scope):
+//   group master    always true  -- flips tool_groups.<key>.enabled, a
+//                                   safe single-line edit (block exists).
+//   standalone tool true iff a tools.<name> block exists to flip.
+//   group MEMBER    false        -- persisting a member needs a NEW
+//                                   per-tool block (block-insert),
+//                                   deferred. Members stay fully
+//                                   session-toggleable via the overlay.
+
+export interface ToolPanelRow {
+  name:                    string;
+  effectiveMinTrustLevel:  number;
+  enabled:                 boolean;   // resolved (overlay-first)
+  availableAtCurrentTrust: boolean;
+  overridden:              boolean;   // a session overlay entry exists
+  canSaveDefault:          boolean;
+}
+
+export interface ToolPanelGroup {
+  group:          string;            // config.tool_groups key, e.g. "wazuh"
+  prefix:         string;            // e.g. "wazuh_"
+  minTrustLevel:  number;            // min across members -> master L badge
+  canSaveDefault: boolean;           // group line exists -> always true
+  members:        ToolPanelRow[];
+}
+
+export interface ToolPanelState {
+  agentTrustLevel: number;
+  groups:          ToolPanelGroup[];
+  standalone:      ToolPanelRow[];
+}
+
+// First config.tool_groups key whose prefix matches a tool name,
+// iterating in the same YAML key order resolveToolPolicy uses so
+// "which group owns this tool" is answered identically in both places.
+function matchingGroupKey(toolName: string): string | undefined {
+  const groups = config.tool_groups;
+  if (!groups) return undefined;
+  for (const key of Object.keys(groups)) {
+    if (toolName.startsWith(groups[key].prefix)) return key;
+  }
+  return undefined;
+}
+
+export function getToolPanelState(): ToolPanelState {
+  const agentTrustLevel = config.agent.trust_level;
+
+  const toRow = (tool: NerdAlertTool, isMember: boolean): ToolPanelRow => {
+    const policy = resolveToolPolicy(tool);
+    return {
+      name:                    tool.name,
+      effectiveMinTrustLevel:  policy.effectiveMinTrustLevel,
+      enabled:                 policy.enabled,
+      availableAtCurrentTrust: policy.effectiveMinTrustLevel <= agentTrustLevel,
+      overridden:              getOverride(tool.name) !== undefined,
+      canSaveDefault:          isMember ? false : !!config.tools?.[tool.name],
+    };
+  };
+
+  // Partition ALL_TOOLS into group members (bucketed by group key) and
+  // standalone tools, using the same first-match rule as the gate.
+  const groupsMap = new Map<string, ToolPanelRow[]>();
+  const standalone: ToolPanelRow[] = [];
+
+  for (const tool of ALL_TOOLS) {
+    const key = matchingGroupKey(tool.name);
+    if (key) {
+      const arr = groupsMap.get(key);
+      if (arr) arr.push(toRow(tool, true));
+      else     groupsMap.set(key, [toRow(tool, true)]);
+    } else {
+      standalone.push(toRow(tool, false));
+    }
+  }
+
+  // Emit groups in config.tool_groups key order; skip any group that
+  // has no tools actually loaded in ALL_TOOLS (defined but empty).
+  const cfgGroups = config.tool_groups ?? {};
+  const groups: ToolPanelGroup[] = [];
+  for (const key of Object.keys(cfgGroups)) {
+    const members = groupsMap.get(key);
+    if (!members || members.length === 0) continue;
+    const minTrustLevel = members.reduce(
+      (min, m) => Math.min(min, m.effectiveMinTrustLevel),
+      Number.POSITIVE_INFINITY,
+    );
+    groups.push({
+      group:          key,
+      prefix:         cfgGroups[key].prefix,
+      minTrustLevel:  Number.isFinite(minTrustLevel) ? minTrustLevel : 0,
+      canSaveDefault: true,
+      members,
+    });
+  }
+
+  return { agentTrustLevel, groups, standalone };
 }

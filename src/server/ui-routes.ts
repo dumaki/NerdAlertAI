@@ -73,6 +73,7 @@ import { subscribe as subscribeTimers, listTimers } from './timer-state';
 import { mountHeartbeatRoutes }    from './heartbeat-routes';
 import { mountMemoryCardsRoute }   from './memory-cards-route';
 import { mountDocumentsRoute }     from './documents-route';
+import { mountToolToggleRoute }    from './tool-toggle-route';
 import type { Source } from '../types/response.types';
 
 // ── New layer imports ────────────────────────────────────────
@@ -1642,5 +1643,10 @@ export function mountUIRoutes(app: Express): void {
   if (config.documents?.enabled) {
     mountDocumentsRoute(app);
   }
+
+  // v0.6.4 — Tool Toggle Panel. Always mounted: this is a core utility
+  // surface (it MANAGES modules, so it can't itself be a removable
+  // module). Direct read/write routes only; no agent-reachable path (P7).
+  mountToolToggleRoute(app);
 
 }

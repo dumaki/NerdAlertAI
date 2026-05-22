@@ -1199,6 +1199,86 @@
       line-height: 1;
     }
 
+    /* -- Tool Toggle Panel -- v0.6.4
+       Toolbox dock icon opens the generic side panel. Two sections:
+       SERVICES (group master + expander) and INDIVIDUAL TOOLS (by
+       L-level). Mirrors the settings-module-row language: mono,
+       uppercase, bg-base rows, cyan ON / dim OFF, amber MIXED. */
+    .dock-icon-glyph svg { width: 16px; height: 16px; display: block; }
+
+    .tools-panel-intro {
+      font-size: 9px; line-height: 1.5; color: var(--text-muted);
+      letter-spacing: 0.5px; margin-bottom: 10px;
+    }
+    .tools-panel-actions { margin-bottom: 12px; }
+    .tools-loading {
+      font-size: 9px; color: var(--text-muted); letter-spacing: 1px; padding: 8px 0;
+    }
+    .tools-section-label {
+      font-size: 8px; color: var(--text-muted); letter-spacing: 3px;
+      text-transform: uppercase; margin-bottom: 6px;
+    }
+    .tools-level-label {
+      font-size: 8px; color: var(--text-dim); letter-spacing: 2px; margin: 8px 0 4px;
+    }
+    .tools-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 7px 10px; margin-bottom: 4px;
+      font-family: var(--font-mono); font-size: 10px; letter-spacing: 1px;
+      background: var(--bg-base); border: 1px solid var(--border);
+      border-radius: 1px; cursor: pointer; transition: all var(--transition-fast);
+    }
+    .tools-row:hover { border-color: var(--cyan-mid); background: var(--bg-elevated); }
+    .tools-row.on    { color: var(--cyan); text-shadow: 0 0 4px var(--cyan-glow); }
+    .tools-row.off   { color: var(--text-dim); }
+    .tools-row.mixed { color: var(--amber); }
+    .tools-row.locked { cursor: default; color: var(--text-muted); opacity: 0.7; }
+    .tools-row.locked:hover { border-color: var(--border); background: var(--bg-base); }
+    .tools-group { text-transform: uppercase; }
+    .tools-row-member { margin-left: 14px; font-size: 9px; }
+    .tools-row-name {
+      display: flex; align-items: center; gap: 6px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .tools-row-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .tools-state { font-size: 8px; letter-spacing: 1px; opacity: 0.85; }
+    .tools-lock  { font-size: 8px; letter-spacing: 1px; color: var(--text-muted); }
+    .tools-ov    { color: var(--amber); font-size: 8px; }
+    .tools-caret { color: var(--text-dim); font-size: 9px; cursor: pointer; }
+    .tools-save {
+      font-family: var(--font-mono); font-size: 7px; letter-spacing: 1px;
+      padding: 2px 6px; color: var(--cyan); background: transparent;
+      border: 1px solid var(--cyan-mid); border-radius: 1px; cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .tools-save:hover { background: var(--cyan-dim); border-color: var(--cyan); }
+    .tools-members { margin-bottom: 6px; }
+
+    /* Confirm modal -- save-as-default only */
+    .na-modal-overlay {
+      position: fixed; inset: 0; z-index: 9000; background: rgba(0,0,0,0.6);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .na-modal {
+      width: 300px; max-width: 90vw; background: var(--bg-raised);
+      border: 1px solid var(--cyan-mid); border-radius: 2px; padding: 16px;
+      box-shadow: 0 0 24px var(--cyan-glow);
+    }
+    .na-modal-msg {
+      font-family: var(--font-mono); font-size: 10px; line-height: 1.6;
+      color: var(--text-bright); margin-bottom: 14px;
+    }
+    .na-modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .na-modal-btn {
+      font-family: var(--font-mono); font-size: 8px; letter-spacing: 2px;
+      padding: 7px 12px; border-radius: 1px; cursor: pointer;
+      background: transparent; transition: all var(--transition-fast);
+    }
+    .na-modal-btn.cancel  { color: var(--text-dim); border: 1px solid var(--border); }
+    .na-modal-btn.cancel:hover  { border-color: var(--text-dim); }
+    .na-modal-btn.confirm { color: var(--cyan); border: 1px solid var(--cyan-mid); }
+    .na-modal-btn.confirm:hover { background: var(--cyan-dim); border-color: var(--cyan); }
+
     /* Notification dot on dock icons — reuses email-badge / soc-badge
        IDs from the old sidebar items so any future wiring lands here
        unchanged. */
@@ -3603,6 +3683,18 @@
       <button class="dock-icon" data-view="export" onclick="switchView('export', null)" aria-label="Export">
         <span class="dock-icon-glyph">⤓</span>
       </button>
+      <!-- v0.6.4 -- Tool Toggle Panel. Always visible (the panel manages
+           module enablement, so it isn't itself a hideable module). -->
+      <button class="dock-icon" data-view="tools" onclick="switchView('tools', null)" aria-label="Tools">
+        <span class="dock-icon-glyph">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true" focusable="false">
+            <path d="M8.5 7 V6.2 a3.5 3 0 0 1 7 0 V7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+            <rect x="3.5" y="7" width="17" height="3.6" rx="1.2" fill="currentColor"/>
+            <rect x="3" y="11.4" width="18" height="8.6" rx="1.8" fill="currentColor"/>
+            <rect x="10.4" y="9.8" width="3.2" height="4.2" rx="0.6" fill="currentColor"/>
+          </svg>
+        </span>
+      </button>
       <button class="dock-icon" data-view="settings" onclick="switchView('settings', null)" aria-label="Settings">
         <span class="dock-icon-glyph">⚙</span>
       </button>
@@ -5031,6 +5123,7 @@
       }
       return;
     }
+    if (view === 'tools')    { openPanel('tools'); return; }
     if (view === 'export')   { openPanel('export');   return; }
     if (view === 'settings') { openPanel('settings'); return; }
     if (view === 'chat')     { closePanel(); }
@@ -5072,6 +5165,10 @@
       // "sent a few messages since last open" case. Updates the
       // storage line in place once the GET completes.
       refreshSettingsStorage();
+    } else if (type === 'tools') {
+      title.textContent = 'TOOLS';
+      body.innerHTML = getToolsPanelHTML();
+      loadToolsPanel();
     }
   }
 
@@ -5455,6 +5552,194 @@
                 onclick="toggleModule('${m.id}')">${m.label}</button>
       `;
     }).join('');
+  }
+
+
+  // ============================================================
+  // TOOL TOGGLE PANEL — v0.6.4
+  // ============================================================
+  // Backs the toolbox dock icon. Reads /api/tools/state and renders two
+  // sections: SERVICES (group master + ▸ expander to member tools) and
+  // INDIVIDUAL TOOLS (grouped by L-level). Session toggles hit
+  // /api/tools/toggle (live, lost on restart); SAVE persists via
+  // /api/tools/save-default behind a confirm modal. All direct routes —
+  // the agent has no path here (P7). Re-renders from the fresh state the
+  // server returns on every mutating call, so the UI never drifts from
+  // the gate's actual resolution.
+
+  let NA_TOOLS_STATE = null;               // last state from the server
+  const NA_TOOLS_EXPANDED = new Set();     // group keys currently expanded
+
+  function getToolsPanelHTML() {
+    return `
+      <div class="tools-panel-intro">
+        Session changes apply immediately and reset on restart.
+        SAVE writes the change to config.yaml as the new default.
+      </div>
+      <div class="tools-panel-actions">
+        <button class="settings-action-btn" onclick="resetToolOverrides()">RESET SESSION TOGGLES</button>
+      </div>
+      <div id="tools-rows"><div class="tools-loading">LOADING TOOLS…</div></div>
+    `;
+  }
+
+  async function loadToolsPanel() {
+    try {
+      const res  = await fetch(`${BASE_URL}/api/tools/state`, {
+        headers: { 'Authorization': `Bearer ${CFG.token}` },
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'state fetch failed');
+      NA_TOOLS_STATE = { agentTrustLevel: data.agentTrustLevel, groups: data.groups, standalone: data.standalone };
+      renderToolsPanel(NA_TOOLS_STATE);
+    } catch (err) {
+      console.warn('[Tools Panel] load failed:', err);
+      const rows = document.getElementById('tools-rows');
+      if (rows) rows.innerHTML = '<div class="tools-loading">Failed to load tools.</div>';
+    }
+  }
+
+  function renderToolsPanel(state) {
+    const rows = document.getElementById('tools-rows');
+    if (!rows || !state) return;
+    let html = '';
+
+    if (state.groups && state.groups.length) {
+      html += '<div class="tools-section-label">SERVICES</div>';
+      for (const g of state.groups) html += naRenderGroup(g, state.agentTrustLevel);
+    }
+
+    const byLevel = {};
+    for (const t of (state.standalone || [])) {
+      (byLevel[t.effectiveMinTrustLevel] = byLevel[t.effectiveMinTrustLevel] || []).push(t);
+    }
+    const levels = Object.keys(byLevel).map(Number).sort((a, b) => a - b);
+    if (levels.length) {
+      html += '<div class="tools-section-label" style="margin-top:14px">INDIVIDUAL TOOLS</div>';
+      for (const lvl of levels) {
+        html += `<div class="tools-level-label">L${lvl}</div>`;
+        for (const t of byLevel[lvl]) html += naRenderTool(t, false);
+      }
+    }
+
+    rows.innerHTML = html || '<div class="tools-loading">No tools.</div>';
+  }
+
+  function naRenderTool(t, isMember) {
+    const locked    = !t.availableAtCurrentTrust;
+    const cls       = locked ? 'locked' : (t.enabled ? 'on' : 'off');
+    const memberCls = isMember ? ' tools-row-member' : '';
+    const click     = locked ? '' : `onclick="naToggleTool('${t.name}', ${!t.enabled})"`;
+    const ov        = t.overridden ? '<span class="tools-ov" title="Session override (unsaved)">●</span>' : '';
+    const right     = locked
+      ? `<span class="tools-lock">requires L${t.effectiveMinTrustLevel}</span>`
+      : `<span class="tools-state">${t.enabled ? 'ON' : 'OFF'}</span>`;
+    const save = (!isMember && t.canSaveDefault && !locked)
+      ? `<button class="tools-save" title="Save as default" onclick="event.stopPropagation(); naSaveDefault('tool','${t.name}',${t.enabled})">SAVE</button>`
+      : '';
+    return `
+      <div class="tools-row ${cls}${memberCls}" ${click}>
+        <span class="tools-row-name">${t.name}${ov}</span>
+        <span class="tools-row-right">${save}${right}</span>
+      </div>`;
+  }
+
+  function naRenderGroup(g, agentTrust) {
+    const available = g.minTrustLevel <= agentTrust;
+    const allOn  = g.members.every(m => m.enabled);
+    const allOff = g.members.every(m => !m.enabled);
+    const mixed  = !allOn && !allOff;
+    const cls    = !available ? 'locked' : (allOn ? 'on' : (allOff ? 'off' : 'mixed'));
+    const target  = allOn ? false : true;
+    const click   = available ? `onclick="naToggleGroup('${g.group}', ${target})"` : '';
+    const expanded = NA_TOOLS_EXPANDED.has(g.group);
+    const caret   = `<span class="tools-caret" onclick="event.stopPropagation(); naToggleGroupExpand('${g.group}')">${expanded ? '▾' : '▸'}</span>`;
+    const right   = !available
+      ? `<span class="tools-lock">requires L${g.minTrustLevel}</span>`
+      : `<span class="tools-state">${allOn ? 'ON' : (allOff ? 'OFF' : 'MIXED')}</span>`;
+    const save = (available && !mixed)
+      ? `<button class="tools-save" title="Save group default" onclick="event.stopPropagation(); naSaveDefault('group','${g.group}',${allOn})">SAVE</button>`
+      : '';
+    let members = '';
+    if (expanded) {
+      members = '<div class="tools-members">' + g.members.map(m => naRenderTool(m, true)).join('') + '</div>';
+    }
+    return `
+      <div class="tools-row tools-group ${cls}" ${click}>
+        <span class="tools-row-name">${caret}${g.group}</span>
+        <span class="tools-row-right">${save}${right}</span>
+      </div>${members}`;
+  }
+
+  function naToggleGroupExpand(group) {
+    if (NA_TOOLS_EXPANDED.has(group)) NA_TOOLS_EXPANDED.delete(group);
+    else NA_TOOLS_EXPANDED.add(group);
+    renderToolsPanel(NA_TOOLS_STATE);
+  }
+
+  async function naPost(path, body) {
+    const res = await fetch(`${BASE_URL}${path}`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${CFG.token}` },
+      body:    JSON.stringify(body || {}),
+    });
+    return res.json();
+  }
+
+  function naApplyState(data) {
+    if (!data || !data.ok) return false;
+    NA_TOOLS_STATE = { agentTrustLevel: data.agentTrustLevel, groups: data.groups, standalone: data.standalone };
+    renderToolsPanel(NA_TOOLS_STATE);
+    return true;
+  }
+
+  async function naToggleTool(name, enabled) {
+    try { naApplyState(await naPost('/api/tools/toggle', { kind: 'tool', name, enabled })); }
+    catch (err) { console.warn('[Tools] toggle failed:', err); }
+  }
+
+  async function naToggleGroup(group, enabled) {
+    try { naApplyState(await naPost('/api/tools/toggle', { kind: 'group', name: group, enabled })); }
+    catch (err) { console.warn('[Tools] group toggle failed:', err); }
+  }
+
+  async function naSaveDefault(kind, name, enabled) {
+    const verb = enabled ? 'enabled' : 'disabled';
+    const what = kind === 'group' ? `the ${name} service group` : `“${name}”`;
+    const ok = await naConfirm(`Save ${what} as ${verb} in config.yaml? This changes the default for every future restart.`);
+    if (!ok) return;
+    try {
+      const data = await naPost('/api/tools/save-default', { kind, name, enabled });
+      if (!naApplyState(data)) console.warn('[Tools] save-default failed:', data && data.error);
+    } catch (err) { console.warn('[Tools] save-default failed:', err); }
+  }
+
+  async function resetToolOverrides() {
+    try { naApplyState(await naPost('/api/tools/reset', {})); }
+    catch (err) { console.warn('[Tools] reset failed:', err); }
+  }
+
+  // Minimal themed confirm modal, built in JS (no static markup). Returns
+  // a Promise<boolean>. Used only for the persistent save-as-default action.
+  function naConfirm(message) {
+    return new Promise(resolve => {
+      const overlay = document.createElement('div');
+      overlay.className = 'na-modal-overlay';
+      overlay.innerHTML =
+        '<div class="na-modal">' +
+          '<div class="na-modal-msg"></div>' +
+          '<div class="na-modal-actions">' +
+            '<button class="na-modal-btn cancel">CANCEL</button>' +
+            '<button class="na-modal-btn confirm">SAVE DEFAULT</button>' +
+          '</div>' +
+        '</div>';
+      overlay.querySelector('.na-modal-msg').textContent = message;
+      const done = (val) => { overlay.remove(); resolve(val); };
+      overlay.querySelector('.cancel').onclick  = () => done(false);
+      overlay.querySelector('.confirm').onclick = () => done(true);
+      overlay.onclick = (e) => { if (e.target === overlay) done(false); };
+      document.body.appendChild(overlay);
+    });
   }
 
 
