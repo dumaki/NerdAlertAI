@@ -3459,6 +3459,15 @@
       letter-spacing: 0.5px; color: var(--text-dim);
       display: flex; gap: 8px;
     }
+    /* v0.6.5 — skill card expand detail. Hidden until the card is
+       expanded; reveals wire-card metadata not shown collapsed
+       (version + created date). Matches .memory-card-meta styling. */
+    .skill-card-detail {
+      display: none; margin-top: 4px;
+      font-family: var(--font-mono); font-size: 8px;
+      letter-spacing: 0.5px; color: var(--text-dim);
+    }
+    .memory-card.expanded .skill-card-detail { display: block; }
     .memory-card-dreaming-icon {
       color: var(--amber); margin-right: 4px;
       filter: drop-shadow(0 0 3px var(--amber));
@@ -3758,6 +3767,7 @@
         <span class="memory-badge" id="memory-badge-people">&middot;</span>
         <span class="memory-badge" id="memory-badge-projects">&middot;</span>
         <span class="memory-badge" id="memory-badge-documents" style="display: none;">&middot;</span>
+        <span class="memory-badge" id="memory-badge-skills" style="display: none;">&middot;</span>
         <span class="memory-badge" id="memory-badge-general">&middot;</span>
       </div>
     </div>
@@ -3792,6 +3802,14 @@
         <section class="memory-row" id="memory-row-documents" style="display: none;">
           <h4 class="memory-row-title">DOCUMENTS <span class="memory-row-count" id="memory-row-count-documents">0</span></h4>
           <div class="memory-row-cards" id="memory-cards-documents"></div>
+        </section>
+        <!-- v0.6.5 — Skills row. Hidden until GET /api/skills returns a
+             successful response (skills.enabled false → 404 → row stays hidden).
+             Strict-superset: with skills disabled the row never appears.
+             Mirrors the v0.6.3.4 Documents row. -->
+        <section class="memory-row" id="memory-row-skills" style="display: none;">
+          <h4 class="memory-row-title">SKILLS <span class="memory-row-count" id="memory-row-count-skills">0</span></h4>
+          <div class="memory-row-cards" id="memory-cards-skills"></div>
         </section>
         <section class="memory-row">
           <h4 class="memory-row-title">GENERAL <span class="memory-row-count" id="memory-row-count-general">0</span></h4>
@@ -9134,6 +9152,145 @@ function escapeHtml(str) {
     startPolling();
   }
 })();
+
+
+  // ==========================================================
+  // v0.6.5 — Skills row poller. Companion IIFE to
+  // setupDocumentsRow(). Same shape: 30s poll, no-change
+  // short-circuit, IIFE-scoped with its own escape/format
+  // helpers (each row IIFE stays self-contained).
+  //
+  // MODULE ISOLATION
+  // ────────────────────────────────────────────────────────
+  // GET /api/skills is mounted conditionally on the server on
+  // config.skills.enabled. Disabled → 404 → we stop polling and
+  // leave the row + badge hidden, so the user sees v0.6.4
+  // behavior byte-identical. Same contract as the documents row.
+  // ==========================================================
+
+  (function setupSkillsRow() {
+    var POLL_MS = 30000;
+    var prevSkillsJSON = null;
+    var pollTimer = null;
+    var stoppedFor404 = false;
+
+    function escapeHTML(s) {
+      return String(s).replace(/[&<>"']/g, function(c) {
+        return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+      });
+    }
+
+    function relativeTime(iso) {
+      if (!iso) return '';
+      var ms = Date.now() - new Date(iso).getTime();
+      if (ms < 60000) return 'just now';
+      if (ms < 3600000) return Math.floor(ms / 60000) + 'm';
+      if (ms < 86400000) return Math.floor(ms / 3600000) + 'h';
+      return Math.floor(ms / 86400000) + 'd';
+    }
+
+    function renderSkillCard(card) {
+      // Subject: skill name. Snippet: persona + tags. Meta: source ·
+      // quality (only when scored) · last-retrieved relative (only when set).
+      // The wire card has no trigger/pattern, so the card is a summary;
+      // click toggles 'expanded' to reveal the detail line (and unclamp a
+      // long snippet). See .skill-card-detail.
+      var snippetParts = [];
+      if (card.persona) snippetParts.push(card.persona);
+      if (card.tags && card.tags.length) snippetParts.push(card.tags.join(', '));
+      var snippet = escapeHTML(snippetParts.join(' \u00b7 '));
+
+      var meta = [];
+      if (card.source) meta.push(card.source);
+      if (typeof card.qualityScore === 'number') meta.push('q' + card.qualityScore.toFixed(2));
+      var rel = relativeTime(card.lastAccessed);
+      if (rel) meta.push(rel);
+
+      // Expanded-only detail: wire-card fields not shown collapsed.
+      var detailParts = ['v' + card.version];
+      if (card.created) detailParts.push('created ' + card.created.slice(0, 10));
+      var detail = escapeHTML(detailParts.join(' \u00b7 '));
+
+      return [
+        '<div class="memory-card" onclick="toggleSkillCard(this)">',
+        '<div class="memory-card-row-1">',
+        '<span class="memory-card-subject">', escapeHTML(card.name), '</span>',
+        '</div>',
+        '<div class="memory-card-snippet">', snippet, '</div>',
+        '<div class="memory-card-meta">', escapeHTML(meta.join(' \u00b7 ')), '</div>',
+        '<div class="skill-card-detail">', detail, '</div>',
+        '</div>'
+      ].join('');
+    }
+
+    function renderRow(cards) {
+      var el = document.getElementById('memory-cards-skills');
+      if (!el) return;
+      if (!cards || cards.length === 0) {
+        el.innerHTML = '<div class="memory-row-empty">No skills yet</div>';
+        return;
+      }
+      el.innerHTML = cards.map(renderSkillCard).join('');
+    }
+
+    function applySkills(data) {
+      if (!data || !data.ok) return;
+      var skills = data.skills || [];
+      var count = skills.length;
+
+      // Show row + badge on first successful fetch. Idempotent on repeat.
+      var rowEl = document.getElementById('memory-row-skills');
+      if (rowEl) rowEl.style.display = '';
+      var badgeEl = document.getElementById('memory-badge-skills');
+      if (badgeEl) badgeEl.style.display = '';
+
+      if (badgeEl) badgeEl.textContent = count === 0 ? '\u00b7' : (count > 99 ? '99' : String(count));
+      var countEl = document.getElementById('memory-row-count-skills');
+      if (countEl) countEl.textContent = String(count);
+
+      renderRow(skills);
+    }
+
+    function poll() {
+      if (stoppedFor404) return Promise.resolve();
+      return fetch('/api/skills', {
+        headers: { 'Authorization': 'Bearer ' + window.NERDALERT_CONFIG.token }
+      }).then(function(res) {
+        if (res.status === 404) {
+          // Module disabled — stop polling permanently. Row + badge
+          // stay hidden. Strict-superset, no console noise.
+          stoppedFor404 = true;
+          if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+          return null;
+        }
+        if (!res.ok) return null;
+        return res.json();
+      }).then(function(data) {
+        if (!data) return;
+        var json = JSON.stringify(data);
+        if (json === prevSkillsJSON) return;
+        prevSkillsJSON = json;
+        applySkills(data);
+      }).catch(function(err) {
+        console.warn('[skills-row] poll failed:', err);
+      });
+    }
+
+    function startPolling() {
+      poll();
+      pollTimer = setInterval(poll, POLL_MS);
+    }
+
+    window.toggleSkillCard = function(cardEl) {
+      cardEl.classList.toggle('expanded');
+    };
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', startPolling);
+    } else {
+      startPolling();
+    }
+  })();
 </script>
 </body>
 </html>
