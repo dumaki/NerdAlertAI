@@ -354,3 +354,22 @@ memory:
     provider: huggingface-local      # only 'huggingface-local' supported today
     model_path: ~/.nerdalert/embeddings/bge-base-en-v1.5
     blend_weight: 0.5                 # 0.0 = keyword-only, 1.0 = semantic-only
+
+# --- SKILLS MODULE (Adaptive Recall) ---
+# Self-improving skill store (v0.6.5). L1 = deterministic post-session quality
+# scoring (no model in the path); L2 = manual /skill save extraction. Layer 3
+# (curator cron) + community pipeline are future milestones.
+#
+# Skills are DATA, never commands: a skill describes an APPROACH the agent
+# reads as context; it can never issue a tool call. Trust levels stay the line
+# that decides what tools actually fire.
+#
+# Storage: ~/.nerdalert/skills/ (JSONL + index); L1 quality log at
+# ~/.nerdalert/sessions/quality.jsonl; embeddings share memory-embeddings.json
+# under the skill: namespace (reserved v0.5.26 alongside doc:).
+#
+# Independent of memory.enabled. Module-isolation contract (like voice /
+# documents / memory.semantic): enabled false or absent => no skills seeded,
+# no ~/.nerdalert/skills/* created, v0.6.4 UX byte-identical.
+skills:
+  enabled: true

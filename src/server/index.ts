@@ -23,6 +23,7 @@ import { mountFilesRoutes, ensureProjectsRoot } from './files-routes';
 import { mountVoiceRoutes, ensureVoicesDir, ensureWhisperModelsDir } from './voice-routes';
 import { mountMemoryRoutes, logMemoryBootCapability } from './memory-routes';
 import { runBackfill } from '../memory/backfill';
+import { seedDefaults as seedSkillDefaults } from '../skills/engine';
 import { startTelegram } from '../telegram';
 import { startCron, stopCron, setCronStatusEmitter } from '../cron';
 import {
@@ -402,6 +403,27 @@ startTelegram().catch((err: unknown) => {
   runBackfill().catch((err: unknown) => {
     console.error('[memory] Backfill failed:', err);
   });
+
+  // ── Skills module — starter-skill seed (v0.6.5) ─────────────
+  // Seeds curated source:'system' starter skills into ~/.nerdalert/skills/
+  // on first boot. Idempotent — only genuinely new defaults are added; a
+  // user's edits to a seeded skill are never clobbered. Fire-and-forget:
+  // a slow/failing seed never delays listen(), and both search paths
+  // tolerate an unseeded store.
+  //
+  // Strict-superset gate: config.skills.enabled false/absent => never runs,
+  // no ~/.nerdalert/skills/* created, v0.6.4 UX byte-identical.
+  if (config.skills?.enabled) {
+    seedSkillDefaults().then(({ seeded, skipped }) => {
+      if (seeded.length > 0) {
+        console.log(`[skills] seeded ${seeded.length} starter skill(s): ${seeded.join(', ')}`);
+      } else {
+        console.log(`[skills] starter skills present (${skipped.length} already seeded)`);
+      }
+    }).catch((err: unknown) => {
+      console.error('[skills] seedDefaults failed:', err);
+    });
+  }
 
   // ── Timer state ──────────────────────────────────
   // Boots the timer module: loads persisted state from

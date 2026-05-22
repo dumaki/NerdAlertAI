@@ -173,6 +173,7 @@ export interface AgentConfig {
   voice?: VoiceConfig;       // optional — absent = module disabled, no /api/tts route
   memory?: MemoryConfig;     // optional — absent = pure TF-IDF, no semantic search
   documents?: DocumentsConfig; // optional — absent / disabled = tool hidden, no chunk store
+  skills?: SkillsConfig;       // optional: absent/disabled = no seed, no skills panel
 }
 
 // --- VOICE MODULE CONFIG ---
@@ -285,5 +286,18 @@ export interface MemoryConfig {
 // auto-snapshot retention) will land as nested fields here without
 // breaking existing configs.
 export interface DocumentsConfig {
+  enabled: boolean;
+}
+
+// --- SKILLS MODULE CONFIG (Adaptive Recall) ---
+// Toggleable self-improving skill store (v0.6.5). Absent OR enabled: false:
+//   - No starter skills seeded (seedDefaults gated in server/index.ts).
+//   - No ~/.nerdalert/skills/* files created.
+//   - No skills panel / command surface.
+//   - v0.6.4 UX byte-identical.
+// Independent of memory.enabled; degrades to keyword search when
+// memory.semantic is off, same inheritance as documents. Future L1/L2/L3
+// knobs land as nested fields here without breaking existing configs.
+export interface SkillsConfig {
   enabled: boolean;
 }

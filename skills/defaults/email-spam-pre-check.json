@@ -1,0 +1,12 @@
+{
+  "id": "skill_email_spam_check",
+  "name": "Email Spam Pre-Check",
+  "persona": "all",
+  "trigger": "When asked to reply to, act on, or forward an email",
+  "pattern": "Before composing any reply or taking action, evaluate the sender for indicators: display name vs actual domain mismatch, urgency or threat language, requests for credentials or payment, a generic greeting instead of the recipient's name, and suspicious links. If two or more indicators are present, surface the concern to the user in plain language and ask before proceeding. Treat a flagged email as needing the user's confirmation rather than a silent reply.",
+  "tags": ["email", "security", "phishing"],
+  "examples": {
+    "good": "User says \"reply to this invoice.\" The sender's display name is \"Accounting Dept\" but the domain is gmail.com. The agent flags it before acting: \"This sender looks off — the display name doesn't match the domain. Want me to proceed anyway?\"",
+    "bad": "The agent replies immediately because the user said to reply, without checking the sender at all."
+  }
+}
