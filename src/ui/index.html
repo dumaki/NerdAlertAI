@@ -7146,6 +7146,18 @@
       return;
     }
 
+    if (window.__nerdalertSkillsEnabled &&
+        typeof window.handleSkillCommand === 'function' &&
+        text.trim().split(/\s+/)[0] === '/skill') {
+      input.value = '';
+      appendUserMessage(text);
+      window.handleSkillCommand(text.trim(), {
+        agentId:   localStorage.getItem('nerdalert_agent') ?? 'sherman',
+        sessionId: PAST_CHATS_STATE.activeSessionId || undefined,
+      });
+      return;
+    }
+
     if (prefill) {
       switchView('chat', null);
     }
@@ -9235,6 +9247,7 @@ function escapeHtml(str) {
 
     function applySkills(data) {
       if (!data || !data.ok) return;
+      window.__nerdalertSkillsEnabled = true;   // gate for the /skill interceptor in sendMessage
       var skills = data.skills || [];
       var count = skills.length;
 
@@ -9283,6 +9296,45 @@ function escapeHtml(str) {
 
     window.toggleSkillCard = function(cardEl) {
       cardEl.classList.toggle('expanded');
+    };
+
+    // /skill command handler (v0.6.5). Wired from the sendMessage interceptor,
+    // which only dispatches here when skills is enabled. Save-only this round;
+    // list / forget / edit are deferred. ctx carries { agentId, sessionId }
+    // resolved by sendMessage so this IIFE doesn't reach into chat state.
+    window.handleSkillCommand = function(text, ctx) {
+      var sub = (text.split(/\s+/)[1] || '').toLowerCase();
+
+      if (sub !== 'save') {
+        window.appendStaticMessage('SKILLS', 'Usage: <code>/skill save</code>');
+        return;
+      }
+
+      window.appendStaticMessage('SKILLS', 'Extracting a skill from this session\u2026');
+
+      fetch('/api/skills/save', {
+        method:  'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': 'Bearer ' + window.NERDALERT_CONFIG.token
+        },
+        body: JSON.stringify({ agentId: ctx.agentId, sessionId: ctx.sessionId })
+      }).then(function(res) {
+        return res.ok ? res.json() : null;
+      }).then(function(data) {
+        if (!data || !data.ok) {
+          window.appendStaticMessage('SKILLS', escapeHTML((data && data.error) || 'Could not start extraction.'));
+          return;
+        }
+        // Fire-and-forget on the server; the new skill lands on the next poll.
+        // Nudge two early refetches so it shows promptly. poll()'s no-change
+        // short-circuit makes an early (pre-extraction) nudge a harmless no-op.
+        setTimeout(poll, 4000);
+        setTimeout(poll, 12000);
+      }).catch(function(err) {
+        console.warn('[skills-row] save failed:', err);
+        window.appendStaticMessage('SKILLS', 'Could not reach the skill-save endpoint.');
+      });
     };
 
     if (document.readyState === 'loading') {
