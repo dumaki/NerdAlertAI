@@ -36,6 +36,7 @@ import {
   SkillIndex,
   SkillIndexEntry,
   SessionQualityRecord,
+  ToolTurnTelemetry,
 } from './types'
 
 // ── Path resolution ─────────────────────────────────────────────────────────
@@ -50,6 +51,7 @@ const SESSIONS_DIR = process.env.NERDALERT_SESSIONS_DIR
 const SKILLS_FILE      = path.join(SKILLS_DIR, 'skills.jsonl')
 const SKILL_INDEX_FILE = path.join(SKILLS_DIR, 'skills-index.json')
 const QUALITY_FILE     = path.join(SESSIONS_DIR, 'quality.jsonl')
+const TELEMETRY_FILE   = path.join(SESSIONS_DIR, 'tool-telemetry.jsonl')
 
 // Bumping triggers a rebuild from JSONL on next read. Start at 1.
 const SKILL_INDEX_VERSION = 1
@@ -216,6 +218,22 @@ export function getQualityRecord(sessionId: string): SessionQualityRecord | unde
   return readAllQualityRecords().get(sessionId)
 }
 
+// ── Tool-turn telemetry JSONL (L1 enrichment input) ───────────────────────────
+// Async + internally guarded, unlike the sync appenders above. This one fires
+// from inside a LIVE stream's `done` event (telemetry.ts), so it must not block
+// the response path; and a fire-and-forget rejection would escape the bridge's
+// onEvent try/catch (which only wraps the synchronous call), so we await + catch
+// locally. appendFile auto-creates the file on first write; only the dir needs
+// guarding.
+export async function appendToolTelemetry(record: ToolTurnTelemetry): Promise<void> {
+  try {
+    ensureSessionsDir()
+    await fs.promises.appendFile(TELEMETRY_FILE, JSON.stringify(record) + '\n')
+  } catch (err) {
+    process.stderr.write(`[skills/storage] appendToolTelemetry failed: ${String(err)}\n`)
+  }
+}
+
 // ── Exported paths for CLI / debug surfaces ──────────────────────────────────
 export const skillsStoragePaths = {
   skillsDir:   SKILLS_DIR,
@@ -223,4 +241,5 @@ export const skillsStoragePaths = {
   skillIndex:  SKILL_INDEX_FILE,
   sessionsDir: SESSIONS_DIR,
   quality:     QUALITY_FILE,
+  telemetry:   TELEMETRY_FILE,
 }

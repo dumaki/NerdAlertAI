@@ -56,6 +56,7 @@ import {
   listSessions,
   loadSession,
   createSession,
+  getActiveSessionId,
   deleteSession,
   exportSessionMarkdown,
   getTotalSessionsBytes,
@@ -74,6 +75,7 @@ import { mountHeartbeatRoutes }    from './heartbeat-routes';
 import { mountMemoryCardsRoute }   from './memory-cards-route';
 import { mountDocumentsRoute }     from './documents-route';
 import { mountToolToggleRoute }    from './tool-toggle-route';
+import { createToolTurnObserver }  from '../skills/telemetry';
 import type { Source } from '../types/response.types';
 
 // ── New layer imports ────────────────────────────────────────
@@ -334,6 +336,7 @@ async function handleAnthropicStream(
   tools:           Anthropic.Tool[],
   trustLevel:      number,
   agentName:       string,
+  telemetry:       ((event: AgentEvent) => void) | undefined,
 ): Promise<void> {
 
   const llm = getLLMConfig();
@@ -379,6 +382,7 @@ async function handleAnthropicStream(
       if (event.kind === 'tool_result' && event.sources?.length) {
         sourceSink.push(...event.sources);
       }
+      telemetry?.(event);
     },
   });
 
@@ -433,6 +437,7 @@ async function handleOllamaStream(
   prefetchSources: Source[],
   trustLevel:      number,
   agentName:       string,
+  telemetry:       ((event: AgentEvent) => void) | undefined,
 ): Promise<void> {
 
   const llm = getLLMConfig();
@@ -442,7 +447,7 @@ async function handleOllamaStream(
   // skip the probe and route straight to pseudo-tool.
   if (noNativeToolSupport.has(bareModel)) {
     console.log(`[capability-cache] ${bareModel} → pseudo-tool (cached)`);
-    return handlePseudoToolStream(res, systemPrompt, initialMessages, prefetchSources, trustLevel, agentName, 'ollama');
+    return handlePseudoToolStream(res, systemPrompt, initialMessages, prefetchSources, trustLevel, agentName, telemetry, 'ollama');
   }
 
   // Convert Anthropic MessageParam history → ORMessage via the
@@ -461,6 +466,7 @@ async function handleOllamaStream(
       if (event.kind === 'tool_result' && event.sources?.length) {
         sourceSink.push(...event.sources);
       }
+      telemetry?.(event);
     },
   });
 
@@ -536,6 +542,7 @@ async function handlePseudoToolStream(
   prefetchSources:   Source[],
   trustLevel:        number,
   agentName:         string,
+  telemetry:          ((event: AgentEvent) => void) | undefined,
   transportOverride?: 'openrouter' | 'ollama',
 ): Promise<void> {
 
@@ -558,6 +565,7 @@ async function handlePseudoToolStream(
       if (event.kind === 'tool_result' && event.sources?.length) {
         sourceSink.push(...event.sources);
       }
+      telemetry?.(event);
     },
   });
 
@@ -1133,9 +1141,24 @@ export function mountUIRoutes(app: Express): void {
       // enrichedPrompt's injected data block, which would reproduce
       // the v0.5.13.1 narration-vs-tool-loop conflict that motivated
       // handleNarrationStream's existence.
+      // v0.6.5 skills telemetry: one per-turn tool-outcome observer, built only
+      // when the skills module is enabled (else undefined → handlers no-op it,
+      // byte-identical when disabled). sessionId resolved up front so the record
+      // joins the session L1 scores later.
+      const telemetry = config.skills?.enabled
+        ? createToolTurnObserver({
+            agentId,
+            sessionId:
+              (typeof (req.body as any).sessionId === 'string'
+                ? (req.body as any).sessionId
+                : null) ?? getActiveSessionId(agentId),
+            model: llm.model,
+          })
+        : undefined;
+
       if (llm.provider === 'anthropic') {
         const tools = toAnthropicFormat(getAvailableTools()) as Anthropic.Tool[];
-        await handleAnthropicStream(res, systemPrompt, messages, tools, trustLevel, agentName);
+        await handleAnthropicStream(res, systemPrompt, messages, tools, trustLevel, agentName, telemetry);
       } else if (shouldNarrate) {
         const outcome = await handleNarrationStream(
           res,
@@ -1160,9 +1183,9 @@ export function mountUIRoutes(app: Express): void {
             `[narration] postcheck bail (${outcome.reason}) → tool loop fallback`
           );
           if (llm.provider === 'ollama') {
-            await handleOllamaStream(res, systemPrompt, messages, [], trustLevel, agentName);
+            await handleOllamaStream(res, systemPrompt, messages, [], trustLevel, agentName, telemetry);
           } else {
-            await handlePseudoToolStream(res, systemPrompt, messages, [], trustLevel, agentName);
+            await handlePseudoToolStream(res, systemPrompt, messages, [], trustLevel, agentName, telemetry);
           }
         }
       } else if (llm.provider === 'ollama') {
@@ -1173,10 +1196,10 @@ export function mountUIRoutes(app: Express): void {
         // didn't run; prefetchSources is empty when no tool returned
         // data). In the gate-bail case it strips the misroute data
         // out of the model's input so the tool loop runs clean.
-        await handleOllamaStream(res, systemPrompt, messages, [], trustLevel, agentName);
+        await handleOllamaStream(res, systemPrompt, messages, [], trustLevel, agentName, telemetry);
       } else {
         // OpenRouter — same bail behavior as the Ollama branch.
-        await handlePseudoToolStream(res, systemPrompt, messages, [], trustLevel, agentName);
+        await handlePseudoToolStream(res, systemPrompt, messages, [], trustLevel, agentName, telemetry);
       }
 
       const saveable = [

@@ -131,3 +131,29 @@ export interface SessionQualityRecord {
   scored_at:     string                       // ISO
   rubric_version: number                      // bump when the rubric changes
 }
+
+// ── ToolTurnTelemetry (L1 enrichment — live tool-call outcomes) ────────────────
+// One row per chat TURN that ran at least one tool, in
+// ~/.nerdalert/sessions/tool-telemetry.jsonl. Captured live off the AgentEvent
+// stream by src/skills/telemetry.ts — NO model in the path (P7). Sibling to
+// quality.jsonl: quality scores a SESSION's transcript shape; this records a
+// TURN's tool behaviour. A later quality.ts blend joins them by session to add
+// a real tool-success component (and bumps QUALITY_RUBRIC_VERSION then).
+//
+// Field convention mirrors telemetry.ts's emitted record (camelCase). The join
+// to SessionQualityRecord is by VALUE (sessionId === session_id), never by
+// shared field names, so the casing difference vs. that record is cosmetic.
+export const TOOL_TELEMETRY_VERSION = 1
+
+export interface ToolTurnTelemetry {
+  ts:               string                    // ISO, stamped at turn end (the `done` event)
+  agentId:          string
+  sessionId:        string | null             // resolved up front; null if no active session
+  model:            string                    // provider/model label, e.g. "ollama/mistral-small3.2"
+  toolCalls:        number                     // tool_call_announced count this turn
+  toolSuccesses:    number                     // tool_result with error === false
+  toolFailures:     number                     // tool_result with error === true (incl. broker rejections)
+  retries:          number                     // re-announce of a tool that already errored this turn
+  perTool:          Array<{ name: string; calls: number; failures: number }>
+  telemetryVersion: number                     // TOOL_TELEMETRY_VERSION at write time
+}
