@@ -1595,6 +1595,11 @@ const COLLOQUIAL_FILETYPE_NOUNS = [
   'pdf', 'pdfs', 'doc', 'docs', 'docx', 'document', 'documents',
   'file', 'files', 'script', 'scripts', 'spreadsheet', 'csv',
   'txt', 'readme',
+  // v0.6.3.8: remaining extractor-indexable formats (rtf/xlsx/pptx/epub)
+  // plus fdx (Final Draft, indexed via the plain-text path). Longer
+  // variants first so the trailing \b never half-matches 'xls' in 'xlsx'.
+  // Excludes md/json -- 'md' false-positives on '<name> md' (e.g. 'Smith MD').
+  'rtf', 'xlsx', 'xls', 'pptx', 'ppt', 'epub', 'fdx',
 ].join('|');
 
 // Tokens that are NOT valid name stems. Determiners/question-words
@@ -1623,6 +1628,8 @@ const COLLOQUIAL_NAME_STOPWORDS = new Set<string>([
   'pdf', 'pdfs', 'doc', 'docs', 'docx', 'document', 'documents',
   'file', 'files', 'script', 'scripts', 'spreadsheet', 'csv',
   'txt', 'readme',
+  // v0.6.3.8: kept in sync with COLLOQUIAL_FILETYPE_NOUNS above.
+  'rtf', 'xlsx', 'xls', 'pptx', 'ppt', 'epub', 'fdx',
 ]);
 
 // Built once at module load. Source reused (with the 'g' flag) inside
@@ -1701,6 +1708,25 @@ function hasDocumentsSearchShape(message: string): boolean {
   return false;
 }
 
+// ── hasDocumentsIndexShape ─────────────────────────
+//
+// Returns true for a colloquial index imperative: the 'index' verb plus a
+// dotless colloquial file reference ("index File Dump pdf"). 'index' is not
+// a search verb, so the search-shape gates never fire for it -- this is the
+// index twin of hasDocumentsSearchShape. The documents paramExtractor already
+// turns the message into { action: 'index', path: <stem> }; this helper just
+// gets documents into `matched` so the demotion can drop project.
+//
+// Shared by the documents gate (so documents matches) AND the documents-vs-
+// project demotion (so project loses the tie-break) -- single source of
+// truth, same pattern as hasDocumentsSearchShape.
+//
+// /\bindex\b/ excludes 'reindex' (no word boundary inside the word), which is
+// correct: reindex needs a doc_id the user rarely has, so it falls to list.
+function hasDocumentsIndexShape(message: string): boolean {
+  return /\bindex\b/i.test(message) && hasColloquialFileReference(message);
+}
+
 export function detectIntent(message: string, agentName?: string): string[] {
   const lower = message.toLowerCase();
   // v0.6.3.4 (Q4): per-turn agent name suffix appended to every
@@ -1775,7 +1801,14 @@ export function detectIntent(message: string, agentName?: string): string[] {
         // stay structurally parallel: file-reference present AND a search
         // shape present. The documents-vs-project demotion below then
         // drops project (searchSignal includes hasDocumentsSearchShape).
-        return hasColloquialFileReference(message) && hasDocumentsSearchShape(message);
+        if (hasColloquialFileReference(message) && hasDocumentsSearchShape(message)) return true;
+        // v0.6.3.8: colloquial INDEX twin of the gate above. "index File Dump
+        // pdf" -- index verb + colloquial stem, no search shape and no dotted
+        // filename -- missed every documents-gate condition (keywords need an
+        // article; the search-shape gates need a search verb), so the turn
+        // fell to project and Mistral Class-1-refused the index. This gets
+        // documents into `matched`; the demotion then drops project.
+        return hasDocumentsIndexShape(message);
       }
       if (groupName === 'project') {
         // v0.6.3.5: project fires on its keyword list OR on a colloquial
@@ -1876,7 +1909,7 @@ export function detectIntent(message: string, agentName?: string): string[] {
       // not a project.read signal. Without this, "index the Goodnerds PDF"
       // fires both groups but documents loses the tie-break because
       // searchSignal is false (index is not a search-shape verb).
-      || (/\bindex\b/i.test(message) && hasColloquialFileReference(message));
+      || hasDocumentsIndexShape(message);
     if (searchSignal) {
       const kept = matched.filter(g => g !== 'project');
       console.log(`[NerdAlert] Intent demoted project (search-inside-content signal): ${kept.join(', ')}${viaSuffix}`);
