@@ -75,6 +75,7 @@ import { mountHeartbeatRoutes }    from './heartbeat-routes';
 import { mountMemoryCardsRoute }   from './memory-cards-route';
 import { mountDocumentsRoute }     from './documents-route';
 import { mountToolToggleRoute }    from './tool-toggle-route';
+import { mountSkillsRoute }        from './skills-route';
 import { createToolTurnObserver }  from '../skills/telemetry';
 import type { Source } from '../types/response.types';
 
@@ -1665,6 +1666,12 @@ export function mountUIRoutes(app: Express): void {
   // is not registered and the UI's documents row never renders.
   if (config.documents?.enabled) {
     mountDocumentsRoute(app);
+  }
+
+  // Skills module (v0.6.5) — opt-in, same strict-superset gate as documents.
+  // Disabled ⇒ GET /api/skills 404s, no lazy L1 scoring runs, no panel row.
+  if (config.skills?.enabled) {
+    mountSkillsRoute(app);
   }
 
   // v0.6.4 — Tool Toggle Panel. Always mounted: this is a core utility
