@@ -3350,6 +3350,22 @@
       transition: all var(--transition-fast); flex-shrink: 0;
     }
     .memory-card-chat:hover { color: var(--cyan); text-shadow: 0 0 4px var(--cyan); }
+    .memory-card-view {
+      cursor: pointer; font-size: 11px; color: var(--text-dim);
+      padding: 0 4px; border-radius: 1px;
+      transition: all var(--transition-fast); flex-shrink: 0;
+    }
+    .memory-card-view:hover { color: var(--cyan); text-shadow: 0 0 4px var(--cyan); }
+    .doc-view-head {
+      font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.5px;
+      color: var(--cyan); margin-bottom: 8px;
+    }
+    .doc-view-meta { color: var(--text-dim); }
+    .doc-view-body {
+      max-height: 360px; overflow: auto; white-space: pre-wrap;
+      font-size: 11px; line-height: 1.55; color: var(--agent-text);
+    }
+    .doc-view-empty { color: var(--text-dim); font-style: italic; }
     .memory-card-snippet {
       margin-top: 4px; font-size: 10px; line-height: 1.4; color: var(--text);
       overflow: hidden;
@@ -6310,6 +6326,26 @@
     return div;
   }
 
+  // appendStaticMessage(): drop a non-streaming, model-free bubble into the
+  // transcript. Used by the documents side panel's click-to-view (v0.6.3.7)
+  // to render a DOCUMENT bubble directly — no agent turn, no SSE, and NO
+  // conversationHistory push (the body never enters model context). `label`
+  // is the attribution line; `bodyHTML` is caller-built and MUST be escaped
+  // by the caller. Exposed on window so the documents IIFE can call it.
+  window.appendStaticMessage = function(label, bodyHTML) {
+    clearEmptyState();
+    const container = document.getElementById('chat-messages');
+    if (!container) return null;
+    const div = document.createElement('div');
+    div.className = 'message agent';
+    div.innerHTML =
+      '<div class="message-label">' + escapeHTML(label) + ' // ' + timestamp() + '</div>' +
+      '<div class="message-bubble">' + (bodyHTML || '') + '</div>';
+    container.appendChild(div);
+    scrollToBottom();
+    return div;
+  };
+
   function appendAgentMessage() {
     clearEmptyState();
     const container = document.getElementById('chat-messages');
@@ -8651,6 +8687,7 @@ function escapeHtml(str) {
       '<div class="memory-card" onclick="toggleDocumentCard(this, event)">',
       '<div class="memory-card-row-1">',
       '<span class="memory-card-subject">', escapeHTML(card.filename), '</span>',
+      '<span class="memory-card-view" onclick="viewDocument(\'', escapeAttr(card.id), '\', event)" title="View contents">&#128065;</span>',
       '<span class="memory-card-chat" onclick="injectDocumentPrompt(\'', filenameAttr, '\', event)" title="Ask agent about this file">&#128172;</span>',
       '</div>',
       '<div class="memory-card-snippet">', snippet, '</div>',
@@ -8725,6 +8762,31 @@ function escapeHtml(str) {
   window.toggleDocumentCard = function(cardEl, event) {
     if (event && event.target && event.target.classList.contains('memory-card-chat')) return;
     cardEl.classList.toggle('expanded');
+  };
+
+  window.viewDocument = function(docId, event) {
+    if (event) event.stopPropagation();
+    fetch('/api/documents/get?id=' + encodeURIComponent(docId), {
+      headers: { 'Authorization': 'Bearer ' + window.NERDALERT_CONFIG.token }
+    }).then(function(res) {
+      return res.ok ? res.json() : null;
+    }).then(function(data) {
+      if (!data || !data.ok) return;
+      var d = data.document || {};
+      var typeStr = d.extension ? String(d.extension).replace(/^\./, '').toUpperCase() : '';
+      var head = '<div class="doc-view-head">' + escapeHTML(d.filename || 'document')
+        + (typeStr ? ' <span class="doc-view-meta">' + escapeHTML(typeStr) + '</span>' : '')
+        + '</div>';
+      var text = (data.text || '').trim();
+      var body = text
+        ? '<div class="doc-view-body">' + escapeHTML(text) + '</div>'
+        : '<div class="doc-view-empty">(no text content)</div>';
+      if (typeof window.appendStaticMessage === 'function') {
+        window.appendStaticMessage('DOCUMENT', head + body);
+      }
+    }).catch(function(err) {
+      console.warn('[documents-row] view failed:', err);
+    });
   };
 
   window.injectDocumentPrompt = function(filename, event) {

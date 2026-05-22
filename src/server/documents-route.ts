@@ -20,7 +20,7 @@
 
 import type { Express, Request, Response } from 'express';
 
-import { listDocuments } from '../documents/engine';
+import { listDocuments, getDocument, getDocumentText } from '../documents/engine';
 import type { DocumentIndexEntry } from '../documents/types';
 
 // ── Wire card shape ───────────────────────────────────────
@@ -86,5 +86,50 @@ export function mountDocumentsRoute(app: Express): void {
     const entries = listDocuments();   // engine handles archived filter + sort
     const documents = entries.map(toDocumentCard);
     res.json({ ok: true, documents });
+  });
+
+  // ── GET /api/documents/get?id=<docId> ────────────────────
+  //
+  // Returns one document's metadata + its full text body. The body is
+  // re-extracted from the stored original (engine.getDocumentText) rather
+  // than stitched from the overlapping chunk store — chunks are for
+  // retrieval, not display. Backs the click-to-view direct render
+  // (v0.6.3.7): the side panel fetches this and renders a synthetic,
+  // model-free DOCUMENT bubble in chat.
+  //
+  // NOTE — getDocument() (used for the metadata) bumps last_read_at as a
+  // side effect: viewing a document IS reading it, so it rises to the top
+  // of the last-read-sorted list. Differs from /list, which is a pure read.
+  // getDocumentText() does NOT bump — it's body-only.
+  //
+  // Response:
+  //   200 { ok: true, document: DocumentCard, text: string }
+  //   400 { ok: false, error: 'missing id' }
+  //   404 { ok: false, error: 'not found' }
+  //   410 { ok: false, error: 'original unavailable' }
+  //   500 { ok: false, error: 'extraction failed' }
+  app.get('/api/documents/get', async (req: Request, res: Response) => {
+    const id = typeof req.query.id === 'string' ? req.query.id.trim() : '';
+    if (!id) {
+      res.status(400).json({ ok: false, error: 'missing id' });
+      return;
+    }
+
+    const result = getDocument(id);
+    if (!result) {
+      res.status(404).json({ ok: false, error: 'not found' });
+      return;
+    }
+
+    try {
+      const text = await getDocumentText(id);
+      if (text === undefined) {
+        res.status(410).json({ ok: false, error: 'original unavailable' });
+        return;
+      }
+      res.json({ ok: true, document: toDocumentCard(result.record), text });
+    } catch {
+      res.status(500).json({ ok: false, error: 'extraction failed' });
+    }
   });
 }

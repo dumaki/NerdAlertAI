@@ -470,6 +470,28 @@ export function getDocument(id: string): {
   return { record: touched, chunks }
 }
 
+// ── getDocumentText(): full readable text for one doc, via re-extraction ─
+// Reads the stored original off disk and re-runs the extractor (or decodes as
+// UTF-8 for plain-text formats). Returns the SAME text that was chunked, with
+// no overlap artifacts — the chunk store is for retrieval, not display, so we
+// never reconstruct readable text from overlapping chunks.
+//
+// Returns undefined when the doc is unknown OR its original is no longer on
+// disk (a forgotten/archived doc — which won't surface in list() anyway, so
+// the UI's view affordance never reaches this for those).
+//
+// Unlike getDocument(), this does NOT touch last_read_at — the route calls
+// getDocument() for the record + recency bump; this is body-only.
+export async function getDocumentText(id: string): Promise<string | undefined> {
+  ensureStorage()
+  const record = getFullDocumentRecord(id)
+  if (!record) return undefined
+  const buffer = readOriginal(id, record.extension)
+  if (!buffer) return undefined
+  const extractor = getExtractor(record.extension)
+  return extractor ? await extractor(buffer) : buffer.toString('utf8')
+}
+
 // ── search(): semantic-with-keyword-fallback retrieval ──────────────────────
 // Picks the search path based on embedding capability — same dispatcher
 // pattern as memory.search:
