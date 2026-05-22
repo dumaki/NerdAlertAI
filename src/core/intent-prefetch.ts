@@ -81,6 +81,12 @@ export interface PrefetchResult {
   data:      string;   // stringified result or error message
   available: boolean;  // false if tool threw or returned empty
   sources?:  Source[]; // citations from this tool's metadata, if any
+  // v0.6.3.9: mechanical, display-only data (a project file listing /
+  // roster) that must be rendered VERBATIM, not narrated. Set in
+  // prefetchTools for project list/projects actions; the narration
+  // handler emits it directly and skips model generation, killing the
+  // list-fabrication failure mode. Absent/false = narrate as before.
+  renderVerbatim?: boolean;
 }
 
 // ── Intent map ────────────────────────────────────────────────
@@ -1995,6 +2001,15 @@ export async function prefetchTools(
       continue;
     }
 
+    // v0.6.3.9: flag mechanical list-shaped project output for verbatim
+    // rendering. project.list / project.projects return deterministic
+    // listings the model transcribes unreliably; scoped to the project
+    // tool by name so nothing else is affected. read/search/switch/
+    // current/clear still narrate normally.
+    const action = typeof params.action === 'string' ? params.action : undefined;
+    const isMechanicalProjectList =
+      toolName === 'project' && (action === 'list' || action === 'projects');
+
     // Treat empty string as unavailable — no point narrating nothing.
     results.push({
       toolName,
@@ -2002,6 +2017,7 @@ export async function prefetchTools(
       data:      result.output || 'No data returned',
       available: result.output.length > 0,
       sources:   result.sources,
+      renderVerbatim: isMechanicalProjectList || undefined,
     });
   }
 

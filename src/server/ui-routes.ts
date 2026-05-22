@@ -683,6 +683,33 @@ async function handleNarrationStream(
   const llm = getLLMConfig();
   const bareModel = llm.model.replace(/^ollama\//, '');
 
+  // ── v0.6.3.9: mechanical verbatim render ────────────────────
+  // Deterministic, display-only prefetch data (project listing /
+  // roster) is emitted as-is, skipping model generation entirely.
+  // Mistral pattern-completes a plausible listing from priors instead
+  // of copying the real one, and the narration-postcheck can't catch
+  // it (the fabrication reuses real filename tokens). Same reasoning as
+  // the v0.6.3.7 doc-card render. Triggers only when an available
+  // result carries renderVerbatim (project list/projects); those
+  // queries fire the project group alone, so the whole turn is
+  // mechanical. Strict-superset: no verbatim result → branch skipped,
+  // narration runs exactly as before.
+  const verbatimResults = prefetchResults.filter(r => r.available && r.renderVerbatim);
+  if (verbatimResults.length > 0) {
+    for (const r of prefetchResults) {
+      if (!r.available) continue;
+      const id = `prefetch_${r.toolName}`;
+      sseEvent(res, 'tool_start',  { id, name: r.toolName });
+      sseEvent(res, 'tool_result', { id, name: r.toolName, output: r.data });
+    }
+    const verbatimText = verbatimResults.map(r => r.data).join('\n\n');
+    sseEvent(res, 'token', { text: verbatimText });
+    sseEvent(res, 'done', { text: verbatimText, sources: dedupSources(prefetchSources) });
+    res.end();
+    console.log(`[narration] verbatim render (${verbatimResults.map(r => r.toolName).join(',')}) → model bypassed`);
+    return { kind: 'streamed' };
+  }
+
   // Convert Anthropic MessageParam history → ORMessage via the
   // image-aware helper. Same dance as handleOllamaStream — we
   // preserve image blocks here too because narration on a vision-
