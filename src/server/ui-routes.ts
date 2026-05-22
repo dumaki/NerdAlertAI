@@ -77,6 +77,7 @@ import { mountDocumentsRoute }     from './documents-route';
 import { mountToolToggleRoute }    from './tool-toggle-route';
 import { mountSkillsRoute }        from './skills-route';
 import { createToolTurnObserver }  from '../skills/telemetry';
+import { buildSkillsContext }      from '../skills/context';
 import type { Source } from '../types/response.types';
 
 // ── New layer imports ────────────────────────────────────────
@@ -957,6 +958,22 @@ export function mountUIRoutes(app: Express): void {
       });
       const systemPrompt = projectContext + personalityPrompt;
 
+      // ── Skills context (v0.6.5, slice 3) — reasoning paths only ──
+      // Strictly additive analogue of projectContext, injected ONLY
+      // into the reasoning prompt (Anthropic ReAct + the tool loops +
+      // the narration→tool-loop bail), NOT the single-turn narration
+      // path — that path must stay free of a second instruction block
+      // fighting "Report ONLY the values shown above" (the Mistral
+      // freeze documented at handleNarrationStream). skillsContext is
+      // '' when the module is off, the corpus is empty, no hit clears
+      // the floor, or retrieval throws, so systemPromptWithSkills ===
+      // systemPrompt in all those cases and every reasoning-path call
+      // below is byte-identical to v0.6.4 with skills disabled.
+      const skillsContext = config.skills?.enabled
+        ? await buildSkillsContext(safeMessage, { persona: agentId })
+        : '';
+      const systemPromptWithSkills = projectContext + skillsContext + personalityPrompt;
+
       const messages: Anthropic.MessageParam[] = [
         ...conversationHistory,
         { role: 'user', content: buildUserContent(safeMessage, images) },
@@ -1159,7 +1176,7 @@ export function mountUIRoutes(app: Express): void {
 
       if (llm.provider === 'anthropic') {
         const tools = toAnthropicFormat(getAvailableTools()) as Anthropic.Tool[];
-        await handleAnthropicStream(res, systemPrompt, messages, tools, trustLevel, agentName, telemetry);
+        await handleAnthropicStream(res, systemPromptWithSkills, messages, tools, trustLevel, agentName, telemetry);
       } else if (shouldNarrate) {
         const outcome = await handleNarrationStream(
           res,
@@ -1184,23 +1201,23 @@ export function mountUIRoutes(app: Express): void {
             `[narration] postcheck bail (${outcome.reason}) → tool loop fallback`
           );
           if (llm.provider === 'ollama') {
-            await handleOllamaStream(res, systemPrompt, messages, [], trustLevel, agentName, telemetry);
+            await handleOllamaStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry);
           } else {
-            await handlePseudoToolStream(res, systemPrompt, messages, [], trustLevel, agentName, telemetry);
+            await handlePseudoToolStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry);
           }
         }
       } else if (llm.provider === 'ollama') {
-        // v0.5.28: pass systemPrompt (bare) and [] (empty sources)
+        // v0.5.28: pass the reasoning prompt (now systemPromptWithSkills) and [] (empty sources)
         // instead of enrichedPrompt / prefetchSources. In the no-
         // prefetch case this is byte-identical to the previous
         // behavior (enrichedPrompt === systemPrompt when prefetch
         // didn't run; prefetchSources is empty when no tool returned
         // data). In the gate-bail case it strips the misroute data
         // out of the model's input so the tool loop runs clean.
-        await handleOllamaStream(res, systemPrompt, messages, [], trustLevel, agentName, telemetry);
+        await handleOllamaStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry);
       } else {
         // OpenRouter — same bail behavior as the Ollama branch.
-        await handlePseudoToolStream(res, systemPrompt, messages, [], trustLevel, agentName, telemetry);
+        await handlePseudoToolStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry);
       }
 
       const saveable = [
