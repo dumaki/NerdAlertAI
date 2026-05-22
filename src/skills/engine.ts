@@ -49,9 +49,10 @@ import {
   getFullSkillRecord,
   appendQualityRecord,
   getQualityRecord,
+  readAllToolTelemetry,
 } from './storage'
 
-import { scoreSession as computeSessionScore, ScorableSession } from './quality'
+import { scoreSession as computeSessionScore, ScorableSession, SessionToolSignal } from './quality'
 
 import { embed }                  from '../memory/embedder'
 import { putEmbedding, getEmbedding } from '../memory/embedding-store'
@@ -274,9 +275,35 @@ function toResult(skill: SkillRecord, score: number): SkillSearchResult {
 // lazy-on-read hook or the /skill save handler) decides WHEN to score; this
 // just computes + writes. Re-scoring appends a fresh line (latest wins).
 export function scoreSession(session: ScorableSession): SessionQualityRecord {
-  const record = computeSessionScore(session)
+  const toolSignal = aggregateToolSignal(session.id)
+  const record = computeSessionScore(session, toolSignal)
   appendQualityRecord(record)
   return record
+}
+
+// Sum this session's tool-telemetry turns into the L1 blend's input signal.
+// Rows are per-turn; a session has many. Returns undefined when the session
+// recorded no tool turns (first-turn null-sessionId rows can't match a real id,
+// so they're naturally excluded) and the scorer then yields a structural-only
+// (v1-shape) score. NOTE: reads the whole telemetry log per call — fine at beta
+// scale; revisit if the lazy scorer ever scores many sessions in one pass.
+function aggregateToolSignal(sessionId: string): SessionToolSignal | undefined {
+  const rows = readAllToolTelemetry().filter(r => r.sessionId === sessionId)
+  if (rows.length === 0) return undefined
+  const sig: SessionToolSignal = {
+    turnsWithTools: rows.length,
+    toolCalls:      0,
+    toolSuccesses:  0,
+    toolFailures:   0,
+    retries:        0,
+  }
+  for (const r of rows) {
+    sig.toolCalls     += r.toolCalls
+    sig.toolSuccesses += r.toolSuccesses
+    sig.toolFailures  += r.toolFailures
+    sig.retries       += r.retries
+  }
+  return sig
 }
 
 export function getSessionQuality(sessionId: string): SessionQualityRecord | undefined {

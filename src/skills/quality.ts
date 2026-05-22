@@ -21,12 +21,20 @@ import { SessionQualityRecord } from './types'
 // ── Rubric version ────────────────────────────────────────────────────────────
 // Bump when any constant or formula below changes, so old scores are
 // identifiable and can be recomputed. Stored on every record.
-export const QUALITY_RUBRIC_VERSION = 1
+export const QUALITY_RUBRIC_VERSION = 2   // v2: adds the tool-success blend (was 1, structural-only)
 
 // ── Component weights (sum to 1.0) ──────────────────────────────────────────────
 const W_RESOLUTION = 0.5   // ended cleanly, few user retries — weighted most
 const W_LENGTH_FIT = 0.2   // turn count in the productive band
 const W_SUBSTANCE  = 0.3   // assistant produced substantive content
+
+// ── tool-success blend (v2) ────────────────────────────────────────────────────
+// Applied ONLY when the session actually used tools. The three structural
+// weights above keep their relative proportions — scaled by (1 - W_TOOL_SUCCESS)
+// — and the tool component takes the remainder, so a tool-less session scores
+// exactly as it did under v1.
+const W_TOOL_SUCCESS     = 0.25  // weight of the tool-success component when tools were used
+const TOOL_RETRY_PENALTY = 0.5   // each unit of retry-rate subtracts this from success-rate
 
 // ── resolution tunables ──────────────────────────────────────────────────────
 const RETRY_PENALTY       = 0.25  // subtracted per near-duplicate user re-ask
@@ -51,6 +59,18 @@ export interface ScorableSession {
   id:       string
   agentId:  string
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
+}
+
+// ── SessionToolSignal ──────────────────────────────────────────────────────────
+// Tool outcomes for a session, summed from tool-telemetry.jsonl by
+// engine.scoreSession (the IO lives there; this scorer stays pure). Absent or
+// toolCalls === 0 ⇒ no blend, structural-only score (v1-identical).
+export interface SessionToolSignal {
+  turnsWithTools: number
+  toolCalls:      number
+  toolSuccesses:  number
+  toolFailures:   number
+  retries:        number
 }
 
 // ── text helpers (deterministic) ────────────────────────────────────────────────
@@ -94,8 +114,22 @@ function lengthFit(userTurns: number): number {
   return Math.max(DECAY_FLOOR, 1 - (userTurns - BAND_HIGH) * DECAY_PER_TURN)
 }
 
+// toolSuccess: success-rate of the session's tool calls, docked by retry-rate.
+// A clean run (all success, no retries) ⇒ 1.0; failures and fumble-then-retry
+// pull it down. Guarded against an empty signal (caller only passes one when
+// toolCalls > 0, but the guard keeps the function total).
+function toolSuccessScore(sig: SessionToolSignal): number {
+  if (sig.toolCalls === 0) return 0
+  const successRate = sig.toolSuccesses / sig.toolCalls
+  const retryRate   = sig.retries       / sig.toolCalls
+  return clamp01(successRate - TOOL_RETRY_PENALTY * retryRate)
+}
+
 // ── scoreSession(): the public entry ────────────────────────────────────────────
-export function scoreSession(session: ScorableSession): SessionQualityRecord {
+export function scoreSession(
+  session: ScorableSession,
+  toolSignal?: SessionToolSignal,
+): SessionQualityRecord {
   const now = new Date().toISOString()
 
   const userMsgs      = session.messages.filter(m => m.role === 'user')
@@ -145,23 +179,42 @@ export function scoreSession(session: ScorableSession): SessionQualityRecord {
   const lengthFitScore = lengthFit(userTurns)
   const substance      = clamp01(medianAssistantChars / SUBSTANCE_TARGET_CHARS)
 
-  const score = clamp01(
+  // Structural composite (unchanged from v1), computed once and kept intact.
+  const base = clamp01(
     W_RESOLUTION * resolution +
     W_LENGTH_FIT * lengthFitScore +
     W_SUBSTANCE  * substance
   )
 
+  // Tool-success blend (v2): only when the session actually used tools. No tool
+  // telemetry ⇒ score === base, identical to v1 (only rubric_version differs).
+  const useTools    = !!toolSignal && toolSignal.toolCalls > 0
+  const toolSuccess = useTools ? toolSuccessScore(toolSignal!) : undefined
+  const score = useTools
+    ? clamp01((1 - W_TOOL_SUCCESS) * base + W_TOOL_SUCCESS * toolSuccess!)
+    : base
+
   return {
     session_id: session.id,
     agentId:    session.agentId,
     score,
-    components: { resolution, lengthFit: lengthFitScore, substance },
+    components: {
+      resolution,
+      lengthFit:   lengthFitScore,
+      substance,
+      toolSuccess: useTools ? toolSuccess : undefined,
+    },
     signals: {
       userTurns,
       assistantTurns,
       nearDupUserTurns,
       medianAssistantChars,
       endedOnAssistant,
+      turnsWithTools: useTools ? toolSignal!.turnsWithTools : undefined,
+      toolCalls:      useTools ? toolSignal!.toolCalls      : undefined,
+      toolSuccesses:  useTools ? toolSignal!.toolSuccesses  : undefined,
+      toolFailures:   useTools ? toolSignal!.toolFailures   : undefined,
+      retries:        useTools ? toolSignal!.retries        : undefined,
     },
     scored_at:      now,
     rubric_version: QUALITY_RUBRIC_VERSION,

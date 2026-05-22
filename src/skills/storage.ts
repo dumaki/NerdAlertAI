@@ -234,6 +234,29 @@ export async function appendToolTelemetry(record: ToolTurnTelemetry): Promise<vo
   }
 }
 
+/**
+ * Read every tool-telemetry line, in append order. Unlike the skill/quality
+ * readers there's no "latest per id wins" — each line is a distinct TURN, and a
+ * session has many; the L1 blend filters these by sessionId and sums them.
+ * Pure read: returns [] if the file doesn't exist yet (never creates it).
+ */
+export function readAllToolTelemetry(): ToolTurnTelemetry[] {
+  if (!fs.existsSync(TELEMETRY_FILE)) return []
+  const lines = fs.readFileSync(TELEMETRY_FILE, 'utf8')
+    .split('\n')
+    .filter(l => l.trim().length > 0)
+
+  const out: ToolTurnTelemetry[] = []
+  for (const line of lines) {
+    try {
+      out.push(JSON.parse(line) as ToolTurnTelemetry)
+    } catch {
+      process.stderr.write(`[skills/storage] Skipped malformed tool-telemetry.jsonl line\n`)
+    }
+  }
+  return out
+}
+
 // ── Exported paths for CLI / debug surfaces ──────────────────────────────────
 export const skillsStoragePaths = {
   skillsDir:   SKILLS_DIR,

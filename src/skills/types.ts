@@ -120,6 +120,7 @@ export interface SessionQualityRecord {
     resolution:  number                       // ended cleanly, few user retries
     lengthFit:   number                       // turn count in the productive band
     substance:   number                       // assistant produced substantive content
+    toolSuccess?: number                      // v2 tool-success blend; absent when no tools used
   }
   signals: {                                  // frozen inputs, for audit
     userTurns:            number
@@ -127,6 +128,12 @@ export interface SessionQualityRecord {
     nearDupUserTurns:     number              // retry proxy
     medianAssistantChars: number
     endedOnAssistant:     boolean
+    // v2 tool aggregates (present only when the session used tools):
+    turnsWithTools?:      number
+    toolCalls?:           number
+    toolSuccesses?:       number
+    toolFailures?:        number
+    retries?:             number
   }
   scored_at:     string                       // ISO
   rubric_version: number                      // bump when the rubric changes
