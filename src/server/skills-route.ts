@@ -28,7 +28,8 @@
 
 import type { Express, Request, Response } from 'express';
 
-import { listSkills, countSkills, scoreSession, getSessionQuality } from '../skills/engine';
+import { listSkills, countSkills, scoreSession, getSessionQuality, saveSkill } from '../skills/engine';
+import { extractSkillFromSession, type TranscriptSession } from '../skills/extract';
 import { QUALITY_RUBRIC_VERSION } from '../skills/quality';
 import type { SkillIndexEntry } from '../skills/types';
 import { listSessions, loadSession, getActiveSessionId } from './session-store';
@@ -94,6 +95,31 @@ function lazyScorePass(): void {
   }
 }
 
+// ── /skill save extraction (fire-and-forget) ─────────────
+// The async tail of POST /api/skills/save: runs the L2 LLM extraction on the
+// active chat model, then persists via engine.saveSkill with the session's L1
+// score pre-filled. Fully wrapped — a fire-and-forget extraction must never
+// surface as an uncaughtException, and a junk/empty extraction just no-ops.
+async function runSkillSave(session: TranscriptSession): Promise<void> {
+  try {
+    const input = await extractSkillFromSession(session);
+    if (!input) {
+      console.log(`[skills] /skill save: no skill extracted from session ${session.id}`);
+      return;
+    }
+    const quality = getSessionQuality(session.id)?.score ?? null;
+    const saved = await saveSkill({
+      ...input,
+      persona:       'all',
+      source:        'learned',
+      quality_score: quality,
+    });
+    console.log(`[skills] /skill save: saved "${saved.name}" (${saved.id}) from session ${session.id}`);
+  } catch (err) {
+    console.error('[skills] /skill save extraction failed:', err);
+  }
+}
+
 // ── mountSkillsRoute ───────────────────────────────────────
 // Mount hook called from ui-routes.ts. Caller decides whether to invoke this
 // based on config.skills.enabled; this file doesn't re-check.
@@ -107,5 +133,30 @@ export function mountSkillsRoute(app: Express): void {
     const counts = countSkills();
     res.json({ ok: true, skills, counts });
     setImmediate(lazyScorePass);
+  });
+
+  // ── POST /api/skills/save ────────────────────────
+  // L2 manual extraction. Resolves the session, ACKS immediately, then runs
+  // the LLM extraction fire-and-forget (setImmediate) so the response never
+  // waits on a model call. The new skill surfaces in the side-panel row on the
+  // next GET /api/skills (the client nudges a couple of early refetches).
+  app.post('/api/skills/save', (req: Request, res: Response) => {
+    const body      = (req.body ?? {}) as { agentId?: unknown; sessionId?: unknown };
+    const agentId   = typeof body.agentId === 'string' ? body.agentId : 'sherman';
+    const sessionId = (typeof body.sessionId === 'string' ? body.sessionId : null)
+                      ?? getActiveSessionId(agentId);
+
+    if (!sessionId) {
+      res.json({ ok: false, error: 'No active session to extract from.' });
+      return;
+    }
+    const session = loadSession(sessionId);
+    if (!session || session.messages.length === 0) {
+      res.json({ ok: false, error: 'Session is empty — nothing to extract.' });
+      return;
+    }
+
+    res.json({ ok: true, status: 'extracting' });   // ack now; extraction runs after
+    setImmediate(() => { void runSkillSave(session); });
   });
 }
