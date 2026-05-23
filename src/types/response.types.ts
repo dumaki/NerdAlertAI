@@ -174,6 +174,7 @@ export interface AgentConfig {
   memory?: MemoryConfig;     // optional — absent = pure TF-IDF, no semantic search
   documents?: DocumentsConfig; // optional — absent / disabled = tool hidden, no chunk store
   skills?: SkillsConfig;       // optional: absent/disabled = no seed, no skills panel
+  experimental?: ExperimentalConfig; // optional: spike flags; absent = all off
 }
 
 // --- VOICE MODULE CONFIG ---
@@ -300,4 +301,20 @@ export interface DocumentsConfig {
 // knobs land as nested fields here without breaking existing configs.
 export interface SkillsConfig {
   enabled: boolean;
+}
+
+// --- EXPERIMENTAL CONFIG (spike flags) ---
+// Short-lived feature flags for in-flight experiments. Everything here
+// defaults OFF (absent block = all false) so a config without an
+// `experimental:` section behaves exactly as before — strict-superset.
+//
+// native_tools (v0.7 spike): when true, OpenRouter models route through
+// the native OpenAI-compatible tool loop (runOpenAIAdapter via
+// handleOpenRouterToolStream) instead of the pseudo-tool XML protocol,
+// and skip intent-prefetch so the loop gets a clean shot at the question
+// — same shape as the Anthropic path. Lets Battery D measure native vs.
+// pseudo head-to-head. Graduates into per-model transport config in v0.7
+// proper; this flag goes away then.
+export interface ExperimentalConfig {
+  native_tools?: boolean;
 }

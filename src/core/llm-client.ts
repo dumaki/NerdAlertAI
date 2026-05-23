@@ -453,7 +453,7 @@ export async function initAnthropicKey(): Promise<boolean> {
  * request will trigger the read instead. Mirrors the lazy fallback
  * inside getWazuhWallState() in src/server/soc-clients/wazuh.ts.
  */
-async function resolveOpenRouterKey(): Promise<string | null> {
+export async function resolveOpenRouterKey(): Promise<string | null> {
   if (cachedOpenRouterKey) return cachedOpenRouterKey;
   await initOpenRouterKey();
   return cachedOpenRouterKey;
