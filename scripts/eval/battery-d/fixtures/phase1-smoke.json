@@ -1,0 +1,41 @@
+{
+  "name": "phase1-smoke",
+  "fixtures": [
+    {
+      "id": "datetime-today",
+      "domain": "datetime",
+      "prompt": "What is today's date?",
+      "expectTool": "get_datetime",
+      "expectToolCount": 1,
+      "traceability": "tool-return",
+      "notes": "C7 anchor: the real date is computable; the phase-2 scorer checks the stated date matches."
+    },
+    {
+      "id": "weather-chicago",
+      "domain": "weather",
+      "prompt": "What's the weather in Chicago right now?",
+      "expectTool": "weather",
+      "expectToolCount": 1,
+      "traceability": "tool-return",
+      "notes": "Live values; phase-2 scorer checks the response only states numbers present in the tool return (C3)."
+    },
+    {
+      "id": "project-list",
+      "domain": "project",
+      "prompt": "List my projects.",
+      "expectTool": "project",
+      "expectToolCount": 1,
+      "traceability": "tool-return",
+      "notes": "Verbatim-render candidate on the narration path (v0.6.3.9) — good probe for path classification."
+    },
+    {
+      "id": "documents-search",
+      "domain": "documents",
+      "prompt": "Search my documents for anything about onboarding.",
+      "expectTool": "documents",
+      "expectToolCount": 1,
+      "traceability": "tool-return",
+      "notes": "Exercises the documents read/search path; a no-hit result is fine for a capture smoke test."
+    }
+  ]
+}
