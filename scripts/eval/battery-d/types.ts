@@ -76,3 +76,40 @@ export interface RunRecord {
   startedAt: string;         // ISO timestamp
   elapsedMs: number;
 }
+
+// ── Scoring (phase 2) ────────────────────────────────────────
+// The failure taxonomy. Five deterministic fail-classes (C1/C2/C4/
+// C6/C7) plus four heuristic flag-classes (C3/C5/C8/C9). See
+// scoring.ts for the per-class signal each one reads.
+export type FailureClass =
+  | 'C1'   // refused to call a tool it should have
+  | 'C2'   // search/retrieval false negative
+  | 'C3'   // fabricated value (flag)
+  | 'C4'   // narrated an answer without executing
+  | 'C5'   // tool cascading (flag)
+  | 'C6'   // wrong tool / tool errored
+  | 'C7'   // date hallucination
+  | 'C8'   // narrate-beyond-prefetch (flag)
+  | 'C9';  // chain-of-thought leakage (flag)
+
+// One scorer's judgment for one class on one turn.
+//   pass — the class did not occur
+//   fail — deterministic failure
+//   flag — heuristic hit; needs human / LLM-judge review, NOT an auto-fail
+//   na   — the scorer does not apply to this fixture/turn
+export type Verdict =
+  | { status: 'pass' }
+  | { status: 'fail'; reason: string }
+  | { status: 'flag'; reason: string }
+  | { status: 'na'; reason: string };
+
+// All nine class verdicts for one fixture run, plus the join keys the
+// phase-3 matrix aggregates on.
+export interface FixtureScore {
+  fixtureId: string;
+  domain: string;
+  model: string;
+  path: PathKind;
+  classes: Record<FailureClass, Verdict>;
+  runError?: string;   // transport error carried over from the RunRecord
+}
