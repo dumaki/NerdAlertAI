@@ -1,0 +1,61 @@
+{
+  "name": "coverage",
+  "fixtures": [
+    {
+      "id": "datetime-year",
+      "domain": "datetime",
+      "prompt": "What year is it?",
+      "expectTool": "get_datetime",
+      "expectToolCount": 1,
+      "traceability": "tool-return",
+      "notes": "Second C7 sample (smoke has only datetime-today). C7 checks the stated year is one get_datetime returned."
+    },
+    {
+      "id": "weather-tokyo",
+      "domain": "weather",
+      "prompt": "What's the weather in Tokyo right now?",
+      "expectTool": "weather",
+      "expectToolCount": 1,
+      "traceability": "tool-return",
+      "notes": "react-vs-narration parameterization probe. On react the model passes 'Tokyo' to the weather tool and gets Tokyo data (clean); on the narration path the prefetch can only fetch the user's geolocation (Chicago), so the model can't satisfy the ask. Its narration C1 is evidence for the first-person C1 scoping fix, not a model defect."
+    },
+    {
+      "id": "documents-goodnerds",
+      "domain": "documents",
+      "prompt": "Search the Goodnerds script for the part with Kenny.",
+      "expectTool": "documents",
+      "expectToolCount": 1,
+      "groundTruth": { "mustContain": ["NA_S01E08_-_Goodnerds"] },
+      "traceability": "tool-return",
+      "notes": "C2 known-hit. Reworded to an explicit search-inside-content prompt ('Search the X for Y') so it routes to the documents tool on BOTH paths (react matches the tool's 'search the PDF for Y' trigger; narration's search-inside-content signal demotes project->documents) rather than to project read. Search term 'Kenny' is confirmed present (verified from a clean react read of the file). mustContain anchors on the full filename, which doSearch prints in every hit header and which is ABSENT from the No-matches / No-indexed-document-named messages, so a routing failure or empty search correctly FAILs C2."
+    },
+    {
+      "id": "documents-budget",
+      "domain": "documents",
+      "prompt": "Search the 2026 Budget spreadsheet for the savings section.",
+      "expectTool": "documents",
+      "expectToolCount": 1,
+      "groundTruth": { "mustContain": ["2026_Budget"] },
+      "traceability": "tool-return",
+      "notes": "C2 known-hit on a second file (xlsx, different extractor path). Reworded to search-inside form; 'savings' is a confirmed-present section (Savings category + Net Savings + 20% savings-rate note, verified from a clean react read)."
+    },
+    {
+      "id": "documents-cascade",
+      "domain": "documents",
+      "prompt": "Search the Betcha Won't script for the dare.",
+      "expectTool": "documents",
+      "expectToolCount": 1,
+      "groundTruth": { "mustContain": ["NA_S01E03_-_Betcha"] },
+      "traceability": "tool-return",
+      "notes": "C2 known-hit on a third file. Reworded to search-inside form ('the dare' is the episode's central premise, confirmed from a clean react read). Id retained as documents-cascade (not renamed) so re-capture cleanly supersedes the prior coverage run instead of orphaning a stale row in the matrix. The earlier dual C5-cascade purpose is dropped: C5-as-flag-not-fail is already validated by the react project-read cascades in the prior run."
+    },
+    {
+      "id": "documents-nomatch",
+      "domain": "documents",
+      "prompt": "Search my documents for quantum tunneling.",
+      "expectTool": "documents",
+      "traceability": "none",
+      "notes": "C1-vs-legit-empty boundary probe. A genuine no-hit should score CLEAN. Observed: Claude ('Nothing on quantum tunneling ... similarity noise, not a real match') and Nemotron ('the term does not appear') score clean; Mistral deflected ('too long for me at my current model size') and correctly FAILs C1. traceability:none (no numbers to trace) and no groundTruth (C2 na -- no hit expected)."
+    }
+  ]
+}
