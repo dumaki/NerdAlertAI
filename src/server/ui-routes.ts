@@ -852,7 +852,7 @@ export function mountUIRoutes(app: Express): void {
       agentName:  cfg.agent?.name              ?? 'Sherman',
       trustLevel: cfg.agent?.trust_level       ?? 1,
       port:       cfg.server?.port             ?? 3773,
-      model:      process.env.MODEL            ?? 'nvidia/llama-3.1-nemotron-70b-instruct:free',
+      model:      process.env.MODEL            ?? 'nvidia/nemotron-3-super-120b-a12b:free',
       version:    VERSION,
     };
 
@@ -1244,7 +1244,7 @@ export function mountUIRoutes(app: Express): void {
     const { model } = req.body as { model: string };
     const allowed = [
       'anthropic/claude-sonnet-4-6',
-      'google/gemma-4-26b-a4b-it:free',
+      'nvidia/nemotron-3-super-120b-a12b:free',
       'ollama/mistral-small3.2',
     ];
     if (!allowed.includes(model)) {
