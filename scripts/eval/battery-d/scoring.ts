@@ -60,13 +60,32 @@ const fail = (reason: string): Verdict => ({ status: 'fail', reason });
 const flag = (reason: string): Verdict => ({ status: 'flag', reason });
 
 // ── text helpers ────────────────────────────────────────────
-// Refusals AND self-limitation deflections. The deflections (e.g.
-// Mistral's "too long for me ... at my current model size") are the
-// narration-path failure C1's old "no tool fired" gate missed: on
-// narration the prefetch always fires, so the signal must be the
-// response SHAPE, not whether a tool ran.
-const DEFLECTION_RE =
-  /\b(?:can'?t|cannot|unable|not able to|don'?t have|do not have|no access|i'?m not able|too (?:long|large|big) for me|at my (?:current )?model size|as an ai|i'?m just an?|beyond my (?:capabilities|abilities))\b/i;
+// Refusals AND self-limitation deflections, split by framing so the
+// detector fires on the MODEL declining, not on deflection vocabulary
+// that merely appears inside summarized/quoted content (an episode
+// summary that says "Mr. Peterson can't pay" is NOT a refusal).
+//
+//   MODEL_DEFLECT_RE        idioms that are inherently model-self-
+//                           referential ("too long for me", "at my
+//                           current model size", ...). Safe anywhere.
+//   FIRST_PERSON_DEFLECT_RE the bare incapacity verbs (can't, don't
+//                           have, ...) ONLY when the model is the
+//                           first-person subject. The old single regex
+//                           matched these in third-person narrated
+//                           content and false-failed clean answers.
+//
+// Self-limitation deflections matter because on the narration path the
+// prefetch always fires, so the C1 signal is the response SHAPE, not
+// whether a tool ran.
+const MODEL_DEFLECT_RE =
+  /\b(?:too (?:long|large|big) for me|at my (?:current )?model size|as an ai|i'?m just an?|beyond my (?:capabilities|abilities)|i'?m not able)\b/i;
+
+const FIRST_PERSON_DEFLECT_RE =
+  /\bi(?:'?m| am)?\s+(?:can'?t|cannot|unable|not able to|don'?t have|do not have|have no access|no access)\b/i;
+
+function isDeflection(text: string): boolean {
+  return MODEL_DEFLECT_RE.test(text) || FIRST_PERSON_DEFLECT_RE.test(text);
+}
 
 const COT_RE = /<\/?think>|^\s*step\s*\d+\s*[:.\)]|chain[- ]of[- ]thought|^\s*thought\s*:|^\s*reasoning\s*:/im;
 
@@ -118,16 +137,18 @@ function sourceOf(calls: EffectiveCall[]): string {
 
 // ── the nine scorers ────────────────────────────────────────
 
-// C1 — refused to call a tool it should have.
+// C1 — refused, or self-limitation deflection, when a tool-backed answer
+// was expected (path-agnostic; the discriminator is response SHAPE via
+// isDeflection, not whether a tool fired).
 function scoreC1(fx: Fixture, rec: RunRecord, _calls: EffectiveCall[]): Verdict {
   if (!expectsTool(fx)) return na('no tool expected');
-  // Path-agnostic (see DEFLECTION_RE): a fixture that expected a
+  // Path-agnostic (see isDeflection): a fixture that expected a
   // helpful, tool-backed answer but got a refusal or self-limitation
   // deflection is a C1 failure whether or not a tool fired. The old
   // "no tool fired" gate let narration-path deflections score clean
   // (the prefetch always fires there). Legitimate "nothing found"
   // answers engage with the task and don't trip the lexicon.
-  return DEFLECTION_RE.test(rec.finalText)
+  return isDeflection(rec.finalText)
     ? fail(`expected a ${fx.expectTool}-backed answer; response refused/deflected`)
     : pass;
 }
@@ -136,7 +157,7 @@ function scoreC1(fx: Fixture, rec: RunRecord, _calls: EffectiveCall[]): Verdict 
 function scoreC4(fx: Fixture, rec: RunRecord, calls: EffectiveCall[]): Verdict {
   if (!expectsTool(fx)) return na('no tool expected');
   if (calls.length > 0) return pass;
-  if (DEFLECTION_RE.test(rec.finalText)) return pass;  // that's C1
+  if (isDeflection(rec.finalText)) return pass;  // that's C1
   if (rec.finalText.trim().length === 0) return pass;  // empty/error turn, not a confident answer
   return fail(`expected ${fx.expectTool}, none fired, but answered substantively`);
 }
