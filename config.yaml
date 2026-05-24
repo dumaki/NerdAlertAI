@@ -198,6 +198,12 @@ tools:
     enabled: true
     trust_level: 1         # Sandboxed reads under ~/.nerdalert/projects/
 
+  project_write:
+    enabled: true
+    trust_level: 2         # Git-soft-enforced writes: edits land on an isolated
+                           # nerdalert/edit-* branch, never the base. Requires
+                           # safety.git.enabled.
+
   documents:
     enabled: true
     trust_level: 1         # L1 covers index/search/list/get/reindex/resolve_refs.
@@ -387,6 +393,8 @@ skills:
 # module constants; add a `snapshots:` sub-block to override.
 safety:
   enabled: true
+  git:
+    enabled: true            # git soft-enforce for project writes (slice 2)
 
 # --- EXPERIMENTAL (spike flags) ---
 # Short-lived feature flags for in-flight experiments. Everything here

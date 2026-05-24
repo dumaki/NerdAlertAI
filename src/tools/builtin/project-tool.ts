@@ -58,8 +58,8 @@ import * as os   from 'os';
 
 // ── Configuration ─────────────────────────────────────────────
 
-const PROJECTS_ROOT  = path.join(os.homedir(), '.nerdalert', 'projects');
-const INBOX_PROJECT  = 'inbox';
+export const PROJECTS_ROOT  = path.join(os.homedir(), '.nerdalert', 'projects');
+export const INBOX_PROJECT  = 'inbox';
 const NERDALERT_MD   = 'NERDALERT.md';
 
 // File-size limits for read action
@@ -101,7 +101,7 @@ const BINARY_EXT = new Set([
 
 // ── Path safety ───────────────────────────────────────────────
 
-function isValidProjectName(name: string): boolean {
+export function isValidProjectName(name: string): boolean {
   if (!name || name.length > 64)        return false;
   if (name.startsWith('.'))             return false;
   if (!/^[A-Za-z0-9._-]+$/.test(name))  return false;
@@ -117,7 +117,7 @@ function isValidProjectName(name: string): boolean {
  * fs.existsSync if existence matters. Symlink check runs only when
  * the path exists (skipped for not-yet-created targets).
  */
-function safeResolveInProject(project: string, relPath: string): string {
+export function safeResolveInProject(project: string, relPath: string): string {
   if (!isValidProjectName(project)) {
     throw new Error(`Invalid project name "${project}". Allowed: letters, numbers, dot, dash, underscore.`);
   }
@@ -953,6 +953,11 @@ the spreadsheet for the savings section", "find every mention of X", "the part
 about Y"), use the 'documents' tool instead. This tool's own 'search' action is
 a literal substring grep over PLAIN-TEXT files only and deliberately skips those
 formats.
+
+This tool only READS — it never creates, writes, edits, or saves files. When the
+user asks to CREATE, WRITE, EDIT, UPDATE, or SAVE a file in a project, use the
+'project_write' tool instead. Read a file first with this tool if you need the
+current contents, then route the write itself to 'project_write'.
 
 This tool is for LOCAL files only. If the user references an 'owner/repo'
 GitHub path (e.g. 'dumaki/NerdAlertAI'), or asks to read a file from a

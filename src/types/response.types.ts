@@ -307,11 +307,16 @@ export interface SkillsConfig {
 export interface SafetyConfig {
   enabled: boolean;
   snapshots?: SnapshotRetentionConfig;
+  git?: GitSafetyConfig;
 }
 
 export interface SnapshotRetentionConfig {
   retain_revisions?: number; // keep at most N snapshots per file (default 10)
   retain_days?: number;      // prune snapshots older than this many days (default 30)
+}
+
+export interface GitSafetyConfig {
+  enabled: boolean;
 }
 
 // --- EXPERIMENTAL CONFIG (spike flags) ---
