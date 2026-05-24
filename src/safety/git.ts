@@ -139,3 +139,56 @@ export async function editStatus(root: string): Promise<{
   const dirty = (await git(root, ['status', '--porcelain'])).length > 0
   return { branch, base, onEditBranch, commitsAhead, recent, dirty }
 }
+
+// ── abortMergeIfInProgress(): abort ONLY when a merge is actually underway ───
+// `git merge --abort` errors if there is no merge in progress, so we first
+// probe for MERGE_HEAD (same --verify --quiet pattern defaultBranch uses) and
+// only abort when it exists. This makes "clean up after a failed merge" a safe
+// no-op on an already-clean repo.
+async function abortMergeIfInProgress(root: string): Promise<void> {
+  try {
+    await git(root, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD'])
+  } catch {
+    return // no MERGE_HEAD ⇒ no merge underway ⇒ nothing to abort
+  }
+  try { await git(root, ['merge', '--abort']) } catch { /* best-effort cleanup */ }
+}
+
+// ── mergeEditBranch(): the ONLY primitive that moves the base branch ─────────
+// Slice 2b. Applies an edit branch onto base via FAST-FORWARD ONLY:
+//   - A fast-forward advances base by EXACTLY the edit commits — linear
+//     history, every edit commit preserved and inspectable, and a conflict is
+//     impossible (a ff only moves a ref; it never combines trees).
+//   - If base has diverged since the edit branch was cut (a second edit landed,
+//     or base moved), --ff-only REFUSES before touching anything, so base stays
+//     byte-identical. We report that it can't fast-forward rather than
+//     fabricating a merge commit. (Decision #6: base is sacred — a failed merge
+//     leaves base exactly as it was.)
+// Returns { merged, reason?, head }. merged:false ⇒ base untouched, reason set.
+// On success the repo is left ON base (base == edit tip); the next write cuts a
+// fresh edit branch from the new base. The merged edit branch ref is KEPT
+// (recoverable; a delete option can be a later follow-up).
+export async function mergeEditBranch(
+  root: string,
+  branch: string,
+  base: string,
+): Promise<{ merged: boolean; reason?: string; head: string }> {
+  // Land on base. Safe: agent writes only ever happen on edit branches, so base
+  // has no uncommitted agent work to disturb.
+  await git(root, ['checkout', base])
+  try {
+    await git(root, ['merge', '--ff-only', branch])
+  } catch (err) {
+    // --ff-only refused (base diverged) or any other merge failure. A refused
+    // ff-only does not partially apply, but guard against any mid-merge state
+    // so base can never be left dirty.
+    await abortMergeIfInProgress(root)
+    const detail = err instanceof Error ? err.message : String(err)
+    return {
+      merged: false,
+      reason: `cannot fast-forward ${branch} onto ${base} — base has moved since the edit branch was cut. Base is unchanged. (${detail})`,
+      head:   await git(root, ['rev-parse', '--short', 'HEAD']),
+    }
+  }
+  return { merged: true, head: await git(root, ['rev-parse', '--short', 'HEAD']) }
+}
