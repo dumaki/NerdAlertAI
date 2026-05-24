@@ -74,6 +74,15 @@
       "expectToolCount": 1,
       "traceability": "tool-return",
       "notes": "v0.6.6 no-regression guard for the spreadsheet case: 'summarize' = whole-file gist = project.read, even after edit #2's redirect adds 'search the spreadsheet for ...' examples pointing to documents. Pairs with documents-budget; FIXTURE_FILTER=budget sweeps both sides."
+    },
+    {
+      "id": "project-write-create",
+      "domain": "project",
+      "prompt": "Create a file called notes.md in the scratch project with the text 'hello world'.",
+      "expectTool": "project_write",
+      "expectToolCount": 1,
+      "traceability": "tool-return",
+      "notes": "v0.6.8 routing probe: a CREATE/WRITE intent must route to project_write, NOT the read-only project tool. Targets the secondary Mistral failure (first-turn project.read misfire on a write request). Measures the project-tool description redirect ('This tool only READS ... use project_write'). Pairs with project-read-* so FIXTURE_FILTER=project sweeps read-vs-write routing together: reads must stay on project, the write must move to project_write. Misroute shows as route=project; clean route shows as route=project_write."
     }
   ]
 }

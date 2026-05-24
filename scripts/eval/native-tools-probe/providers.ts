@@ -236,7 +236,7 @@ export async function callOllamaNative(
   prompt: string,
   tools:  NativeTool[],
 ): Promise<NativeProbeResult> {
-  const host = process.env.OLLAMA_HOST ?? 'http://192.168.10.100:11434';
+  const host = process.env.OLLAMA_HOST ?? 'http://192.168.0.218:11434';
 
   try {
     const res = await fetch(`${host}/api/chat`, {
