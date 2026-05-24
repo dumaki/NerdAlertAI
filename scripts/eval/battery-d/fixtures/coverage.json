@@ -56,6 +56,24 @@
       "expectTool": "documents",
       "traceability": "none",
       "notes": "C1-vs-legit-empty boundary probe. A genuine no-hit should score CLEAN. Observed: Claude ('Nothing on quantum tunneling ... similarity noise, not a real match') and Nemotron ('the term does not appear') score clean; Mistral deflected ('too long for me at my current model size') and correctly FAILs C1. traceability:none (no numbers to trace) and no groundTruth (C2 na -- no hit expected)."
+    },
+    {
+      "id": "project-read-goodnerds",
+      "domain": "project",
+      "prompt": "Read me the Goodnerds script.",
+      "expectTool": "project",
+      "expectToolCount": 1,
+      "traceability": "tool-return",
+      "notes": "v0.6.6 no-regression guard: a whole-file READ must stay on project after the documents<->project description tightening. Pairs with documents-goodnerds (same file, search-inside intent -> documents); FIXTURE_FILTER=goodnerds sweeps both sides."
+    },
+    {
+      "id": "project-read-budget",
+      "domain": "project",
+      "prompt": "Summarize the 2026 Budget spreadsheet.",
+      "expectTool": "project",
+      "expectToolCount": 1,
+      "traceability": "tool-return",
+      "notes": "v0.6.6 no-regression guard for the spreadsheet case: 'summarize' = whole-file gist = project.read, even after edit #2's redirect adds 'search the spreadsheet for ...' examples pointing to documents. Pairs with documents-budget; FIXTURE_FILTER=budget sweeps both sides."
     }
   ]
 }

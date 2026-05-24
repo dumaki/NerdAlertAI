@@ -940,12 +940,19 @@ const projectTool: NerdAlertTool = {
   name: 'project',
 
   description: `
-Read, list, switch, search, and discover files the user has placed under their
-NerdAlert projects directory. This is the right tool whenever the user references
-a file, document, or upload — including phrases like "the file I just dropped",
-"this NDA", "my notes", or any specific filename. It is ALSO the right tool when
-the user wants to switch their working context to a specific project, ask which
-project they're in, or search across project files.
+Read, list, switch, and discover files the user has placed under their
+NerdAlert projects directory. This is the right tool whenever the user wants to
+read or open a file, see what files exist, or get the gist of an upload —
+phrases like "the file I just dropped", "read this NDA", "my notes", or any
+specific filename. It is ALSO the right tool when the user wants to switch their
+working context to a specific project or ask which project they're in.
+
+To search INSIDE a document's content — especially PDF, DOCX, XLSX spreadsheets,
+PPTX, or EPUB — or to find a specific passage, figure, or section (e.g. "search
+the spreadsheet for the savings section", "find every mention of X", "the part
+about Y"), use the 'documents' tool instead. This tool's own 'search' action is
+a literal substring grep over PLAIN-TEXT files only and deliberately skips those
+formats.
 
 This tool is for LOCAL files only. If the user references an 'owner/repo'
 GitHub path (e.g. 'dumaki/NerdAlertAI'), or asks to read a file from a
@@ -982,10 +989,13 @@ Actions:
     similar. After this, the system prompt no longer carries NERDALERT.md
     context.
 
-  search — full-text search across one project's text files. Pass "query"
-    (the search string) and optionally "project" (defaults to "inbox"). Returns
-    matching lines with file and line-number references. Binary and extractor-
-    backed formats (PDF, DOCX, etc.) are skipped — use read for those.
+  search — literal substring (grep) search over a project's PLAIN-TEXT files
+    only (.md, .txt, .json, .yaml, source code). Pass "query" and optionally
+    "project" (defaults to "inbox"). Returns matching lines with file and
+    line-number references. This is NOT content search inside documents: PDF,
+    DOCX, XLSX, and other extractor-backed formats are skipped. To search
+    inside an extracted document's content — or to find a passage or every
+    mention across documents — use the 'documents' tool's 'search' action.
 
 Files dropped into the chat via drag-and-drop or the paperclip button land
 in the "inbox" project. So when the user says "what's in this PDF I just
@@ -993,7 +1003,6 @@ dropped?", call read with just the path — inbox is the default.
 
 PDF, DOCX, FDX, XLSX, XLS, PPTX, RTF, and EPUB files are extracted to plain
 text automatically — say "summarize NDA.pdf", "what's in contract.docx",
-"who's the protagonist in script.fdx", "what's the Q4 total in budget.xlsx",
 "give me the key points from pitch.pptx", or "what's chapter 3 of book.epub
 about" and the contents come through. Spreadsheets are returned as CSV per
 sheet with row/col counts. PowerPoint decks are returned slide-by-slide
