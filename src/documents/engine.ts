@@ -63,9 +63,14 @@ import {
   readOriginal,
   deleteOriginal,
   originalExists,
+  originalPath,
 } from './storage'
 
 import { chunkText, estimateTokens } from './chunker'
+
+// File-safety seatbelt (src/safety). snapshotFile() self-gates on
+// config.safety.enabled, so importing/calling it is a no-op when safety is off.
+import { snapshotFile } from '../safety/snapshots'
 
 // Extractors live under tools/builtin because they were originally built
 // for the project tool. We share that surface — adding a new extractor
@@ -412,6 +417,24 @@ export async function forgetDocument(id: string): Promise<{
   const existing = getFullDocumentRecord(id)
   if (!existing) {
     throw new Error(`DOCUMENT_NOT_FOUND: no document with id "${id}"`)
+  }
+
+  // File-safety seatbelt: snapshot the original before anything is mutated.
+  // snapshotFile() self-gates on config.safety.enabled — when safety is off it
+  // returns {ok:true, skipped} before any I/O, so this block is a no-op and
+  // forget behaves byte-identically to v0.6.6. When safety is on and the
+  // snapshot fails, we REFUSE here, before dropping chunks or deleting the
+  // original — an unrecoverable delete must never run on a failed snapshot.
+  const snap = snapshotFile({
+    project:       existing.projects[0] ?? 'inbox',
+    relPath:       existing.filename,
+    sourceAbsPath: originalPath(id, existing.extension),
+  })
+  if (!snap.ok) {
+    throw new Error(
+      `SNAPSHOT_FAILED: could not snapshot "${existing.filename}" before forget ` +
+      `(${snap.reason}). The original was NOT deleted.`
+    )
   }
 
   const { droppedChunks, droppedVectors } = dropExistingChunksAndEmbeddings(id)

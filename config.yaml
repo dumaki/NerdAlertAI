@@ -374,6 +374,20 @@ memory:
 skills:
   enabled: true
 
+# --- FILE-SAFETY MODULE ---
+# Seatbelt for destructive/overwriting ops. Before a file is deleted or
+# overwritten, the original is copied to
+# ~/.nerdalert/snapshots/<project>/<file>.<ts> so it can be recovered.
+# First consumer: documents.forget (deletes the original off disk).
+#
+# Strict-superset: enabled:false (or an absent block) => byte-identical to
+# v0.6.6 — the snapshotter no-ops before any I/O. This is a SEATBELT, not a
+# trust gate: it never changes which tools may run, only makes writes
+# recoverable. Retention (10 revs / 30 days, prune-on-write) defaults to
+# module constants; add a `snapshots:` sub-block to override.
+safety:
+  enabled: true
+
 # --- EXPERIMENTAL (spike flags) ---
 # Short-lived feature flags for in-flight experiments. Everything here
 # defaults OFF — an absent block means every flag is false, so removing

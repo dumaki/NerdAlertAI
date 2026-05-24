@@ -174,6 +174,7 @@ export interface AgentConfig {
   memory?: MemoryConfig;     // optional — absent = pure TF-IDF, no semantic search
   documents?: DocumentsConfig; // optional — absent / disabled = tool hidden, no chunk store
   skills?: SkillsConfig;       // optional: absent/disabled = no seed, no skills panel
+  safety?: SafetyConfig;       // optional: absent/disabled = no snapshots; destructive ops unchanged
   experimental?: ExperimentalConfig; // optional: spike flags; absent = all off
 }
 
@@ -301,6 +302,16 @@ export interface DocumentsConfig {
 // knobs land as nested fields here without breaking existing configs.
 export interface SkillsConfig {
   enabled: boolean;
+}
+
+export interface SafetyConfig {
+  enabled: boolean;
+  snapshots?: SnapshotRetentionConfig;
+}
+
+export interface SnapshotRetentionConfig {
+  retain_revisions?: number; // keep at most N snapshots per file (default 10)
+  retain_days?: number;      // prune snapshots older than this many days (default 30)
 }
 
 // --- EXPERIMENTAL CONFIG (spike flags) ---

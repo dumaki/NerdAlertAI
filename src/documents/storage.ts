@@ -325,6 +325,17 @@ export function deleteOriginal(id: string, extension: string): boolean {
   return true
 }
 
+/**
+ * Absolute path to a stored original. Pure path math (same ext-normalization
+ * as writeOriginal/readOriginal/deleteOriginal) — does NOT touch the disk.
+ * Exists so callers outside storage (the file-safety snapshotter) can locate
+ * an original without re-deriving the layout.
+ */
+export function originalPath(id: string, extension: string): string {
+  const ext = extension.startsWith('.') ? extension : (extension ? '.' + extension : '')
+  return path.join(DOCUMENTS_DIR, id + ext)
+}
+
 export function originalExists(id: string, extension: string): boolean {
   const ext = extension.startsWith('.') ? extension : (extension ? '.' + extension : '')
   return fs.existsSync(path.join(DOCUMENTS_DIR, id + ext))
