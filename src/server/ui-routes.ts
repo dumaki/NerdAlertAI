@@ -1104,14 +1104,23 @@ export function mountUIRoutes(app: Express): void {
       // but the prefetch primes commonly-asked queries with real
       // data so the first response is fast and accurate.
 
-      // v0.7 spike: when experimental.native_tools is on, OpenRouter
-      // routes through the native tool loop like Anthropic does — which
-      // means it must SKIP prefetch (option 1b). Excluding nativeOR from
-      // needsPrefetch is what gives Battery D a clean native-vs-pseudo
-      // comparison; with prefetch still firing, narration would mask the
-      // loop's behavior. Flag off → nativeOR false → unchanged.
+      // v0.7 spike: when experimental.native_tools is on, native-capable
+      // providers SKIP intent-prefetch so the native tool loop gets a clean
+      // shot at the question (option 1b — same shape as the Anthropic path):
+      //   OpenRouter → pseudo-tool flips to the native loop
+      //                (handleOpenRouterToolStream), so nativeOR ALSO needs
+      //                its own dispatch branch below.
+      //   Ollama     → already native (handleOllamaStream); skipping prefetch
+      //                alone drops it onto that existing no-prefetch branch,
+      //                so nativeOllama needs NO new branch — just this
+      //                prefetch exclusion here.
+      // Excluding both from needsPrefetch is what gives Battery D a clean
+      // native-vs-pseudo (and, for Ollama, native-vs-narration) comparison;
+      // with prefetch still firing, narration would mask the loop's behavior.
+      // Flag off → both false → unchanged.
       const nativeOR = config.experimental?.native_tools === true && llm.provider === 'openrouter';
-      const needsPrefetch = (llm.provider === 'openrouter' || llm.provider === 'ollama') && !nativeOR;
+      const nativeOllama = config.experimental?.native_tools === true && llm.provider === 'ollama';
+      const needsPrefetch = (llm.provider === 'openrouter' || llm.provider === 'ollama') && !nativeOR && !nativeOllama;
 
       let enrichedPrompt = systemPrompt;
       const prefetchSources: Source[] = [];

@@ -384,8 +384,10 @@ skills:
 # instead of the pseudo-tool XML protocol, and skip intent-prefetch so
 # the loop gets a clean shot at the question — same shape as the
 # Anthropic path. Lets Battery D measure native vs. pseudo head-to-head
-# on Nemotron. Ollama already runs native via handleOllamaStream and is
-# unaffected by this flag. Graduates into per-model transport config in
+# on Nemotron. Ollama already runs native via handleOllamaStream; when the
+# flag is on it ALSO skips intent-prefetch so those queries reach that
+# native loop instead of being intercepted by prefetch/narration (no new
+# dispatch branch needed). Graduates into per-model transport config in
 # v0.7 proper; this flag goes away then.
 experimental:
   native_tools: false
