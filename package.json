@@ -8,6 +8,8 @@
     "dev": "ts-node src/server/index.ts",
     "build": "tsc && cp -r src/ui dist/src/",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "chat": "ts-node scripts/chat.ts",
     "chat:dev": "concurrently \"npm run dev\" \"sleep 2 && npm run chat\""
   },
@@ -45,6 +47,7 @@
     "@types/uuid": "^10.0.0",
     "concurrently": "^9.2.1",
     "ts-node": "^10.9.2",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.4"
   }
 }

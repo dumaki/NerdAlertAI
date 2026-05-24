@@ -1,11 +1,13 @@
-// Quick self-test for safe-console.ts
-// Run with: npx ts-node src/security/safe-console.test.ts
+// Self-test for safe-console.ts
+// Run with: npm test   (or: npm run test:watch)
 //
-// Mirrors the style of secret-scanner.test.ts. Tests redactConsoleArgs()
-// directly — the format-and-redact step — rather than monkey-patching the
-// global console object. Cleaner, since the wrapper above is a thin layer
-// over this function plus assignment to console.* fields.
+// Tests redactConsoleArgs() directly — the format-and-redact step — rather
+// than monkey-patching the global console object. Cleaner, since the wrapper
+// is a thin layer over this function plus assignment to console.* fields.
+// Converted from the original standalone ts-node self-check to vitest in the
+// v0.6.10 cleanup; every fixture below is unchanged.
 
+import { describe, it, expect } from 'vitest';
 import { redactConsoleArgs } from './safe-console';
 
 interface Case {
@@ -84,36 +86,26 @@ const cases: Case[] = [
   },
 ];
 
-let pass = 0;
-let fail = 0;
+describe('safe-console / redactConsoleArgs()', () => {
+  for (const c of cases) {
+    it(c.label, () => {
+      // A throw fails the test outright in vitest — no try/catch needed
+      // (the original wrapped this to count throws as failures).
+      const output = redactConsoleArgs(...c.args);
 
-for (const c of cases) {
-  let output: string;
-  try {
-    output = redactConsoleArgs(...c.args);
-  } catch (err) {
-    console.log(`[FAIL] ${c.label}: redactConsoleArgs threw ${String(err)}`);
-    fail++;
-    continue;
+      const hasRedactionMarker = /\[REDACTED-/.test(output);
+
+      // The idempotency case is special — the input ALREADY contains a
+      // [REDACTED-RULE] marker, so marker-presence isn't meaningful. The
+      // right question is "did the input pass through unchanged?". For every
+      // other case, the marker-presence check applies.
+      if (c.label === 'already-redacted input is idempotent') {
+        expect(output).toBe('saved: [REDACTED-ANTHROPIC-KEY]');
+      } else if (c.expectRedacted) {
+        expect(hasRedactionMarker).toBe(true);
+      } else {
+        expect(hasRedactionMarker).toBe(false);
+      }
+    });
   }
-
-  const hasRedactionMarker = /\[REDACTED-/.test(output);
-  // The idempotency case is a special check — the input ALREADY contains a
-  // [REDACTED-RULE] marker, so the marker-presence regex isn't meaningful.
-  // The right question for that case is "did the input pass through
-  // unchanged?". For every other case, the marker-presence check applies.
-  const ok = c.label === 'already-redacted input is idempotent'
-    ? output === 'saved: [REDACTED-ANTHROPIC-KEY]'
-    : (c.expectRedacted ? hasRedactionMarker : !hasRedactionMarker);
-
-  if (ok) {
-    pass++;
-    console.log(`[PASS] ${c.label}`);
-  } else {
-    fail++;
-    console.log(`[FAIL] ${c.label}: expectedRedacted=${c.expectRedacted}, got: ${JSON.stringify(output)}`);
-  }
-}
-
-console.log(`\n${pass}/${pass + fail} passed`);
-process.exit(fail > 0 ? 1 : 0);
+});

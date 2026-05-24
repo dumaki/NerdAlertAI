@@ -58,7 +58,7 @@
   // scripts/**/* covers the CLI tools (memory-cli.ts etc.)
   // Both need to be here or TypeScript won't compile files in scripts/
   "include": ["src/**/*", "scripts/**/*"],
-  "exclude": ["node_modules", "dist"],
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts"],
   // ts-node only loads files on-demand by default — when they're imported.
   // Plain .ts files get loaded that way, but .d.ts files (like
   // src/types/pdf-parse-lib.d.ts) augment the type space WITHOUT being

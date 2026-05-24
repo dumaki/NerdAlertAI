@@ -1,8 +1,11 @@
-// Quick self-test for secret-scanner.ts
-// Run with: npx ts-node src/security/secret-scanner.test.ts
+// Self-test for secret-scanner.ts
+// Run with: npm test   (or: npm run test:watch)
 //
-// Not a full test suite — just enough confidence that the regexes do what they say.
+// Not a full test suite — just enough confidence that the regexes do what
+// they say. Converted from the original standalone ts-node self-check to
+// vitest in the v0.6.10 cleanup; every fixture below is unchanged.
 
+import { describe, it, expect } from 'vitest';
 import { scan } from './secret-scanner';
 
 interface Case {
@@ -41,42 +44,27 @@ const cases: Case[] = [
   { label: 'Random short alphanumeric', input: 'commit abc123def', expectTier: null, expectClean: true },
 ];
 
-let pass = 0;
-let fail = 0;
+describe('secret-scanner / scan()', () => {
+  for (const c of cases) {
+    it(c.label, () => {
+      const r = scan(c.input);
 
-for (const c of cases) {
-  const r = scan(c.input);
+      // Tier classification.
+      expect(r.tier).toBe(c.expectTier);
 
-  const tierOk = r.tier === c.expectTier;
-  const cleanOk = c.expectClean ? r.hits.length === 0 : true;
-  // For redaction we just verify the [REDACTED-...] marker showed up (or didn't).
-  const redactedOk =
-    c.expectRedacted === true ? /\[REDACTED-/.test(r.redacted) :
-    c.expectRedacted === false ? r.redacted === c.input :
-    true;
+      // Clean inputs must produce no hits at all.
+      if (c.expectClean) {
+        expect(r.hits.length).toBe(0);
+      }
 
-  const ok = tierOk && cleanOk && redactedOk;
-  if (ok) {
-    pass++;
-    console.log(`✓ ${c.label}`);
-  } else {
-    fail++;
-    console.log(`✗ ${c.label}`);
-    console.log(`    expected tier=${c.expectTier} clean=${!!c.expectClean} redacted=${!!c.expectRedacted}`);
-    console.log(`    got      tier=${r.tier} hits=${r.hits.length} redacted="${r.redacted}"`);
-    if (r.hits.length) console.log(`    hits: ${r.hits.map(h => h.rule).join(', ')}`);
+      // Redaction: verify the [REDACTED-...] marker appears (expectRedacted
+      // true) or that the input passed through unchanged (expectRedacted
+      // false). Undefined = no redaction assertion for this case.
+      if (c.expectRedacted === true) {
+        expect(r.redacted).toMatch(/\[REDACTED-/);
+      } else if (c.expectRedacted === false) {
+        expect(r.redacted).toBe(c.input);
+      }
+    });
   }
-}
-
-console.log(`\n${pass} pass / ${fail} fail`);
-process.exit(fail > 0 ? 1 : 0);
-
-// Crude helper: pull the most-secret-looking substring from input for the
-// "should be redacted" check. We use it only for the negative assertion
-// (the original value must NOT appear in the redacted output).
-function extractSensitive(s: string): string {
-  // Look for the longest run of non-space, non-quote characters that is at least 8 chars
-  // and not a common english word. Good enough for these test fixtures.
-  const runs = s.match(/[A-Za-z0-9_\-:]{8,}/g) || [];
-  return runs.sort((a, b) => b.length - a.length)[0] || '___no_match___';
-}
+});
