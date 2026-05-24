@@ -36,7 +36,7 @@
 //                    the run, e.g. FIXTURE_FILTER=documents (keeps cost down)
 //   OR_MODEL         default nvidia/nemotron-3-super-120b-a12b:free
 //   OLLAMA_MODEL     default mistral-small3.2:latest
-//   OLLAMA_HOST      default http://192.168.10.100:11434  (read in providers.ts)
+//   OLLAMA_HOST      default http://192.168.0.218:11434  (read in providers.ts)
 //   OPENROUTER_API_KEY  inline key; else providers.ts falls back to keychain
 //   EVAL_FIXTURES    default ../battery-d/fixtures/coverage.json
 //   SKIP_OPENROUTER  set to skip the OpenRouter target

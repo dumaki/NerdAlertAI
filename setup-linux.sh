@@ -222,7 +222,7 @@ case "$MODEL_CHOICE" in
   3)
     sed -i "s|^MODEL=.*|MODEL=ollama/mistral-small3.2|" .env
     echo "  ✓ MODEL set to ollama/mistral-small3.2"
-    echo "  → Make sure OLLAMA_HOST is set in .env (e.g. http://192.168.10.100:11434)"
+    echo "  → Make sure OLLAMA_HOST is set in .env (e.g. http://192.168.0.218:11434)"
     if ! grep -q "^OLLAMA_HOST=" .env; then
       echo "" >> .env
       echo "# Local Ollama instance" >> .env

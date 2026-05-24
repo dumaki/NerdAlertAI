@@ -519,7 +519,7 @@ export function getLLMConfig(): LLMConfig {
     if (!process.env.OLLAMA_HOST) {
       console.warn(
         '[NerdAlert] MODEL is set to ollama/ but OLLAMA_HOST is missing in .env.\n' +
-        '            Add OLLAMA_HOST=http://192.168.10.100:11434 to .env.'
+        '            Add OLLAMA_HOST=http://192.168.0.218:11434 to .env.'
       );
     }
     return {

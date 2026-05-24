@@ -117,7 +117,7 @@ function looksLikeToolCapabilityError(status: number, body: string): boolean {
 // ── Transport config ─────────────────────────────────────────
 
 export interface OpenAITransportConfig {
-  /** Base URL up to (but not including) `/chat/completions`. e.g. "https://api.openai.com/v1" or "http://192.168.10.100:11434/v1" */
+  /** Base URL up to (but not including) `/chat/completions`. e.g. "https://api.openai.com/v1" or "http://192.168.0.218:11434/v1" */
   baseUrl: string;
   /** Authorization scheme. Ollama needs none; cloud providers need bearer. */
   auth?: { type: 'bearer'; token: string } | { type: 'none' };

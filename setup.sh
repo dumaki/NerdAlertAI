@@ -405,7 +405,7 @@ SERVER_PORT=3773
 MODEL=nvidia/llama-3.1-nemotron-70b-instruct:free
 
 # --- OLLAMA (only if running a local model) ---
-# OLLAMA_HOST=http://192.168.10.100:11434
+# OLLAMA_HOST=http://192.168.0.218:11434
 
 # --- GMAIL (optional — run: npm run setup:gmail) ---
 # GMAIL_CONFIG_PATH=~/.nerdalert/secrets/email-gmail.json
