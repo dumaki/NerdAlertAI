@@ -22,6 +22,7 @@ import { mountSecurityRoutes } from './security-routes';
 import { mountFilesRoutes, ensureProjectsRoot } from './files-routes';
 import { mountVoiceRoutes, ensureVoicesDir, ensureWhisperModelsDir } from './voice-routes';
 import { mountMemoryRoutes, logMemoryBootCapability } from './memory-routes';
+import { mountApprovalRoutes } from './approval-routes';
 import { runBackfill } from '../memory/backfill';
 import { seedDefaults as seedSkillDefaults } from '../skills/engine';
 import { startTelegram } from '../telegram';
@@ -156,6 +157,21 @@ mountVoiceRoutes(app);
 // emits once at startup so the operator can see capability state without
 // hitting the endpoint.
 mountMemoryRoutes(app);
+
+// ---- APPROVAL ROUTES ----
+// POST /api/approvals/resolve  — the UI posts {id, approved} after the user
+//   clicks Approve/Deny on an approval card; the broker executes the stored
+//   action (when approved) and returns the result.
+// GET  /api/approvals/pending  — read-only listing of un-resolved approvals.
+// Unconditional mount: approvals are part of the core P5 "approval before
+// action" mechanism (the permission-broker is core, not a removable module),
+// and the endpoints are harmless no-ops when nothing is pending (resolve
+// returns "unknown", pending returns []). This completes the server side of
+// the approval loop whose emit side was already live (broker.proposeAction →
+// pseudo-adapter <approval_request> → SSE approval_request). The UI consumer
+// that renders these server-driven cards and POSTs the decision is a separate
+// follow-up, scoped with the elevation / approval-UI phase.
+mountApprovalRoutes(app);
 
 // ---- CHAT ROUTE ----
 // POST /chat — the main endpoint
