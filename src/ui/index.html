@@ -3708,6 +3708,17 @@
           </svg>
         </span>
       </button>
+      <!-- v0.7 -- Model Visibility Panel. Always visible (the panel manages
+           the model dropdown, so it isn't itself a hideable module). -->
+      <button class="dock-icon" data-view="models" onclick="switchView('models', null)" aria-label="Models">
+        <span class="dock-icon-glyph">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true" focusable="false">
+            <rect x="3.5" y="5"    width="17" height="3.4" rx="1.2" fill="currentColor"/>
+            <rect x="3.5" y="10.3" width="17" height="3.4" rx="1.2" fill="currentColor" opacity="0.55"/>
+            <rect x="3.5" y="15.6" width="17" height="3.4" rx="1.2" fill="currentColor" opacity="0.28"/>
+          </svg>
+        </span>
+      </button>
       <button class="dock-icon" data-view="settings" onclick="switchView('settings', null)" aria-label="Settings">
         <span class="dock-icon-glyph">⚙</span>
       </button>
@@ -4529,7 +4540,7 @@
   // from GET /api/models (which reads the declarative config.yaml registry
   // and flags which models have their required key configured) by
   // loadModels() below, which then re-renders the dropdown. Starts empty;
-  // populated on load. Shape per entry: { id, label, sub, available }.
+  // populated on load. Shape per entry: { id, label, sub, available, hidden }.
   let MODEL_OPTIONS = [];
 
   function setupTopbarDropdowns() {
@@ -4584,7 +4595,14 @@
     const menu = document.getElementById('model-menu');
     if (!menu) return;
 
-    menu.innerHTML = MODEL_OPTIONS.map(m => {
+    // v0.7 Visibility Panel: hide curated-out models from the dropdown,
+    // but always keep the active model so its label can still render (the
+    // server forbids hiding the active model, but a model can be active
+    // AND carry a persisted hidden flag if it was made active by id).
+    // Empty overlay + no hidden flags ⇒ no filtering ⇒ byte-identical to
+    // the pre-panel dropdown.
+    const visible = MODEL_OPTIONS.filter(m => !m.hidden || m.id === currentModel);
+    menu.innerHTML = visible.map(m => {
       const isActive = m.id === currentModel;
       // v0.7 Slice 5b: a model whose required key isn't configured comes
       // back available:false. Render it dimmed and non-clickable (no
@@ -4639,6 +4657,10 @@
                      ? (m.description || '')
                      : `needs ${m.requiresSecret} — add in Setup`,
         available: m.available !== false,
+        // v0.7 Visibility Panel: resolved curation flag. renderModelMenu
+        // filters these out of the dropdown but always keeps the active
+        // model so its selected label can still render.
+        hidden:    m.hidden === true,
       }));
       renderModelMenu();
       syncTopbarLabels();
@@ -5180,6 +5202,7 @@
       return;
     }
     if (view === 'tools')    { openPanel('tools'); return; }
+    if (view === 'models')   { openPanel('models'); return; }
     if (view === 'export')   { openPanel('export');   return; }
     if (view === 'settings') { openPanel('settings'); return; }
     if (view === 'chat')     { closePanel(); }
@@ -5225,6 +5248,10 @@
       title.textContent = 'TOOLS';
       body.innerHTML = getToolsPanelHTML();
       loadToolsPanel();
+    } else if (type === 'models') {
+      title.textContent = 'MODEL VISIBILITY';
+      body.innerHTML = getModelVisibilityPanelHTML();
+      loadModelVisibilityPanel();
     }
   }
 
@@ -5822,6 +5849,140 @@
       overlay.onclick = (e) => { if (e.target === overlay) done(false); };
       document.body.appendChild(overlay);
     });
+  }
+
+
+  // ============================================================
+  // MODEL VISIBILITY PANEL — v0.7
+  // ============================================================
+  // Backs the models dock icon. Reads /api/models/visibility and renders
+  // the registry grouped ANTHROPIC / HOSTED / LOCAL, each row a VISIBLE /
+  // HIDDEN toggle that curates the topbar model dropdown. Session toggles
+  // hit /api/models/visibility/toggle (live, lost on restart); SAVE
+  // persists via /api/models/visibility/save-default behind the shared
+  // confirm modal. All direct routes — the agent has no path here (P7).
+  // Reuses the Tool Toggle Panel's naPost / naConfirm helpers and its
+  // .tools-* CSS, so no new styling. Every mutating call re-renders from
+  // the fresh state the server returns AND re-pulls the dropdown
+  // (loadModels) so the panel and the dropdown stay in lock-step.
+  //
+  // Curation, not access control: hiding only removes a model from the
+  // dropdown; it stays switchable by id. The active model can't be hidden
+  // (server guard + locked row) so the dropdown never loses its selection.
+
+  let MODELVIS_STATE = null;
+
+  function getModelVisibilityPanelHTML() {
+    return `
+      <div class="tools-panel-intro">
+        Choose which models appear in the model dropdown. Session changes
+        apply immediately and reset on restart. SAVE writes the change to
+        config.yaml as the new default.
+      </div>
+      <div class="tools-panel-actions">
+        <button class="settings-action-btn" onclick="resetModelVisibility()">RESET SESSION TOGGLES</button>
+      </div>
+      <div id="modelvis-rows"><div class="tools-loading">LOADING MODELS…</div></div>
+    `;
+  }
+
+  async function loadModelVisibilityPanel() {
+    try {
+      const res  = await fetch(`${BASE_URL}/api/models/visibility`, {
+        headers: { 'Authorization': `Bearer ${CFG.token}` },
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'state fetch failed');
+      MODELVIS_STATE = { current: data.current, models: data.models };
+      renderModelVisibilityPanel(MODELVIS_STATE);
+    } catch (err) {
+      console.warn('[Model Visibility] load failed:', err);
+      const rows = document.getElementById('modelvis-rows');
+      if (rows) rows.innerHTML = '<div class="tools-loading">Failed to load models.</div>';
+    }
+  }
+
+  // Render order matches the panel groups: Anthropic, then hosted, then
+  // local. Within a group the server's registry order is preserved.
+  const MODELVIS_GROUPS = [
+    ['anthropic', 'ANTHROPIC'],
+    ['hosted',    'HOSTED'],
+    ['local',     'LOCAL'],
+  ];
+
+  function renderModelVisibilityPanel(state) {
+    const rows = document.getElementById('modelvis-rows');
+    if (!rows || !state) return;
+    let html = '';
+    for (const [key, label] of MODELVIS_GROUPS) {
+      const group = state.models.filter(m => m.group === key);
+      if (!group.length) continue;
+      html += `<div class="tools-section-label">${label}</div>`;
+      for (const r of group) html += naRenderModelRow(r);
+    }
+    rows.innerHTML = html || '<div class="tools-loading">No models.</div>';
+  }
+
+  function naRenderModelRow(r) {
+    const isActive = r.isActive;
+    // 'on' = visible (lit), 'off' = hidden (dim) — reuse the tool rows'
+    // styling. The active model is always visible and locked (can't hide).
+    const cls   = isActive ? 'on' : (r.hidden ? 'off' : 'on');
+    const click = isActive ? '' : `onclick="toggleModelVisibility('${r.id}', ${!r.hidden})"`;
+    // Unsaved marker: resolved state differs from what's in config.yaml.
+    const unsaved = (r.hidden !== r.hiddenPersisted)
+      ? '<span class="tools-ov" title="Unsaved — differs from config.yaml">●</span>'
+      : '';
+    // Availability hint inline (dimmed) when the model's key isn't set —
+    // it can still be curated, it just won't be selectable until the key
+    // is added in Setup.
+    const needs = (r.available === false && r.requiresSecret)
+      ? ` <span style="opacity:0.5;font-weight:400">· needs ${escapeHTML(r.requiresSecret)}</span>`
+      : '';
+    const stateLabel = isActive ? 'ACTIVE' : (r.hidden ? 'HIDDEN' : 'VISIBLE');
+    const save  = isActive
+      ? ''
+      : `<button class="tools-save" title="Save as default" onclick="event.stopPropagation(); saveModelVisibility('${r.id}', ${r.hidden})">SAVE</button>`;
+    return `
+      <div class="tools-row ${cls}" ${click}>
+        <span class="tools-row-name">${escapeHTML(r.label)}${needs}${unsaved}</span>
+        <span class="tools-row-right">${save}<span class="tools-state">${stateLabel}</span></span>
+      </div>`;
+  }
+
+  // Apply a fresh state payload AND re-pull the dropdown so a hide/show is
+  // reflected in the topbar immediately. Mirrors naApplyState's role for
+  // the tools panel.
+  function modelVisApplyState(data) {
+    if (!data || !data.ok) return false;
+    MODELVIS_STATE = { current: data.current, models: data.models };
+    renderModelVisibilityPanel(MODELVIS_STATE);
+    loadModels();   // keep the topbar dropdown in lock-step
+    return true;
+  }
+
+  async function toggleModelVisibility(id, hidden) {
+    try {
+      const data = await naPost('/api/models/visibility/toggle', { id, hidden });
+      if (!modelVisApplyState(data)) console.warn('[Model Visibility] toggle failed:', data && data.error);
+    } catch (err) { console.warn('[Model Visibility] toggle failed:', err); }
+  }
+
+  async function saveModelVisibility(id, hidden) {
+    const verb = hidden ? 'hidden' : 'visible';
+    const ok = await naConfirm(`Save “${id}” as ${verb} in config.yaml? This changes the dropdown default for every future restart.`);
+    if (!ok) return;
+    try {
+      const data = await naPost('/api/models/visibility/save-default', { id, hidden });
+      if (!modelVisApplyState(data)) console.warn('[Model Visibility] save-default failed:', data && data.error);
+    } catch (err) { console.warn('[Model Visibility] save-default failed:', err); }
+  }
+
+  async function resetModelVisibility() {
+    try {
+      const data = await naPost('/api/models/visibility/reset', {});
+      if (!modelVisApplyState(data)) console.warn('[Model Visibility] reset failed');
+    } catch (err) { console.warn('[Model Visibility] reset failed:', err); }
   }
 
 
