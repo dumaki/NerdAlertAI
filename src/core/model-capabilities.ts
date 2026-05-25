@@ -67,6 +67,18 @@ export interface ModelCapabilities {
   /** Accepts image content blocks (base64-encoded) on user turns. */
   vision: boolean;
 
+  /**
+   * Per-model tool-call trust ceiling (v0.7 Slice 4). Caps what the
+   * model may invoke through the ReAct loop regardless of the user's
+   * global trust level — the broker enforces min(userTrustLevel,
+   * maxTrustLevel), so a ceiling only ever LOWERS access, never raises
+   * it. undefined = no cap. Anthropic (the trusted reference path) is
+   * never capped; non-Anthropic models default to L1 until proven
+   * safe. Policy rather than a hard capability, but colocated here
+   * because this is the per-model source of truth.
+   */
+  maxTrustLevel?: number;
+
   // Future fields land here:
   //   audio:    boolean;   // accepts audio input (speech, music)
   //   document: boolean;   // accepts PDFs as raw bytes (Claude does this)
@@ -116,7 +128,7 @@ const BUILTIN_CAPABILITIES: Record<string, ModelCapabilities> = {
   // installed yet but documented so adding them is a matter of
   // `ollama pull` plus uncommenting one line.
 
-  'ollama/mistral-small3.2':                { vision: true  },
+  'ollama/mistral-small3.2':                { vision: true,  maxTrustLevel: 1 },
   // 'ollama/pixtral':                         { vision: true  },
   // 'ollama/llava':                           { vision: true  },
 
@@ -171,6 +183,10 @@ const BUILTIN_CAPABILITIES: Record<string, ModelCapabilities> = {
 
 const DEFAULT_CAPABILITIES: ModelCapabilities = {
   vision: false,
+  // Conservative: an unknown model is non-Anthropic by definition
+  // (every Claude model is listed above, and getModelTrustCeiling hard-
+  // guards anthropic/* regardless), so cap it at L1 until proven safe.
+  maxTrustLevel: 1,
 };
 
 
@@ -184,6 +200,32 @@ const DEFAULT_CAPABILITIES: ModelCapabilities = {
  */
 export function getModelCapabilities(model: string): ModelCapabilities {
   return BUILTIN_CAPABILITIES[model] ?? DEFAULT_CAPABILITIES;
+}
+
+
+/**
+ * Resolve the per-model tool-call trust ceiling (v0.7 Slice 4).
+ *
+ * Returns the max trust level the model may invoke through the tool
+ * loop, or `undefined` for "no cap". The broker enforces
+ * min(userTrustLevel, ceiling), so a ceiling never RAISES access — it
+ * only ever lowers it below the user's global level.
+ *
+ * Resolution order:
+ *   1. Anthropic is the trusted reference path → never capped, even
+ *      for an unlisted future Claude model. Hard-guarded here so the
+ *      conservative L1 default below can't accidentally cap Claude.
+ *   2. Otherwise defer to the capability map (an explicit per-model
+ *      value, or the conservative L1 default for unknown models).
+ *
+ * The model string is the FULL prefixed identifier (e.g.
+ * "ollama/mistral-small3.2", "anthropic/claude-sonnet-4-6") — the same
+ * key getModelCapabilities uses and the same string getActiveModel()
+ * returns. Pass that, not the prefix-stripped downstream model string.
+ */
+export function getModelTrustCeiling(model: string): number | undefined {
+  if (model.startsWith('anthropic/')) return undefined;
+  return getModelCapabilities(model).maxTrustLevel;
 }
 
 

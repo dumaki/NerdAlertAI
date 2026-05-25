@@ -34,8 +34,9 @@ import {
   logAvailableTools
 } from '../tools/registry';
 import { getPersonality } from '../personalities';
-import { getLLMConfig, callOpenRouter, callOllama, ORMessage } from './llm-client';
+import { getLLMConfig, getActiveModel, callOpenRouter, callOllama, ORMessage } from './llm-client';
 import { executeTool, type BrokerContext } from './permission-broker';
+import { getModelTrustCeiling } from './model-capabilities';
 import { findEnabledTool } from '../tools/registry';
 import { buildActiveProjectContext } from '../projects/active';
 
@@ -189,9 +190,10 @@ export async function chat(
       // Build the broker context once per turn — same shape as
       // /chat/stream uses in handleAnthropicStream(). Per-tool
       // trust + enabled-state checks now live behind one chokepoint
-      // (core/permission-broker.ts → executeTool). v0.7 BYOK will
-      // populate maxModelTrustLevel; until then it stays undefined,
-      // meaning "no model-level cap, only the user trust level applies."
+      // (core/permission-broker.ts → executeTool). maxModelTrustLevel
+      // is resolved from model-capabilities (v0.7 Slice 4); on the
+      // Anthropic path it resolves to undefined (no cap), so only the
+      // user trust level applies here.
       // v0.6.3.4 (Q4): include agentName in the broker context so the
       // prefetchTools log line picks it up (the CLI path doesn't run
       // prefetch today, but threading agentName through keeps every
@@ -202,8 +204,9 @@ export async function chat(
       const viaSuffix = ` (via ${agentName})`;
 
       const brokerContext: BrokerContext = {
-        userTrustLevel: config.agent.trust_level,
-        modelLabel:     llm.model,
+        userTrustLevel:     config.agent.trust_level,
+        maxModelTrustLevel: getModelTrustCeiling(getActiveModel()),
+        modelLabel:         llm.model,
         agentName,
       };
 

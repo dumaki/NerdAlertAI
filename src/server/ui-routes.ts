@@ -95,6 +95,7 @@ import {
 import { buildSSEBridge, dedupSources } from './event-bridge';
 import {
   getModelCapabilities,
+  getModelTrustCeiling,
   suggestVisionCapableModel,
 } from '../core/model-capabilities';
 import type { ImageAttachment } from '../types/response.types';
@@ -392,6 +393,7 @@ async function handleAnthropicStream(
 
   const brokerContext: BrokerContext = {
     userTrustLevel: trustLevel,
+    maxModelTrustLevel: getModelTrustCeiling(getActiveModel()),
     modelLabel: llm.model,
     agentName,
   };
@@ -479,6 +481,7 @@ async function handleOllamaStream(
 
   const brokerContext: BrokerContext = {
     userTrustLevel: trustLevel,
+    maxModelTrustLevel: getModelTrustCeiling(getActiveModel()),
     modelLabel: llm.model,
     agentName,
   };
@@ -577,6 +580,7 @@ async function handlePseudoToolStream(
 
   const brokerContext: BrokerContext = {
     userTrustLevel: trustLevel,
+    maxModelTrustLevel: getModelTrustCeiling(getActiveModel()),
     modelLabel: llm.model,
     agentName,
   };
@@ -664,6 +668,7 @@ async function handleOpenRouterToolStream(
 
   const brokerContext: BrokerContext = {
     userTrustLevel: trustLevel,
+    maxModelTrustLevel: getModelTrustCeiling(getActiveModel()),
     modelLabel: llm.model,
     agentName,
   };
