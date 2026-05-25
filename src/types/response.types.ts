@@ -206,6 +206,7 @@ export interface AgentConfig {
 export interface ModelEntry {
   id:               string;   // full prefixed routing key, e.g. "ollama/mistral-small3.2"
   label:            string;   // display name for the model dropdown
+  description?:     string;   // v0.7 Slice 5b: dropdown sub-line, e.g. "Full ReAct loop"
   transport:        'anthropic' | 'openai-compatible';
   base_url?:        string;   // openai-compatible only; may contain ${ENV} / ${ENV:-default}
   requires_secret?: string;   // credential-store name; omitted = no key needed

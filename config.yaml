@@ -38,18 +38,21 @@ agent:
 models:
   - id: anthropic/claude-sonnet-4-6
     label: "Claude Sonnet 4.6"
+    description: "Full ReAct loop"
     transport: anthropic
     requires_secret: anthropic-key
     tool_loop: true
 
   - id: ollama/mistral-small3.2
-    label: "Mistral Small 3.2 (Local)"
+    label: "Mistral Small 3.2"
+    description: "Local · prefetch + narration"
     transport: openai-compatible
     base_url: "${OLLAMA_HOST:-http://localhost:11434}/v1"
     tool_loop: true
 
   - id: nvidia/nemotron-3-super-120b-a12b:free
-    label: "Nemotron 120B (Free)"
+    label: "Nemotron 3 Super 120B"
+    description: "Free tier · prefetch + narration"
     transport: openai-compatible
     base_url: "https://openrouter.ai/api/v1"
     requires_secret: openrouter-key

@@ -4351,6 +4351,7 @@
     cronInit();
     hostMetricsInit();
     setupTopbarDropdowns();
+    loadModels();   // v0.7 Slice 5b: populate the model dropdown from /api/models
     setupSidebarSearch();
     setupPastChatsClicks();
     setupDockTooltips();
@@ -4520,27 +4521,12 @@
   // updates, /api/config/model roundtrip) work unchanged.
   // ============================================================
 
-  // Friendly model labels for the top-bar dropdown. Mirrors
-  // the <select> in the Settings panel; both will collapse
-  // into one source of truth in a later phase if a third
-  // consumer shows up.
-  const MODEL_OPTIONS = [
-    {
-      id:    'anthropic/claude-sonnet-4-6',
-      label: 'CLAUDE SONNET 4.6',
-      sub:   'Full ReAct loop',
-    },
-    {
-      id:    'ollama/mistral-small3.2',
-      label: 'MISTRAL SMALL 3.2',
-      sub:   'Local · prefetch + narration',
-    },
-    {
-      id:    'nvidia/nemotron-3-super-120b-a12b:free',
-      label: 'NEMOTRON 3 SUPER 120B',
-      sub:   'Free tier · prefetch + narration',
-    },
-  ];
+  // v0.7 Slice 5b: the model list is now data-driven. It's fetched once
+  // from GET /api/models (which reads the declarative config.yaml registry
+  // and flags which models have their required key configured) by
+  // loadModels() below, which then re-renders the dropdown. Starts empty;
+  // populated on load. Shape per entry: { id, label, sub, available }.
+  let MODEL_OPTIONS = [];
 
   function setupTopbarDropdowns() {
     renderPersonalityMenu();
@@ -4596,6 +4582,21 @@
 
     menu.innerHTML = MODEL_OPTIONS.map(m => {
       const isActive = m.id === currentModel;
+      // v0.7 Slice 5b: a model whose required key isn't configured comes
+      // back available:false. Render it dimmed and non-clickable (no
+      // onclick) so the user sees it exists and how to enable it, instead
+      // of silently hiding it. The sub-line carries the "add in Setup" hint.
+      if (m.available === false) {
+        return `
+          <div class="topbar-dropdown-item" style="opacity:0.4;cursor:not-allowed"
+               title="Add this key in Setup to enable">
+            <div class="topbar-dropdown-item-info">
+              <div class="topbar-dropdown-item-name">${m.label}</div>
+              <div class="topbar-dropdown-item-sub">${m.sub}</div>
+            </div>
+          </div>
+        `;
+      }
       return `
         <div class="topbar-dropdown-item ${isActive ? 'active' : ''}"
              onclick="topbarSelectModel('${m.id}')">
@@ -4607,6 +4608,39 @@
         </div>
       `;
     }).join('');
+  }
+
+  // v0.7 Slice 5b: fetch the model list from the server (registry-backed)
+  // and populate MODEL_OPTIONS, then re-render the dropdown + topbar label.
+  // Maps the server shape to the dropdown's {id,label,sub,available}: label
+  // is uppercased for the topbar style; sub shows the description when the
+  // model is available, or an "add the key in Setup" hint when it isn't.
+  // Single-source — there's no hardcoded fallback array; on a fetch failure
+  // the dropdown stays empty and the topbar falls back to the raw model id
+  // (see syncTopbarLabels), which only shows if the local server is down.
+  async function loadModels() {
+    try {
+      const res  = await fetch(`${BASE_URL}/api/models`, {
+        headers: { 'Authorization': `Bearer ${CFG.token}` },
+      });
+      const data = await res.json();
+      if (!data.ok || !Array.isArray(data.models)) {
+        console.warn('[Models] Load failed:', data.error || 'bad response');
+        return;
+      }
+      MODEL_OPTIONS = data.models.map(m => ({
+        id:        m.id,
+        label:     (m.label || m.id).toUpperCase(),
+        sub:       m.available
+                     ? (m.description || '')
+                     : `needs ${m.requiresSecret} — add in Setup`,
+        available: m.available !== false,
+      }));
+      renderModelMenu();
+      syncTopbarLabels();
+    } catch (err) {
+      console.warn('[Models] Fetch error:', err);
+    }
   }
 
   async function topbarSelectPersonality(id) {

@@ -24,6 +24,7 @@ import Anthropic from '@anthropic-ai/sdk';
 
 import { config }                                from '../config/loader';
 import { listModels }                            from '../config/models';
+import { listCredentials }                       from '../security/credential-store';
 import { getServerAuthToken }                    from './auth';
 import { getPersonality }                        from '../personalities';
 import { getAvailableTools, toAnthropicFormat, toOpenAIFormat, findEnabledTool } from '../tools/registry';
@@ -1397,6 +1398,32 @@ export function mountUIRoutes(app: Express): void {
     }
     setActiveModel(model);
     res.json({ ok: true, model });
+  });
+
+  // ── GET /api/models — registry-driven list for the model dropdown ──
+  //
+  // v0.7 Slice 5b: the dropdown is now data-driven off the declarative
+  // registry (5a) instead of a hardcoded client array. Each model reports
+  // `available`: true when it needs no secret, or its required credential
+  // is configured. The dropdown shows unavailable models dimmed with an
+  // "add the key in Setup" hint rather than hiding them.
+  app.get('/api/models', async (req: Request, res: Response) => {
+    const token = (req.headers.authorization?.replace('Bearer ', '') || req.query.token) as string;
+    if (token !== getServerAuthToken()) {
+      res.status(401).json({ ok: false, error: 'unauthorized' });
+      return;
+    }
+    const configured = await listCredentials();
+    const models = listModels().map(m => ({
+      id:             m.id,
+      label:          m.label,
+      description:    m.description ?? '',
+      transport:      m.transport,
+      toolLoop:       m.tool_loop,
+      requiresSecret: m.requires_secret ?? null,
+      available:      !m.requires_secret || configured.includes(m.requires_secret),
+    }));
+    res.json({ ok: true, current: getActiveModel(), models });
   });
 
   // ── Session persistence endpoints ──────────────────────────
