@@ -221,6 +221,12 @@ export interface ModelEntry {
                               // o-series / GPT-5 prefer 'developer'. Threaded into the
                               // transport in event-adapter-openai.ts, same pattern as
                               // tpm_ceiling. Ignored on the anthropic transport.
+  hidden?:          boolean;  // v0.7 visibility panel (Level A): opt-out dropdown curation.
+                              // Absent ⇒ visible ⇒ byte-identical to pre-panel behaviour.
+                              // true ⇒ hidden from the model dropdown, NOT from the
+                              // /api/config/model allowlist — curation, not access control.
+                              // Resolved overlay-first (session) then this field (persisted)
+                              // in server/model-visibility-overrides.ts.
   extra_headers?:   Record<string, string>; // may contain ${ENV}; e.g. OpenRouter referer/title
 }
 

@@ -78,6 +78,8 @@ import { mountHeartbeatRoutes }    from './heartbeat-routes';
 import { mountMemoryCardsRoute }   from './memory-cards-route';
 import { mountDocumentsRoute }     from './documents-route';
 import { mountToolToggleRoute }    from './tool-toggle-route';
+import { mountModelVisibilityRoute } from './model-visibility-route';
+import { resolveModelHidden }      from './model-visibility-overrides';
 import { mountSkillsRoute }        from './skills-route';
 import { createToolTurnObserver }  from '../skills/telemetry';
 import { buildSkillsContext }      from '../skills/context';
@@ -1537,6 +1539,15 @@ export function mountUIRoutes(app: Express): void {
   // `available`: true when it needs no secret, or its required credential
   // is configured. The dropdown shows unavailable models dimmed with an
   // "add the key in Setup" hint rather than hiding them.
+  //
+  // v0.7 Visibility Panel: each model also reports `hidden` — the RESOLVED
+  // curation state (session overlay first, then the persisted
+  // ModelEntry.hidden, then false). This is a separate axis from
+  // `available`. The dropdown consumer filters out hidden models (keeping
+  // the active model visible regardless, so the selected value can always
+  // render); the visibility panel itself shows hidden rows so they can be
+  // un-hidden. Absent overlay + absent persisted flag ⇒ hidden:false ⇒
+  // byte-identical to the pre-panel dropdown.
   app.get('/api/models', async (req: Request, res: Response) => {
     const token = (req.headers.authorization?.replace('Bearer ', '') || req.query.token) as string;
     if (token !== getServerAuthToken()) {
@@ -1552,6 +1563,7 @@ export function mountUIRoutes(app: Express): void {
       toolLoop:       m.tool_loop,
       requiresSecret: m.requires_secret ?? null,
       available:      !m.requires_secret || configured.includes(m.requires_secret),
+      hidden:         resolveModelHidden(m.id, m.hidden),
     }));
     res.json({ ok: true, current: getActiveModel(), models });
   });
@@ -1996,5 +2008,12 @@ export function mountUIRoutes(app: Express): void {
   // surface (it MANAGES modules, so it can't itself be a removable
   // module). Direct read/write routes only; no agent-reachable path (P7).
   mountToolToggleRoute(app);
+
+  // v0.7 — Model Visibility Panel. Same always-mounted rationale as the
+  // Tool Toggle Panel: it MANAGES the model dropdown, so it can't itself
+  // be a removable module. Direct read/write routes only; no agent path
+  // (P7). Strict-superset: with no overlay and no persisted `hidden`
+  // flags, GET /api/models returns every model exactly as before.
+  mountModelVisibilityRoute(app);
 
 }
