@@ -103,6 +103,7 @@ const ALLOWED: Record<string, { description: string; minLen: number; maxLen: num
   'openrouter-key':         { description: 'OpenRouter API key',                                minLen: 30, maxLen: 200, test: 'provider' },
   'anthropic-key':          { description: 'Anthropic API key',                                 minLen: 30, maxLen: 200, test: 'provider' },
   'groq-key':               { description: 'Groq API key (BYOK; validate with Test)',           minLen: 30, maxLen: 200, test: 'provider' },
+  'openai-key':             { description: 'OpenAI API key (BYOK; validate with Test)',          minLen: 40, maxLen: 300, test: 'provider' },
   'server-auth-token':      { description: 'NerdAlert server bearer token (auto-generated on first boot; rotate by entering a new value)', minLen: 16, maxLen: 128 },
   'wazuh-indexer-password':    { description: 'Wazuh Indexer password (OpenSearch on port 9200)',  minLen: 8,  maxLen: 200 },
   'crowdsec-machine-password': { description: 'CrowdSec machine password (LAPI, used for /v1/alerts)',  minLen: 8,  maxLen: 200 },
@@ -126,6 +127,7 @@ const ALLOWED: Record<string, { description: string; minLen: number; maxLen: num
 // line (Slice 5c ships Groq; OpenAI etc. follow).
 const PROVIDER_PROBES: Record<string, { url: string; auth: 'bearer' | 'x-api-key'; extraHeaders?: Record<string, string> }> = {
   'groq-key':       { url: 'https://api.groq.com/openai/v1/models',  auth: 'bearer' },
+  'openai-key':     { url: 'https://api.openai.com/v1/models',       auth: 'bearer' },
   'openrouter-key': { url: 'https://openrouter.ai/api/v1/auth/key',  auth: 'bearer' },
   'anthropic-key':  { url: 'https://api.anthropic.com/v1/models',    auth: 'x-api-key', extraHeaders: { 'anthropic-version': '2023-06-01' } },
 };
@@ -211,13 +213,13 @@ export function mountSecurityRoutes(app: Express): void {
         }
       }
 
-      // ── Groq (and future hosted openai-compatible providers) ────
-      // Generic provider-key cache refresh (v0.7 Slice 5d). Unlike
+      // ── Groq / OpenAI (and future hosted openai-compatible providers) ──
+      // Generic provider-key cache refresh (v0.7 Slice 5). Unlike
       // OpenRouter/Anthropic above (bespoke init fns), hosted providers
-      // share one name-keyed cache in llm-client. This is the 5c-deferred
-      // hook — now wired because initProviderKey exists. Adding the next
-      // provider only needs another name in this OR-list, no new import.
-      if (name === 'groq-key') {
+      // share one name-keyed cache in llm-client. initProviderKey is
+      // name-parameterized, so adding the next provider only needs another
+      // name in this OR-list — no new import, no new block.
+      if (name === 'groq-key' || name === 'openai-key') {
         try {
           const { initProviderKey } = require('../core/llm-client');
           await initProviderKey(name);
