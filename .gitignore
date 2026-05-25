@@ -76,3 +76,9 @@ docs/handoffs/
 # by scripts/batch-runner.ts. Never committed; re-run to regenerate.
 scripts/test-results/
 
+# === TOOL BUDGET SPIKE OUTPUT ===
+# Throwaway per-tool token measurement emitted by
+# scripts/measure-tool-budget.ts. Regenerated on every run; never
+# committed. The tracked script recreates it on demand.
+tool-budget-raw.json
+
