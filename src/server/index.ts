@@ -38,7 +38,7 @@ import { startReminders, stopReminders } from '../reminders';
 import { initGmailCredential } from '../gmail/config';
 import { initGithubCredential } from '../github/config';
 import { initActiveProject } from '../projects/active';
-import { initOpenRouterKey, initAnthropicKey } from '../core/llm-client';
+import { initOpenRouterKey, initAnthropicKey, initProviderKey } from '../core/llm-client';
 import { initOpenclawCredential } from '../tools/builtin/soc-client';
 import { logAvailableTools } from '../tools/registry';
 import { initTimerState, stopTimerState } from './timer-state';
@@ -347,6 +347,21 @@ startTelegram().catch((err: unknown) => {
     if (found) console.log('[NerdAlert] Anthropic key loaded from credential store');
   }).catch((err: unknown) => {
     console.error('[NerdAlert] initAnthropicKey failed:', err);
+  });
+
+  // ── Groq provider key (v0.7 5f) ───────────────────────────────
+  // Groq's key is loaded LAZILY by the OpenAI adapter (resolveProviderKey
+  // via buildTransportFromRegistry), so unlike OpenRouter/Anthropic above it
+  // had no boot-time announcement — the operator couldn't tell at a glance
+  // whether Groq was ready. Eager-init it here for parity: same fire-and-
+  // forget shape, same in-memory hot path, and the lazy fallback still covers
+  // a chat request that lands before this resolves. Uses the generic
+  // provider-key cache (5d), so this is the one line a new hosted provider
+  // would copy.
+  initProviderKey('groq-key').then(found => {
+    if (found) console.log('[NerdAlert] Groq key loaded from credential store');
+  }).catch((err: unknown) => {
+    console.error('[NerdAlert] initProviderKey(groq-key) failed:', err);
   });
 
   // ── OpenClaw gateway token ────────────────────────────────────
