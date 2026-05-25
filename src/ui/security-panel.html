@@ -118,6 +118,15 @@
       font-size: 11px;
       color: var(--muted);
     }
+    .group-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--muted);
+      font-weight: 600;
+      margin-top: 8px;
+    }
+    .grid > .group-title:first-child { margin-top: 0; }
   </style>
 </head>
 <body>
@@ -176,14 +185,16 @@
     }
 
     // ---------- Render ----------
-    function renderCreds(state) {
-      const root = document.getElementById('creds');
-      root.innerHTML = '';
-      for (const [name, meta] of Object.entries(state.allowed)) {
-        const isSet = state.status[name];
-        const card = document.createElement('div');
-        card.className = 'cred';
-        card.innerHTML = `
+    //
+    // Cards are grouped: LLM-provider keys (test === 'provider') under a
+    // "Model Providers" heading, everything else under "Service Credentials".
+    // The grouping is cosmetic — the allowed/status data and the save/test
+    // wiring are unchanged.
+    function credCard(name, meta, isSet) {
+      const testBtn = meta.test
+        ? `<button data-action="test" data-name="${escapeHtml(name)}" data-test="${escapeHtml(meta.test)}">Test</button>`
+        : '';
+      return `
           <div class="cred-head">
             <div>
               <div class="cred-name">${escapeHtml(name)}</div>
@@ -197,21 +208,44 @@
                    data-name="${escapeHtml(name)}"
                    id="input-${escapeHtml(name)}" />
             <button data-action="save" data-name="${escapeHtml(name)}" class="primary">Save</button>
-            ${name === 'gmail-app-password'
-              ? `<button data-action="test" data-name="${escapeHtml(name)}">Test</button>`
-              : ''}
+            ${testBtn}
           </div>
           <div class="status info" id="status-${escapeHtml(name)}"></div>
-        `;
-        root.appendChild(card);
-      }
+      `;
+    }
+
+    function renderCreds(state) {
+      const root = document.getElementById('creds');
+      root.innerHTML = '';
+
+      const entries = Object.entries(state.allowed);
+      const providers = entries.filter(([, m]) => m.test === 'provider');
+      const services  = entries.filter(([, m]) => m.test !== 'provider');
+
+      const addGroup = (title, group) => {
+        if (group.length === 0) return;
+        const heading = document.createElement('div');
+        heading.className = 'group-title';
+        heading.textContent = title;
+        root.appendChild(heading);
+        for (const [name, meta] of group) {
+          const card = document.createElement('div');
+          card.className = 'cred';
+          card.innerHTML = credCard(name, meta, state.status[name]);
+          root.appendChild(card);
+        }
+      };
+
+      addGroup('Model Providers', providers);
+      addGroup('Service Credentials', services);
 
       // Wire up save buttons
       root.querySelectorAll('button[data-action="save"]').forEach((btn) => {
         btn.addEventListener('click', (e) => save(e.target.dataset.name));
       });
+      // Wire up test buttons — the data-test kind decides which probe to hit.
       root.querySelectorAll('button[data-action="test"]').forEach((btn) => {
-        btn.addEventListener('click', (e) => testGmail(e.target.dataset.name));
+        btn.addEventListener('click', (e) => testCred(e.target.dataset.name, e.target.dataset.test));
       });
 
       // Paste-and-clear: when the user pastes into a credential field, clear
@@ -265,21 +299,27 @@
       }
     }
 
-    // ---------- Test Gmail ----------
-    async function testGmail(name) {
+    // ---------- Test a credential ----------
+    // Gmail keeps its dedicated IMAP-login test; provider keys hit the
+    // generic /api/setup/test/provider probe (which reads the stored key by
+    // name and does a read-only auth check). The value never travels.
+    async function testCred(name, kind) {
       const status = document.getElementById('status-' + name);
       status.className = 'status info';
-      status.textContent = 'testing IMAP login…';
+      status.textContent = kind === 'gmail' ? 'testing IMAP login…' : 'checking key…';
+
+      const url  = kind === 'gmail' ? '/api/setup/test/gmail' : '/api/setup/test/provider';
+      const body = kind === 'gmail' ? undefined : JSON.stringify({ name });
 
       try {
-        const r = await fetch('/api/setup/test/gmail', { method: 'POST', headers });
+        const r = await fetch(url, { method: 'POST', headers, body });
         const j = await r.json();
         if (j.ok) {
           status.className = 'status ok';
-          status.textContent = 'IMAP login succeeded ✓';
+          status.textContent = (kind === 'gmail' ? 'IMAP login succeeded' : 'key valid') + ' ✓';
         } else {
           status.className = 'status err';
-          status.textContent = 'IMAP login failed' + (j.error ? ': ' + j.error : '');
+          status.textContent = (kind === 'gmail' ? 'IMAP login failed' : 'key check failed') + (j.error ? ': ' + j.error : '');
         }
       } catch (e) {
         status.className = 'status err';

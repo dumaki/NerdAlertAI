@@ -25,7 +25,7 @@ import type { Express, Request, Response, NextFunction } from 'express';
 import * as crypto from 'crypto';
 import * as path from 'path';
 import * as fs from 'fs';
-import { setCredential, listCredentials, getBackend } from '../security/credential-store';
+import { setCredential, listCredentials, getBackend, getCredential } from '../security/credential-store';
 
 const PANEL_PATH = path.join(__dirname, '..', 'ui', 'security-panel.html');
 
@@ -93,15 +93,16 @@ function loopbackOnly(req: Request, res: Response, next: NextFunction) {
 // known credentials; anything else is rejected. This prevents a malicious
 // client from cluttering the keychain with unknown entries.
 
-const ALLOWED: Record<string, { description: string; minLen: number; maxLen: number }> = {
-  'gmail-app-password':     { description: 'Gmail App Password (16 chars, may include spaces)', minLen: 16, maxLen: 64 },
+const ALLOWED: Record<string, { description: string; minLen: number; maxLen: number; test?: 'gmail' | 'provider' }> = {
+  'gmail-app-password':     { description: 'Gmail App Password (16 chars, may include spaces)', minLen: 16, maxLen: 64, test: 'gmail' },
   'github-token':           { description: 'GitHub access token (OAuth Device Flow or Personal Access Token). Run github-setup for the guided OAuth flow.', minLen: 30, maxLen: 200 },
   'telegram-bot-token':     { description: 'Telegram Bot Token',                                minLen: 40, maxLen: 80 },
   'sonarr-api-key':         { description: 'Sonarr API key',                                    minLen: 16, maxLen: 64 },
   'radarr-api-key':         { description: 'Radarr API key',                                    minLen: 16, maxLen: 64 },
   'openclaw-token':         { description: 'OpenClaw gateway token',                            minLen: 16, maxLen: 200 },
-  'openrouter-key':         { description: 'OpenRouter API key',                                minLen: 30, maxLen: 200 },
-  'anthropic-key':          { description: 'Anthropic API key',                                 minLen: 30, maxLen: 200 },
+  'openrouter-key':         { description: 'OpenRouter API key',                                minLen: 30, maxLen: 200, test: 'provider' },
+  'anthropic-key':          { description: 'Anthropic API key',                                 minLen: 30, maxLen: 200, test: 'provider' },
+  'groq-key':               { description: 'Groq API key (BYOK; validate with Test)',           minLen: 30, maxLen: 200, test: 'provider' },
   'server-auth-token':      { description: 'NerdAlert server bearer token (auto-generated on first boot; rotate by entering a new value)', minLen: 16, maxLen: 128 },
   'wazuh-indexer-password':    { description: 'Wazuh Indexer password (OpenSearch on port 9200)',  minLen: 8,  maxLen: 200 },
   'crowdsec-machine-password': { description: 'CrowdSec machine password (LAPI, used for /v1/alerts)',  minLen: 8,  maxLen: 200 },
@@ -112,6 +113,21 @@ const ALLOWED: Record<string, { description: string; minLen: number; maxLen: num
   'pfsense-api-key':           { description: 'pfSense REST API v2 key (Services → REST API → Keys)', minLen: 16, maxLen: 200 },
   'ntopng-password':           { description: 'ntopng login password (paired with NTOPNG_USERNAME env var)', minLen: 1,  maxLen: 200 },
   'synology-password':         { description: 'Synology DSM password (paired with SYNOLOGY_USERNAME env var; recommend a dedicated read-only DSM user)', minLen: 1,  maxLen: 200 },
+};
+
+// ---------- Provider key probes ----------
+//
+// Maps a credential-store name to a cheap, read-only auth check for that
+// LLM provider. The probe GETs an endpoint that REQUIRES the key (returns
+// 401 on a bad key), so a 2xx is real validation — not a public endpoint
+// that would pass regardless. Auth header shape differs: OpenAI-style
+// providers use `Authorization: Bearer`; Anthropic uses `x-api-key` plus a
+// version header. Adding a provider later is one entry here + one ALLOWED
+// line (Slice 5c ships Groq; OpenAI etc. follow).
+const PROVIDER_PROBES: Record<string, { url: string; auth: 'bearer' | 'x-api-key'; extraHeaders?: Record<string, string> }> = {
+  'groq-key':       { url: 'https://api.groq.com/openai/v1/models',  auth: 'bearer' },
+  'openrouter-key': { url: 'https://openrouter.ai/api/v1/auth/key',  auth: 'bearer' },
+  'anthropic-key':  { url: 'https://api.anthropic.com/v1/models',    auth: 'x-api-key', extraHeaders: { 'anthropic-version': '2023-06-01' } },
 };
 
 // ---------- Mount ----------
@@ -392,6 +408,51 @@ export function mountSecurityRoutes(app: Express): void {
       res.json({ ok });
     } catch (e: any) {
       res.json({ ok: false, error: e?.message || 'unknown' });
+    }
+  });
+
+  // POST /api/setup/test/provider — validate a stored LLM-provider key
+  // without echoing it. Mirrors /test/gmail: loopback-only, no CSRF (the
+  // body carries only a non-secret credential NAME, never the value), and
+  // the key is read from the credential store, never from the request. A
+  // cheap read-only GET against the provider's models/auth endpoint is the
+  // auth check; any 2xx means the key works.
+  app.post('/api/setup/test/provider', loopbackOnly, async (req: Request, res: Response) => {
+    const { name } = req.body || {};
+    if (typeof name !== 'string' || !PROVIDER_PROBES[name]) {
+      return res.json({ ok: false, error: 'unknown provider' });
+    }
+
+    const key = await getCredential(name);
+    if (!key) {
+      return res.json({ ok: false, error: 'not configured' });
+    }
+
+    const probe = PROVIDER_PROBES[name];
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6000);
+    try {
+      const headers: Record<string, string> = { 'User-Agent': 'NerdAlert-Setup' };
+      if (probe.auth === 'bearer') {
+        headers['Authorization'] = `Bearer ${key}`;
+      } else {
+        headers['x-api-key'] = key;
+      }
+      if (probe.extraHeaders) Object.assign(headers, probe.extraHeaders);
+
+      const r = await fetch(probe.url, { method: 'GET', headers, signal: controller.signal });
+      // Audit log: name + status only. Never the key, never the body.
+      console.log(`[security] provider probe name=${name} status=${r.status} ts=${new Date().toISOString()}`);
+      if (r.ok) {
+        res.json({ ok: true });
+      } else {
+        res.json({ ok: false, error: `provider returned HTTP ${r.status}` });
+      }
+    } catch (e: any) {
+      const msg = e?.name === 'AbortError' ? 'timed out' : (e?.message || 'unknown');
+      res.json({ ok: false, error: msg });
+    } finally {
+      clearTimeout(timer);
     }
   });
 }
