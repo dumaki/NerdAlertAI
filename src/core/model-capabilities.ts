@@ -133,6 +133,19 @@ const BUILTIN_CAPABILITIES: Record<string, ModelCapabilities> = {
   // 'ollama/llava':                           { vision: true  },
 
 
+  // ── OpenAI (hosted BYOK) ────────────────────────
+  // GPT-4o is multimodal — it accepts image_url content parts over the
+  // Chat Completions transport the OpenAI adapter uses, so vision is on.
+  // maxTrustLevel: 1 follows the non-Anthropic default (the proven-safe
+  // gate from the v0.7 milestone); the global trust level is L1 today,
+  // so it's a no-op until trust is raised. The Groq gpt-oss / qwen
+  // pre-seed rows are text-only and intentionally NOT listed — they fall
+  // through to DEFAULT_CAPABILITIES (vision false, L1), exactly like the
+  // text-only Nemotron free-tier entry documented below.
+
+  'openai/gpt-4o':                          { vision: true,  maxTrustLevel: 1 },
+
+
   // ── OpenRouter ───────────────────────────────────────────
   // No OpenRouter free-tier entries currently — the free-tier slot
   // (`nvidia/nemotron-3-super-120b-a12b:free`) is text-only, so it

@@ -79,6 +79,52 @@ models:
     # upgrade), which then supersedes it. Remove/raise if you upgrade the tier.
     tpm_ceiling: 6000
 
+  # v0.7 Slice 5 — Groq pre-seed. Same groq-key as the Llama row above;
+  # these only add more dropdown choices on the existing credential. Each
+  # resolves its downstream id by stripping the FIRST path segment
+  # (groq/), so the internal slash in the model id survives intact:
+  #   groq/openai/gpt-oss-120b → openai/gpt-oss-120b
+  #   groq/qwen/qwen3-32b      → qwen/qwen3-32b
+  # No tpm_ceiling hint here: the 5f budget guard learns each model's real
+  # ceiling from the provider's x-ratelimit headers at request time.
+  # NOTE: both are reasoning models — seeded for evaluation, NOT yet
+  # validated against the native tool loop. Treat as Battery-sweep input.
+  - id: groq/openai/gpt-oss-120b
+    label: "GPT-OSS 120B (Groq)"
+    description: "Hosted · open-weight reasoning + tools"
+    transport: openai-compatible
+    base_url: "https://api.groq.com/openai/v1"
+    requires_secret: groq-key
+    tool_loop: true
+    context_window: 131072
+
+  # Qwen3-32B is a Groq PREVIEW model (eval-only; may be withdrawn at
+  # short notice). Fine for the closed beta; revisit before it widens.
+  - id: groq/qwen/qwen3-32b
+    label: "Qwen3 32B (Groq)"
+    description: "Hosted · reasoning + tools (preview)"
+    transport: openai-compatible
+    base_url: "https://api.groq.com/openai/v1"
+    requires_secret: groq-key
+    tool_loop: true
+    context_window: 131072
+
+  # v0.7 Slice 5 — first hosted BYOK provider beyond Groq. Routed by the
+  # registry (resolveProvider returns 'hosted' for openai-compatible +
+  # tool_loop + base_url + requires_secret), so no new code — just this
+  # row plus the openai-key credential via /setup. gpt-4o speaks Chat
+  # Completions and uses the default 'system' role; an o-series / GPT-5
+  # row would add `system_role: developer`. (Codex models are Responses-
+  # API-only and will NOT work through this Chat Completions transport.)
+  - id: openai/gpt-4o
+    label: "GPT-4o (OpenAI)"
+    description: "Hosted · native tool loop"
+    transport: openai-compatible
+    base_url: "https://api.openai.com/v1"
+    requires_secret: openai-key
+    tool_loop: true
+    context_window: 128000
+
 # --- CRON ---
 cron:
   enabled: true            # Master switch for the cron engine + cron_manager tool
