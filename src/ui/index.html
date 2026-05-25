@@ -1235,6 +1235,10 @@
     .tools-row.locked { cursor: default; color: var(--text-muted); opacity: 0.7; }
     .tools-row.locked:hover { border-color: var(--border); background: var(--bg-base); }
     .tools-group { text-transform: uppercase; }
+    .tools-master {
+      margin-bottom: 12px; text-transform: uppercase; letter-spacing: 2px;
+      border-color: var(--cyan-mid);
+    }
     .tools-row-member { margin-left: 14px; font-size: 9px; }
     .tools-row-name {
       display: flex; align-items: center; gap: 6px;
@@ -5656,6 +5660,24 @@
     if (!rows || !state) return;
     let html = '';
 
+    // ALL TOOLS master toggle. Lit when the live tool set is non-empty
+    // (any tool enabled AND available at the agent's trust level), dim when
+    // it's empty. Click flips the whole live set: lit -> suppress all;
+    // dim -> restore config defaults (server clearAllOverrides). Sits above
+    // SERVICES so it reads as the master over the individual toggles.
+    {
+      const allRows   = [...(state.standalone || []),
+                         ...((state.groups || []).flatMap(g => g.members))];
+      const anyActive = allRows.some(r => r.enabled && r.availableAtCurrentTrust);
+      const mcls      = anyActive ? 'on' : 'off';
+      const mtarget   = anyActive ? false : true;   // lit -> disable, dim -> enable
+      html += `
+      <div class="tools-row tools-master ${mcls}" onclick="naToggleAllTools(${mtarget})">
+        <span class="tools-row-name">ALL TOOLS</span>
+        <span class="tools-row-right"><span class="tools-state">${anyActive ? 'ON' : 'OFF'}</span></span>
+      </div>`;
+    }
+
     if (state.groups && state.groups.length) {
       html += '<div class="tools-section-label">SERVICES</div>';
       for (const g of state.groups) html += naRenderGroup(g, state.agentTrustLevel);
@@ -5753,6 +5775,14 @@
   async function naToggleGroup(group, enabled) {
     try { naApplyState(await naPost('/api/tools/toggle', { kind: 'group', name: group, enabled })); }
     catch (err) { console.warn('[Tools] group toggle failed:', err); }
+  }
+
+  // ALL TOOLS master switch. enabled:false suppresses the entire live tool
+  // set; enabled:true restores config defaults (server clearAllOverrides).
+  // Re-renders from the fresh state the server returns, like every toggle.
+  async function naToggleAllTools(enabled) {
+    try { naApplyState(await naPost('/api/tools/toggle', { kind: 'all', enabled })); }
+    catch (err) { console.warn('[Tools] toggle-all failed:', err); }
   }
 
   async function naSaveDefault(kind, name, enabled) {

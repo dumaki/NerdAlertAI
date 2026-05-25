@@ -167,7 +167,7 @@ function writeConfigEnabled(section: Section, key: string, enabled: boolean):
 }
 
 // ── Request body shapes ───────────────────────────────────
-interface ToggleBody      { kind?: 'tool' | 'group'; name?: string; enabled?: boolean; }
+interface ToggleBody      { kind?: 'tool' | 'group' | 'all'; name?: string; enabled?: boolean; }
 interface SaveDefaultBody { kind?: 'tool' | 'group'; name?: string; enabled?: boolean; }
 
 // ── mountToolToggleRoute ──────────────────────────────────
@@ -184,6 +184,33 @@ export function mountToolToggleRoute(app: Express): void {
   // Returns the fresh panel state so the UI re-renders from one payload.
   app.post('/api/tools/toggle', (req: Request, res: Response) => {
     const { kind, name, enabled } = (req.body ?? {}) as ToggleBody;
+
+    // kind:'all' — master switch (no name). enabled:false suppresses the
+    // entire LIVE tool set (every tool currently enabled AND available at
+    // the agent's trust level — i.e. exactly what getAvailableTools returns
+    // and what costs request tokens). enabled:true restores config defaults
+    // via clearAllOverrides; it is deliberately NOT a force-enable of
+    // trust-gated / config-disabled tools (ssh, SOC, plex), which would
+    // bloat the budget and surprise the user. Backs the panel's ALL TOOLS
+    // master toggle.
+    if (kind === 'all') {
+      if (typeof enabled !== 'boolean') {
+        res.status(400).json({ ok: false, error: 'enabled (boolean) required' });
+        return;
+      }
+      if (enabled) {
+        clearAllOverrides();
+      } else {
+        const state = getToolPanelState();
+        const rows = [...state.standalone, ...state.groups.flatMap(g => g.members)];
+        for (const r of rows) {
+          if (r.enabled && r.availableAtCurrentTrust) setOverride(r.name, false);
+        }
+      }
+      res.json({ ok: true, ...getToolPanelState() });
+      return;
+    }
+
     if (typeof name !== 'string' || !name || typeof enabled !== 'boolean') {
       res.status(400).json({ ok: false, error: 'name (string) and enabled (boolean) required' });
       return;
