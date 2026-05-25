@@ -664,75 +664,110 @@ export async function callOpenRouter(
   return data.choices?.[0]?.message?.content ?? 'No response generated.';
 }
 
-// ── streamOpenRouter ──────────────────────────────────────────
+// ── TransportConfig ────────────────────────────────────────────
 //
-// Streaming call for ui-routes.ts. Yields text chunks as they
-// arrive so the browser gets the same token-by-token experience
-// as with the Anthropic streaming path.
+// v0.7 Slice 1 (Multi-Provider Tool Loop). Carries the per-provider
+// differences that used to be hand-coded separately inside
+// streamOpenRouter and streamOllama, so one shared transport can
+// serve both. This is the shape streamOpenAICompatibleWithTools()
+// will grow from in Slice 2 — same fields, plus a tools parameter.
 //
-// Uses an async generator — the caller iterates with:
-//   for await (const chunk of streamOpenRouter(...)) { ... }
-//
-// This matches the pattern in ui-routes.ts's stream reading loop.
+//   baseUrl      OpenAI-compatible API root, ending in /v1.
+//                "/chat/completions" is appended by the transport.
+//                Matches the base_url convention in the v0.7 config
+//                sketch (e.g. base_url: ${OLLAMA_HOST}/v1).
+//   auth         bearer token, or omitted for keyless local
+//                endpoints like Ollama. The wrapper resolves the
+//                credential and throws the clear "key not configured"
+//                error BEFORE building this, so the transport never
+//                sees a missing key.
+//   extraHeaders provider-required headers (OpenRouter wants
+//                HTTP-Referer + X-Title).
+//   bodyExtras   provider-specific body fields, merged LAST so the
+//                request body stays byte-identical to the old
+//                hand-rolled one (OpenRouter sends reasoning:{...}).
+//   label        provider name used only in error strings, so a
+//                failure still reads "OpenRouter stream error ..."
+//                rather than a generic label.
+interface TransportConfig {
+  baseUrl:       string;
+  auth?:         { type: 'bearer'; token: string };
+  extraHeaders?: Record<string, string>;
+  bodyExtras?:   Record<string, unknown>;
+  label?:        string;
+}
 
-export async function* streamOpenRouter(
-  messages: ORMessage[],
+// ── streamOpenAICompatible ────────────────────────────────────
+//
+// The shared streaming transport behind streamOpenRouter and
+// streamOllama. Assembles the OpenAI-compatible request, opens the
+// SSE stream, and yields raw delta.content text chunks as they
+// arrive. Deliberately model-agnostic: it knows nothing about
+// /no_think, <think> filtering, or which provider it is talking to —
+// those concerns live in the thin wrappers below.
+//
+// Same async-generator contract as before:
+//   for await (const chunk of streamOpenAICompatible(...)) { ... }
+export async function* streamOpenAICompatible(
+  messages:     ORMessage[],
   systemPrompt: string,
-  model: string
+  model:        string,
+  transport:    TransportConfig,
 ): AsyncGenerator<string> {
 
-  // Same lazy-resolve pattern as callOpenRouter — see comments there.
-  // Throwing inside an async generator surfaces as a rejection on the
-  // first .next() call; the consumer in ui-routes.ts catches it and
-  // emits an 'error' SSE event so the user sees the missing-key text.
-  const orKey = await resolveOpenRouterKey();
-  if (!orKey) {
-    throw new Error(
-      'OpenRouter key is not configured. Open http://localhost:3773/setup ' +
-      'and add your openrouter-key, or switch MODEL to ollama/* in .env.'
-    );
-  }
-
+  // System prompt goes first in the messages array — the
+  // OpenAI-compatible convention. (Anthropic takes it as a separate
+  // top-level parameter; these providers do not.)
   const fullMessages: ORMessage[] = [
     { role: 'system', content: systemPrompt },
     ...messages,
   ];
 
-  const response = await fetch(OR_URL, {
+  // Headers: Content-Type, then optional bearer auth, then any
+  // provider-required extras. Order mirrors the old hand-rolled
+  // requests so nothing observable changes on the wire.
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (transport.auth?.type === 'bearer') {
+    headers['Authorization'] = `Bearer ${transport.auth.token}`;
+  }
+  if (transport.extraHeaders) {
+    Object.assign(headers, transport.extraHeaders);
+  }
+
+  // Body: the four fields every call shares, then bodyExtras spread
+  // LAST so a provider can add fields (e.g. reasoning) without the
+  // key order shifting versus the old code.
+  const body = {
+    model,
+    messages:   fullMessages,
+    max_tokens: 1024,
+    stream:     true,
+    ...transport.bodyExtras,
+  };
+
+  const label = transport.label ?? 'OpenAI-compatible';
+
+  const response = await fetch(`${transport.baseUrl}/chat/completions`, {
     method:  'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      'Authorization': `Bearer ${orKey}`,
-      'HTTP-Referer':  'https://nerdalert.local',
-      'X-Title':       'NerdAlert',
-    },
-    body: JSON.stringify({
-      model,
-      messages:   fullMessages,
-      max_tokens: 1024,
-      stream:     true,   // enables SSE streaming from OpenRouter
-      // Reasoning OFF — see callOpenRouter for the rationale and
-      // history. Short version: our OR models treat reasoning as
-      // opt-in; disabling here is a no-op for them and avoids
-      // generating tokens our parser ignores.
-      reasoning:  { enabled: false },
-    }),
+    headers,
+    body:    JSON.stringify(body),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`OpenRouter stream error ${response.status}: ${errorText}`);
+    throw new Error(`${label} stream error ${response.status}: ${errorText}`);
   }
 
   if (!response.body) {
-    throw new Error('OpenRouter returned no response body');
+    throw new Error(`${label} returned no response body`);
   }
 
-  // Read the SSE stream line by line.
-  // OpenRouter sends lines like:
+  // Read the SSE stream line by line. Both OpenRouter and Ollama
+  // send lines like:
   //   data: {"choices":[{"delta":{"content":"Hello"}}]}
   //   data: [DONE]
-
   const reader  = response.body.getReader();
   const decoder = new TextDecoder();
   let   buffer  = '';
@@ -744,7 +779,7 @@ export async function* streamOpenRouter(
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');
 
-    // Keep the last (potentially incomplete) line in the buffer
+    // Keep the last (potentially incomplete) line in the buffer.
     buffer = lines.pop() ?? '';
 
     for (const line of lines) {
@@ -753,14 +788,116 @@ export async function* streamOpenRouter(
       if (!trimmed.startsWith('data: '))          continue;
 
       try {
-        const json = JSON.parse(trimmed.slice(6)); // strip "data: "
+        const json  = JSON.parse(trimmed.slice(6)); // strip "data: "
         const chunk = json?.choices?.[0]?.delta?.content;
         if (chunk) yield chunk;
       } catch {
-        // Malformed JSON line — skip it
+        // Malformed JSON line — skip it.
       }
     }
   }
+}
+
+// ── filterThinkBlocks ─────────────────────────────────────────
+//
+// Streaming <think>...</think> suppressor for Qwen3 on Ollama.
+// Wraps a raw chunk generator and re-yields it with anything inside
+// a think block removed. Tags can arrive split across chunk
+// boundaries ("<thi" + "nk>"), so we accumulate in pendingChunk and
+// hold back the last few characters until we know they are not the
+// start of a tag. This is the exact state machine that used to live
+// inline in streamOllama, lifted out unchanged so streamOllama can
+// be a thin wrapper over the shared transport.
+async function* filterThinkBlocks(
+  source: AsyncGenerator<string>,
+): AsyncGenerator<string> {
+
+  let inThinkBlock = false;
+  let pendingChunk = '';
+
+  for await (const chunk of source) {
+    // Append the new chunk to anything we're holding back for
+    // tag-boundary safety.
+    pendingChunk += chunk;
+
+    // Process the buffer, peeling off complete segments and
+    // suppressing anything inside <think>...</think>.
+    let output = '';
+    while (pendingChunk.length > 0) {
+      if (inThinkBlock) {
+        const closeIdx = pendingChunk.indexOf('</think>');
+        if (closeIdx === -1) {
+          // Still inside the think block — drop everything we have
+          // and wait for more.
+          pendingChunk = '';
+          break;
+        }
+        // Found the close tag — drop up to and including it.
+        pendingChunk = pendingChunk.slice(closeIdx + '</think>'.length);
+        inThinkBlock = false;
+      } else {
+        const openIdx = pendingChunk.indexOf('<think>');
+        if (openIdx === -1) {
+          // No open tag in sight. Emit everything except the last
+          // few chars in case a tag is mid-arrival.
+          if (pendingChunk.length > 8) {
+            output      += pendingChunk.slice(0, -8);
+            pendingChunk = pendingChunk.slice(-8);
+          }
+          break;
+        }
+        // Found <think> — emit text before it, then enter the block.
+        output      += pendingChunk.slice(0, openIdx);
+        pendingChunk = pendingChunk.slice(openIdx + '<think>'.length);
+        inThinkBlock = true;
+      }
+    }
+
+    if (output) yield output;
+  }
+
+  // Flush any trailing safe content. If we ended mid-think-block,
+  // discard it (the model never closed the tag).
+  if (!inThinkBlock && pendingChunk) {
+    yield pendingChunk;
+  }
+}
+
+// ── streamOpenRouter (thin wrapper over streamOpenAICompatible) ─
+//
+// Streaming call for ui-routes.ts. Resolves the OpenRouter key
+// (throwing the same clear "key not configured" error as before —
+// surfaced via the SSE 'error' event on the first .next()), then
+// delegates to the shared transport. Signature is unchanged, so the
+// callers in ui-routes.ts and event-adapter-pseudo.ts are untouched.
+export async function* streamOpenRouter(
+  messages:     ORMessage[],
+  systemPrompt: string,
+  model:        string,
+): AsyncGenerator<string> {
+
+  const orKey = await resolveOpenRouterKey();
+  if (!orKey) {
+    throw new Error(
+      'OpenRouter key is not configured. Open http://localhost:3773/setup ' +
+      'and add your openrouter-key, or switch MODEL to ollama/* in .env.'
+    );
+  }
+
+  yield* streamOpenAICompatible(messages, systemPrompt, model, {
+    label:        'OpenRouter',
+    baseUrl:      'https://openrouter.ai/api/v1',
+    auth:         { type: 'bearer', token: orKey },
+    extraHeaders: {
+      'HTTP-Referer': 'https://nerdalert.local', // OpenRouter asks for a referrer
+      'X-Title':      'NerdAlert',                // shows up in the OpenRouter dashboard
+    },
+    // Reasoning OFF on every OpenRouter request — see callOpenRouter
+    // for the full rationale and history. Short version: our OR models
+    // treat reasoning as opt-in, so disabling is a no-op for them and
+    // avoids generating tokens the pseudo-tool adapter would discard.
+    bodyExtras:   { reasoning: { enabled: false } },
+  });
 }
 
 // ── callOllama ────────────────────────────────────────────────
@@ -829,130 +966,34 @@ function stripThinkBlock(text: string): string {
 
 // ── streamOllama ──────────────────────────────────────────────
 //
-// Streaming call for ui-routes.ts SSE path.
-// Same async generator pattern as streamOpenRouter — the caller
-// in ui-routes.ts iterates identically regardless of which
-// non-Anthropic provider is active.
+// (thin wrapper over streamOpenAICompatible.)
 //
-// Like callOllama, this injects /no_think into the system prompt
-// to suppress Qwen3 reasoning traces, and filters out any <think>
-// blocks that slip through anyway. The filter is line-buffered:
-// chunks inside an open <think> tag are silently dropped until
-// </think> is seen.
-
+// Streaming call for ui-routes.ts SSE path. Builds the keyless local
+// Ollama transport, injects /no_think into the system prompt to
+// suppress Qwen3 reasoning traces, and pipes the raw stream through
+// filterThinkBlocks() as the belt-and-braces backstop for any <think>
+// content that slips through. Signature unchanged, so the callers in
+// ui-routes.ts and event-adapter-pseudo.ts are untouched.
 export async function* streamOllama(
-  messages: ORMessage[],
+  messages:     ORMessage[],
   systemPrompt: string,
-  model: string
+  model:        string,
 ): AsyncGenerator<string> {
 
   const host = process.env.OLLAMA_HOST ?? 'http://localhost:11434';
 
+  // Qwen3 thinking-mode suppression: the OpenAI-compatible endpoint
+  // doesn't pass through native `options`, so we inject /no_think into
+  // the system prompt. filterThinkBlocks below catches anything that
+  // still leaks.
   const noThink = model.startsWith('qwen3') ? '\n\n/no_think' : '';
-  const fullMessages: ORMessage[] = [
-    { role: 'system', content: systemPrompt + noThink },
-    ...messages,
-  ];
 
-  const response = await fetch(`${host}/v1/chat/completions`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      messages:   fullMessages,
-      max_tokens: 1024,
-      stream:     true,
+  yield* filterThinkBlocks(
+    streamOpenAICompatible(messages, systemPrompt + noThink, model, {
+      label:   'Ollama',
+      baseUrl: `${host}/v1`,
+      // No auth (local endpoint), no extraHeaders, no bodyExtras —
+      // Ollama's body stays { model, messages, max_tokens, stream }.
     }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Ollama stream error ${response.status}: ${errorText}`);
-  }
-
-  if (!response.body) {
-    throw new Error('Ollama returned no response body');
-  }
-
-  // Ollama SSE format is identical to OpenRouter:
-  //   data: {"choices":[{"delta":{"content":"Hello"}}]}
-  //   data: [DONE]
-
-  const reader  = response.body.getReader();
-  const decoder = new TextDecoder();
-  let   buffer  = '';
-
-  // Streaming <think> filter state. We accumulate chunks across
-  // SSE events so we can detect <think> and </think> tags that
-  // arrive split across chunk boundaries (e.g. "<thi" + "nk>").
-  let   inThinkBlock     = false;
-  let   pendingChunk     = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed === 'data: [DONE]') continue;
-      if (!trimmed.startsWith('data: '))          continue;
-
-      try {
-        const json  = JSON.parse(trimmed.slice(6));
-        const chunk = json?.choices?.[0]?.delta?.content;
-        if (!chunk) continue;
-
-        // Append the new chunk to anything we're holding back
-        // for tag-boundary safety.
-        pendingChunk += chunk;
-
-        // Process the buffer, peeling off complete segments and
-        // suppressing anything inside <think>...</think>.
-        let   output = '';
-        while (pendingChunk.length > 0) {
-          if (inThinkBlock) {
-            const closeIdx = pendingChunk.indexOf('</think>');
-            if (closeIdx === -1) {
-              // Still inside the think block — drop everything
-              // we have and wait for more.
-              pendingChunk = '';
-              break;
-            }
-            // Found the close tag — drop up to and including it.
-            pendingChunk = pendingChunk.slice(closeIdx + '</think>'.length);
-            inThinkBlock = false;
-          } else {
-            const openIdx = pendingChunk.indexOf('<think>');
-            if (openIdx === -1) {
-              // No open tag in sight. Emit everything except the
-              // last few chars in case a tag is mid-arrival.
-              if (pendingChunk.length > 8) {
-                output      += pendingChunk.slice(0, -8);
-                pendingChunk = pendingChunk.slice(-8);
-              }
-              break;
-            }
-            // Found <think> — emit text before it, then enter the block.
-            output      += pendingChunk.slice(0, openIdx);
-            pendingChunk = pendingChunk.slice(openIdx + '<think>'.length);
-            inThinkBlock = true;
-          }
-        }
-
-        if (output) yield output;
-      } catch {
-        // Malformed JSON line — skip it
-      }
-    }
-  }
-
-  // Flush any trailing safe content. If we ended mid-think-block,
-  // discard it (the model never closed the tag).
-  if (!inThinkBlock && pendingChunk) {
-    yield pendingChunk;
-  }
+  );
 }
