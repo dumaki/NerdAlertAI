@@ -459,27 +459,94 @@ export async function resolveOpenRouterKey(): Promise<string | null> {
   return cachedOpenRouterKey;
 }
 
+// ── Generic provider-key cache (v0.7 Slice 5d) ───────────────
+//
+// OpenRouter and Anthropic each got their own bespoke cache +
+// init + resolve trio above because each needs something special
+// (OpenRouter's .env legacy migration; Anthropic's eager SDK
+// client). Every OTHER openai-compatible provider — Groq today,
+// OpenAI / Together / DeepSeek tomorrow — needs none of that: just
+// "read this credential name, cache it, hand it back". So instead
+// of copy-pasting the trio per provider, this is ONE cache keyed
+// by credential name.
+//
+// WHY THIS IS THE 5d KEYSTONE
+// ─────────────────────────────────────────────────────────────
+// The registry (config.yaml `models:`) already declares each
+// model's `requires_secret`. buildTransportFromRegistry() in the
+// OpenAI adapter reads that name and calls resolveProviderKey(name)
+// to turn it into a bearer token. Adding a hosted provider becomes
+// a config row + a /setup credential — no new code in this file.
+//
+// No .env legacy path on purpose: these providers never lived in
+// .env, so there's nothing to migrate. A missing key resolves to
+// null and the adapter surfaces the clear "key not configured"
+// error, same as the OpenRouter path.
+
+const providerKeyCache = new Map<string, string>();
+
+/**
+ * Pull an arbitrary provider key (e.g. 'groq-key') from the
+ * credential store and cache it by name. Called at boot and again
+ * from /setup's cache-refresh hook after the user saves the key,
+ * so the running process picks it up without a restart — exactly
+ * like initOpenRouterKey, but name-parameterized.
+ *
+ * Returns true if a value was found and cached, false otherwise.
+ */
+export async function initProviderKey(secretName: string): Promise<boolean> {
+  try {
+    const value = await getCredential(secretName);
+    if (value) {
+      providerKeyCache.set(secretName, value);
+      return true;
+    }
+  } catch {
+    // Keychain read failed (rare). Fall through to "not found".
+  }
+  providerKeyCache.delete(secretName);
+  return false;
+}
+
+/**
+ * Lazy resolver for any provider key by credential name. Returns
+ * the cached value, or attempts one keychain read if the cache is
+ * cold, or null if the credential isn't configured. Mirrors
+ * resolveOpenRouterKey's lazy-fallback contract.
+ */
+export async function resolveProviderKey(secretName: string): Promise<string | null> {
+  const cached = providerKeyCache.get(secretName);
+  if (cached) return cached;
+  await initProviderKey(secretName);
+  return providerKeyCache.get(secretName) ?? null;
+}
+
 // ── Determine provider from model string ──────────────────────
 //
 // "anthropic/" → Anthropic SDK
 // "ollama/"    → local Ollama instance at OLLAMA_HOST
+// "groq/"      → Groq cloud (openai-compatible, native tool loop)
 // anything else → OpenRouter
 
-type Provider = 'anthropic' | 'ollama' | 'openrouter';
+type Provider = 'anthropic' | 'ollama' | 'groq' | 'openrouter';
 
 function resolveProvider(model: string): Provider {
   if (model.startsWith('anthropic/')) return 'anthropic';
   if (model.startsWith('ollama/'))    return 'ollama';
+  if (model.startsWith('groq/'))      return 'groq';
   return 'openrouter';
 }
 
 // Strip provider prefix for the downstream client.
 // "anthropic/claude-sonnet-4-6" → "claude-sonnet-4-6"
 // "ollama/qwen3:14b"            → "qwen3:14b"
+// "groq/llama-3.3-70b-versatile" → "llama-3.3-70b-versatile"
+//   (Groq's /openai/v1 wants the bare model id, like Ollama)
 // OpenRouter wants the full path including org prefix — no strip.
 function resolveModelString(model: string, provider: Provider): string {
   if (provider === 'anthropic') return model.replace(/^anthropic\//, '');
   if (provider === 'ollama')    return model.replace(/^ollama\//, '');
+  if (provider === 'groq')      return model.replace(/^groq\//, '');
   return model;
 }
 
@@ -522,6 +589,19 @@ export function getLLMConfig(): LLMConfig {
         '            Add OLLAMA_HOST=http://192.168.0.218:11434 to .env.'
       );
     }
+    return {
+      provider,
+      model:           modelString,
+      anthropicClient: null,
+    };
+  }
+
+  // Groq (and future hosted openai-compatible providers routed by
+  // prefix). No SDK client and no key check here — the key is
+  // resolved lazily by buildTransportFromRegistry() at request time
+  // via the credential store, which throws the clear "key not
+  // configured" error if it's missing. getLLMConfig stays synchronous.
+  if (provider === 'groq') {
     return {
       provider,
       model:           modelString,

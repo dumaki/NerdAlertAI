@@ -61,6 +61,19 @@ models:
       HTTP-Referer: "https://nerdalert.local"
       X-Title: "NerdAlert"
 
+  # v0.7 Slice 5d — first hosted BYOK provider through the native tool
+  # loop. Routed by the groq/ prefix (resolveProvider) to handleGroqStream,
+  # which builds its transport from this entry's base_url + groq-key.
+  # llama-3.3-70b-versatile is Groq's production-tier general tool-caller.
+  - id: groq/llama-3.3-70b-versatile
+    label: "Llama 3.3 70B (Groq)"
+    description: "Hosted · fast native tool loop"
+    transport: openai-compatible
+    base_url: "https://api.groq.com/openai/v1"
+    requires_secret: groq-key
+    tool_loop: true
+    context_window: 131072
+
 # --- CRON ---
 cron:
   enabled: true            # Master switch for the cron engine + cron_manager tool

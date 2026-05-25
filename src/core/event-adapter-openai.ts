@@ -80,6 +80,8 @@ import {
 } from './permission-broker';
 import { WebSuppressionTracker } from './web-suppression';
 import type { ORMessage, OpenAIContentPart } from './llm-client';
+import { resolveProviderKey } from './llm-client';
+import { getModel } from '../config/models';
 import type { Source } from '../types/response.types';
 
 // ── Typed capability error ───────────────────────────────────
@@ -592,5 +594,78 @@ export function buildOpenRouterTransport(): OpenAITransportConfig {
       'X-Title': 'NerdAlertAI',
     },
     systemRole: 'system',
+  };
+}
+
+// ── Registry-driven transport (v0.7 Slice 5d) ───────────────
+//
+// The generic builder that lets ANY openai-compatible provider in
+// config.yaml `models:` reach this adapter with no per-provider
+// code. Where buildOllamaTransport / buildOpenRouterTransport are
+// hardcoded for one endpoint each, this reads the registry entry
+// (already env-resolved by getModel) and assembles the transport
+// from its declared fields:
+//
+//   base_url        → transport.baseUrl
+//   requires_secret → resolved via the credential store into a
+//                     bearer token; absent → keyless (Ollama)
+//   extra_headers   → transport.extraHeaders
+//
+// Async because key resolution hits the credential store. Throws a
+// clear "key not configured" error — surfaced to the user via the
+// SSE error event — when a model declares requires_secret but the
+// key is missing, instead of letting an empty Bearer token reach
+// the provider and bounce back as an opaque 401.
+//
+// PER-PROVIDER QUIRKS: keyed off the resolved base_url so they ride
+// along automatically. Groq occasionally drops the closing tool-call
+// delta; partialToolCallTimeoutMs lets the accumulator finalize after
+// a quiet interval rather than hang. The adapter already documents
+// this field — 5d just populates it. New quirks are added here, not
+// in the parser.
+export async function buildTransportFromRegistry(
+  fullModelId: string,
+): Promise<OpenAITransportConfig> {
+  const entry = getModel(fullModelId);
+  if (!entry) {
+    throw new Error(
+      `Model "${fullModelId}" is not in the config.yaml models: registry. ` +
+      `Add it there before selecting it.`,
+    );
+  }
+  if (!entry.base_url) {
+    throw new Error(
+      `Model "${fullModelId}" has transport "openai-compatible" but no base_url ` +
+      `in the registry. Add a base_url to its models: entry.`,
+    );
+  }
+
+  // Resolve the bearer token if the model declares a secret. A
+  // declared-but-missing key is a hard, user-actionable error.
+  let auth: OpenAITransportConfig['auth'] = { type: 'none' };
+  if (entry.requires_secret) {
+    const token = await resolveProviderKey(entry.requires_secret);
+    if (!token) {
+      throw new Error(
+        `Model "${fullModelId}" needs the "${entry.requires_secret}" credential, ` +
+        `which isn't configured. Open http://localhost:3773/setup and add it.`,
+      );
+    }
+    auth = { type: 'bearer', token };
+  }
+
+  // Quirks by endpoint. Groq's dropped-close-delta recovery is the
+  // only one needed today; the field is pre-existing on the config.
+  const quirks: OpenAITransportConfig['quirks'] =
+    entry.base_url.includes('api.groq.com')
+      ? { partialToolCallTimeoutMs: 2000 }
+      : undefined;
+
+  return {
+    baseUrl:      entry.base_url,
+    auth,
+    extraHeaders: entry.extra_headers,
+    systemRole:   'system',
+    quirks,
   };
 }

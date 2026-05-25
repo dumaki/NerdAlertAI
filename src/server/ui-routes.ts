@@ -92,6 +92,7 @@ import {
   runOpenAIAdapter,
   buildOllamaTransport,
   buildOpenRouterTransport,
+  buildTransportFromRegistry,
   ToolCapabilityError,
 } from '../core/event-adapter-openai';
 import { buildSSEBridge, dedupSources } from './event-bridge';
@@ -723,6 +724,125 @@ async function handleOpenRouterToolStream(
   void dedupSources(sourceSink);
 }
 
+// ── Groq native streaming handler — v0.7 Slice 5d ───────────
+//
+// Routes Groq-hosted models (llama-3.3-70b-versatile today) through
+// the native OpenAI-compatible tool loop (runOpenAIAdapter), the same
+// adapter the Ollama and OpenRouter-native paths use. Groq is
+// NATIVE-ALWAYS: no prefetch, no narration, no experimental flag —
+// it's a hosted tool-capable provider, so the loop is its only mode.
+//
+// The ONE thing that makes this different from handleOllamaStream /
+// handleOpenRouterToolStream is the transport source: instead of a
+// hardcoded buildOllamaTransport() / buildOpenRouterTransport(), it
+// builds from the declarative registry via buildTransportFromRegistry()
+// keyed on the full active model id. That resolves base_url, the
+// groq-key bearer token (from the credential store), and the Groq
+// dropped-close-delta quirk — all from config.yaml. Adding the NEXT
+// hosted provider needs no new handler: it routes here too once its
+// prefix lands in resolveProvider, or via the registry-transport
+// generalization a later slice will fold these handlers into.
+//
+// AUTO-FALLBACK: llama-3.3-70b honors the tools parameter, so the
+// ToolCapabilityError path shouldn't fire — but it's wired to
+// pseudo-tool ('openrouter' transport, the hosted-provider default)
+// for parity with the other native handlers, so a future tools-averse
+// Groq model degrades gracefully instead of erroring.
+async function handleGroqStream(
+  res:             Response,
+  systemPrompt:    string,
+  initialMessages: Anthropic.MessageParam[],
+  trustLevel:      number,
+  agentName:       string,
+  telemetry:       ((event: AgentEvent) => void) | undefined,
+): Promise<void> {
+
+  const llm = getLLMConfig();
+
+  // Build the transport from the registry entry for the active model.
+  // This resolves the groq-key bearer token from the credential store
+  // and throws a clear "key not configured" error (surfaced as an SSE
+  // error event) if it's missing — caught below.
+  let transport;
+  try {
+    transport = await buildTransportFromRegistry(getActiveModel());
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    sseEvent(res, 'error', { message });
+    res.end();
+    return;
+  }
+
+  const orMessages: ORMessage[] = convertHistoryForOpenAI(initialMessages);
+
+  const sourceSink: Source[] = [];
+
+  const emit = buildSSEBridge(res, {
+    onEvent: (event: AgentEvent) => {
+      if (event.kind === 'tool_result' && event.sources?.length) {
+        sourceSink.push(...event.sources);
+      }
+      telemetry?.(event);
+    },
+  });
+
+  const availableTools = getAvailableTools();
+  const openAITools = toOpenAIFormat(availableTools);
+
+  const brokerContext: BrokerContext = {
+    userTrustLevel: trustLevel,
+    maxModelTrustLevel: getModelTrustCeiling(getActiveModel()),
+    modelLabel: llm.model,
+    agentName,
+  };
+
+  try {
+    await runOpenAIAdapter(
+      {
+        transport,
+        model: llm.model,   // bare Groq model id (prefix stripped by resolveModelString)
+        systemPrompt,
+        initialMessages: orMessages,
+        tools: openAITools,
+        brokerContext,
+      },
+      emit,
+    );
+  } catch (err: unknown) {
+    // Tools rejected — fall back to pseudo-tool on the same response,
+    // same safety net as the Ollama / OpenRouter native handlers.
+    if (err instanceof ToolCapabilityError) {
+      console.log(
+        `[capability] ${llm.model} (Groq) rejected native tools; ` +
+        `falling back to pseudo-tool adapter`,
+      );
+      try {
+        await runPseudoToolAdapter(
+          {
+            transport: 'openrouter',
+            model: llm.model,
+            systemPrompt,
+            initialMessages: orMessages,
+            availableTools,
+            brokerContext,
+          },
+          emit,
+        );
+      } catch (fallbackErr: unknown) {
+        const fbMessage = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+        sseEvent(res, 'error', { message: fbMessage });
+      }
+    } else {
+      const message = err instanceof Error ? err.message : String(err);
+      sseEvent(res, 'error', { message });
+    }
+  } finally {
+    res.end();
+  }
+
+  void dedupSources(sourceSink);
+}
+
 // ── NarrationOutcome (v0.5.28) ─────────────────────────
 //
 // The shape handleNarrationStream returns to the orchestrator.
@@ -1315,6 +1435,15 @@ export function mountUIRoutes(app: Express): void {
       if (llm.provider === 'anthropic') {
         const tools = toAnthropicFormat(getAvailableTools()) as Anthropic.Tool[];
         await handleAnthropicStream(res, systemPromptWithSkills, messages, tools, trustLevel, agentName, telemetry);
+      } else if (llm.provider === 'groq') {
+        // v0.7 Slice 5d: Groq is native-always. No prefetch ran for it
+        // (needsPrefetch excludes everything but ollama/openrouter), so
+        // there's no narration to consider — straight into the registry-
+        // driven native tool loop with the full reasoning prompt, same
+        // call shape as the Anthropic branch. Placed before the nativeOR /
+        // shouldNarrate branches so Groq can never fall into the
+        // narration path.
+        await handleGroqStream(res, systemPromptWithSkills, messages, trustLevel, agentName, telemetry);
       } else if (nativeOR) {
         // v0.7 spike (flag-gated): OpenRouter through the native tool loop.
         // nativeOR was excluded from needsPrefetch above, so there's no

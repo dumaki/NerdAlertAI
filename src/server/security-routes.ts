@@ -211,6 +211,21 @@ export function mountSecurityRoutes(app: Express): void {
         }
       }
 
+      // ── Groq (and future hosted openai-compatible providers) ────
+      // Generic provider-key cache refresh (v0.7 Slice 5d). Unlike
+      // OpenRouter/Anthropic above (bespoke init fns), hosted providers
+      // share one name-keyed cache in llm-client. This is the 5c-deferred
+      // hook — now wired because initProviderKey exists. Adding the next
+      // provider only needs another name in this OR-list, no new import.
+      if (name === 'groq-key') {
+        try {
+          const { initProviderKey } = require('../core/llm-client');
+          await initProviderKey(name);
+        } catch (e: any) {
+          console.warn(`[security] ${name} cache refresh after credential write failed:`, e?.message);
+        }
+      }
+
       // ── OpenClaw gateway token ────────────────────────────────
       // Same pattern — refresh the cache in soc-client so the next
       // agent-mediated SOC tool call (wazuh_get_alerts, pihole_summary,
