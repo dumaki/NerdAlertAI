@@ -83,6 +83,15 @@ import type { ORMessage, OpenAIContentPart } from './llm-client';
 import { resolveProviderKey } from './llm-client';
 import { getModel } from '../config/models';
 import type { Source } from '../types/response.types';
+import {
+  budgetKey,
+  resolveCeiling,
+  recordLearnedCeiling,
+  ceilingFromHeaders,
+  ceilingFromErrorBody,
+  checkBudget,
+  formatBudgetMessage,
+} from './token-budget';
 
 // ── Typed capability error ───────────────────────────────────
 //
@@ -127,6 +136,10 @@ export interface OpenAITransportConfig {
   extraHeaders?: Record<string, string>;
   /** Some o-series / GPT-5 models prefer 'developer' over 'system'. */
   systemRole?: 'system' | 'developer';
+  /** v0.7 5f: per-minute token ceiling hint (from the registry's tpm_ceiling).
+   *  Used by the pre-flight budget guard in runOpenAIAdapter. A value the
+   *  provider reports via x-ratelimit headers supersedes this at request time. */
+  tpmCeiling?: number;
   /** Quirks discovered per provider. */
   quirks?: {
     /** Recover from missing close delta after N ms of silence (Groq). */
@@ -292,8 +305,22 @@ async function* streamCompletions(
     body: JSON.stringify(body),
   });
 
+  // v0.7 5f: learn the provider's live per-minute token ceiling from the
+  // response headers (present on success AND on 429s). This is what lets a
+  // tier upgrade take effect without a config edit — the learned value
+  // supersedes the config hint in resolveCeiling(). See token-budget.ts.
+  const bk = budgetKey(transport.baseUrl, model);
+  const headerCeiling = ceilingFromHeaders(response.headers);
+  if (headerCeiling) recordLearnedCeiling(bk, headerCeiling);
+
   if (!response.ok) {
     const errorText = await response.text().catch(() => '<no body>');
+    // A 429/413 body usually states the real cap — learn it as a backstop
+    // so the NEXT request's pre-flight guard catches what slipped through here.
+    if (response.status === 429 || response.status === 413) {
+      const bodyCeiling = ceilingFromErrorBody(errorText);
+      if (bodyCeiling) recordLearnedCeiling(bk, bodyCeiling);
+    }
     if (looksLikeToolCapabilityError(response.status, errorText)) {
       throw new ToolCapabilityError(
         `Model does not support native tools (${response.status}): ${errorText}`,
@@ -391,6 +418,39 @@ export async function runOpenAIAdapter(
   // OpenAI-compatible provider gets the same protection.
   // See src/core/web-suppression.ts.
   const suppressionTracker = new WebSuppressionTracker();
+
+  // ── Pre-flight TPM budget guard (v0.7 5f) ─────────────────
+  // Estimate this request up front and hard-block if it can't fit under the
+  // provider's per-minute token ceiling, instead of letting the provider
+  // reject it mid-stream with an opaque 429. Only fires when a ceiling is
+  // known (the registry's tpm_ceiling hint, or a value the provider's headers
+  // reported on an earlier request) — local Ollama, which has no TPM limit,
+  // never trips it. See src/core/token-budget.ts.
+  const budgetVerdict = checkBudget({
+    systemPrompt,
+    toolsSerialized:   JSON.stringify(tools),
+    historySerialized: JSON.stringify(initialMessages),
+    toolCount:         tools.length,
+    ceiling:           resolveCeiling(budgetKey(transport.baseUrl, model), transport.tpmCeiling),
+    maxTokens,
+  });
+  if (budgetVerdict.overBudget) {
+    console.log(
+      `[openai-native:budget_block] est=${budgetVerdict.estimate} ` +
+      `ceiling=${budgetVerdict.ceiling} tools=${budgetVerdict.toolCount} model=${model}`,
+    );
+    emit(meta('openai:budget_exceeded', {
+      estimate:      budgetVerdict.estimate,
+      ceiling:       budgetVerdict.ceiling,
+      systemTokens:  budgetVerdict.systemTokens,
+      toolTokens:    budgetVerdict.toolTokens,
+      historyTokens: budgetVerdict.historyTokens,
+      outputReserve: budgetVerdict.outputReserve,
+      toolCount:     budgetVerdict.toolCount,
+    }));
+    emit(error(formatBudgetMessage(budgetVerdict)));
+    return;
+  }
 
   for (let iteration = 1; iteration <= maxIterations; iteration++) {
     console.log(
@@ -666,6 +726,7 @@ export async function buildTransportFromRegistry(
     auth,
     extraHeaders: entry.extra_headers,
     systemRole:   'system',
+    tpmCeiling:   entry.tpm_ceiling,
     quirks,
   };
 }

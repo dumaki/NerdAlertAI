@@ -212,6 +212,9 @@ export interface ModelEntry {
   requires_secret?: string;   // credential-store name; omitted = no key needed
   tool_loop:        boolean;  // native tool loop vs prefetch/pseudo narration
   context_window?:  number;   // reserved — length / cost warnings in later slices
+  tpm_ceiling?:     number;   // v0.7 5f: per-minute token ceiling hint for the pre-flight
+                              // budget guard. A learned value from the provider's
+                              // x-ratelimit headers supersedes this at request time.
   extra_headers?:   Record<string, string>; // may contain ${ENV}; e.g. OpenRouter referer/title
 }
 

@@ -73,6 +73,11 @@ models:
     requires_secret: groq-key
     tool_loop: true
     context_window: 131072
+    # v0.7 5f: Groq free tier is 6,000 TPM (input+output, rolling 60s) for this
+    # model. Pre-flight budget guard uses this as the hint until the provider's
+    # x-ratelimit headers report a live value (e.g. after a free Developer-tier
+    # upgrade), which then supersedes it. Remove/raise if you upgrade the tier.
+    tpm_ceiling: 6000
 
 # --- CRON ---
 cron:
