@@ -39,6 +39,7 @@ import { initGmailCredential } from '../gmail/config';
 import { initGithubCredential } from '../github/config';
 import { initActiveProject } from '../projects/active';
 import { initOpenRouterKey, initAnthropicKey, initProviderKey } from '../core/llm-client';
+import { listModels } from '../config/models';
 import { initOpenclawCredential } from '../tools/builtin/soc-client';
 import { logAvailableTools } from '../tools/registry';
 import { initTimerState, stopTimerState } from './timer-state';
@@ -349,20 +350,35 @@ startTelegram().catch((err: unknown) => {
     console.error('[NerdAlert] initAnthropicKey failed:', err);
   });
 
-  // ── Groq provider key (v0.7 5f) ───────────────────────────────
-  // Groq's key is loaded LAZILY by the OpenAI adapter (resolveProviderKey
-  // via buildTransportFromRegistry), so unlike OpenRouter/Anthropic above it
-  // had no boot-time announcement — the operator couldn't tell at a glance
-  // whether Groq was ready. Eager-init it here for parity: same fire-and-
-  // forget shape, same in-memory hot path, and the lazy fallback still covers
-  // a chat request that lands before this resolves. Uses the generic
-  // provider-key cache (5d), so this is the one line a new hosted provider
-  // would copy.
-  initProviderKey('groq-key').then(found => {
-    if (found) console.log('[NerdAlert] Groq key loaded from credential store');
-  }).catch((err: unknown) => {
-    console.error('[NerdAlert] initProviderKey(groq-key) failed:', err);
-  });
+  // ── Hosted provider keys (v0.7 Slice 5) ───────────────────────────────
+  // Every hosted openai-compatible model declares its credential as
+  // requires_secret in the registry. Loop those and eager-init each into
+  // the generic provider-key cache (5d), skipping the two providers with
+  // bespoke init fns above (anthropic-key via initAnthropicKey,
+  // openrouter-key via initOpenRouterKey). This is the boot-side of the
+  // milestone thesis: a NEW hosted provider (Groq, OpenAI today; DeepSeek /
+  // Together tomorrow) needs NO boot code — just its config row + a /setup
+  // credential. Same fire-and-forget shape as the keys above; the adapter's
+  // lazy fallback (resolveProviderKey) still covers a chat request that
+  // lands before these resolve. De-duped via a Set because several rows can
+  // share one secret (the Groq Llama / gpt-oss / qwen rows all use groq-key).
+  const BESPOKE_PROVIDER_SECRETS = new Set(['anthropic-key', 'openrouter-key']);
+  const hostedSecrets = new Set(
+    listModels()
+      .filter(m =>
+        m.transport === 'openai-compatible' &&
+        m.requires_secret &&
+        !BESPOKE_PROVIDER_SECRETS.has(m.requires_secret),
+      )
+      .map(m => m.requires_secret as string),
+  );
+  for (const secret of hostedSecrets) {
+    initProviderKey(secret).then(found => {
+      if (found) console.log(`[NerdAlert] ${secret} loaded from credential store`);
+    }).catch((err: unknown) => {
+      console.error(`[NerdAlert] initProviderKey(${secret}) failed:`, err);
+    });
+  }
 
   // ── OpenClaw gateway token ────────────────────────────────────
   // Eager init for the same latency reason as the LLM keys above.
