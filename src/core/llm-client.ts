@@ -775,6 +775,101 @@ export async function callOpenRouter(
   return data.choices?.[0]?.message?.content ?? 'No response generated.';
 }
 
+// ── callHosted ───────────────────────────────────────────
+//
+// Single non-streaming call to a HOSTED openai-compatible provider
+// (Groq, OpenAI today; Together / DeepSeek tomorrow). Used by the
+// non-streaming path in agent.ts — the cron runner and the /chat route.
+//
+// Registry-driven, exactly like the streaming hosted handler: it reads
+// the ACTIVE model's config.yaml row via getModel(getActiveModel()) for
+// the base_url, the credential name (requires_secret → resolveProviderKey
+// → bearer token), and any extra_headers — so adding a hosted provider
+// stays a config row + a /setup credential, with no new code here.
+//
+// SINGLE-TURN, NO TOOL LOOP — by design. This non-streaming path treats
+// every non-Anthropic provider as single-turn (see callOpenRouter's
+// preamble); hosted joins ollama/openrouter in that contract. The full
+// hosted ReAct loop lives on the STREAMING path (handleHostedToolStream
+// → runOpenAIAdapter), not here — so cron jobs and the /chat route get a
+// clean answer instead of the null-client crash this fixes.
+//
+// system_role NOTE: the system prompt is sent under the 'system' role.
+// The registry's system_role:'developer' (OpenAI o-series / GPT-5) is
+// honored only on the streaming tool-loop path. No current hosted row
+// uses 'developer', so this is correct for every model in the registry
+// today; it's a documented limitation for any future developer-role row
+// on this non-streaming path.
+export async function callHosted(
+  messages:     ORMessage[],
+  systemPrompt: string,
+): Promise<string> {
+
+  // Resolve the registry entry for the ACTIVE model. getLLMConfig().model
+  // is the BARE downstream id (prefix stripped), which can't key the
+  // registry — getModel() keys on the full prefixed id — so we read
+  // getActiveModel() (the full id) here.
+  const fullId = getActiveModel();
+  const entry  = getModel(fullId);
+  if (!entry || !entry.base_url) {
+    throw new Error(
+      `Hosted model "${fullId}" is missing from the registry or has no base_url. ` +
+      `Check the models: block in config.yaml.`,
+    );
+  }
+  if (!entry.requires_secret) {
+    throw new Error(`Hosted model "${fullId}" declares no requires_secret — cannot authenticate.`);
+  }
+
+  const key = await resolveProviderKey(entry.requires_secret);
+  if (!key) {
+    throw new Error(
+      `${entry.requires_secret} is not configured. Open http://localhost:3773/setup ` +
+      `and add the key, or switch to a configured model.`,
+    );
+  }
+
+  // Strip the routing prefix for the downstream id — same rule as
+  // resolveModelString's hosted branch (first path segment only, so an
+  // internal "org/model" id survives).
+  const downstreamModel = fullId.replace(/^[^/]+\//, '');
+
+  const headers: Record<string, string> = {
+    'Content-Type':  'application/json',
+    'Authorization': `Bearer ${key}`,
+  };
+  if (entry.extra_headers) {
+    Object.assign(headers, entry.extra_headers);
+  }
+
+  const fullMessages: ORMessage[] = [
+    { role: 'system', content: systemPrompt },
+    ...messages,
+  ];
+
+  const response = await fetch(`${entry.base_url}/chat/completions`, {
+    method:  'POST',
+    headers,
+    body: JSON.stringify({
+      model:      downstreamModel,
+      messages:   fullMessages,
+      max_tokens: 1024,
+      stream:     false,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Hosted provider (${entry.label}) error ${response.status}: ${errorText}`);
+  }
+
+  const data = await response.json() as {
+    choices: Array<{ message: { content: string } }>;
+  };
+
+  return data.choices?.[0]?.message?.content ?? 'No response generated.';
+}
+
 // ── TransportConfig ────────────────────────────────────────────
 //
 // v0.7 Slice 1 (Multi-Provider Tool Loop). Carries the per-provider

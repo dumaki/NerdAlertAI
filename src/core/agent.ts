@@ -34,7 +34,7 @@ import {
   logAvailableTools
 } from '../tools/registry';
 import { getPersonality } from '../personalities';
-import { getLLMConfig, getActiveModel, callOpenRouter, callOllama, ORMessage } from './llm-client';
+import { getLLMConfig, getActiveModel, callOpenRouter, callOllama, callHosted, ORMessage } from './llm-client';
 import { executeTool, type BrokerContext } from './permission-broker';
 import { getModelTrustCeiling } from './model-capabilities';
 import { findEnabledTool } from '../tools/registry';
@@ -116,12 +116,17 @@ export async function chat(
 
   const systemPrompt = buildSystemPrompt();
 
-  // ── OpenRouter path — single turn, no tool loop ───────────
+  // ── Single-turn path (non-Anthropic) — no tool loop ──────
   //
-  // Nemotron and other OpenRouter models get a clean single-turn
-  // response. Memory tool still works (it runs before this call
-  // in the registry layer). Full tool loop requires Anthropic.
-  if (llm.provider === 'openrouter' || llm.provider === 'ollama') {
+  // OpenRouter (Nemotron etc.), local Ollama, and HOSTED
+  // openai-compatible providers (Groq, OpenAI, ...) all get a clean
+  // single-turn response on this non-streaming path. Memory still works
+  // (it runs before this call in the registry layer). The full ReAct
+  // tool loop is the streaming path's job — and, for Anthropic, the loop
+  // below. Adding 'hosted' here is the v0.7 fix for the cron runner +
+  // /chat route, which previously fell through to the Anthropic branch
+  // and crashed on a null client when a hosted model was active.
+  if (llm.provider === 'openrouter' || llm.provider === 'ollama' || llm.provider === 'hosted') {
   const orHistory: ORMessage[] = history.map(m => ({
     role:    m.role as 'user' | 'assistant',
     content: typeof m.content === 'string'
@@ -133,15 +138,32 @@ export async function chat(
   }));
 
   const msgs = [...orHistory, { role: 'user' as const, content: message }];
-  const responseText = llm.provider === 'ollama'
-    ? await callOllama(msgs, systemPrompt, llm.model)
-    : await callOpenRouter(msgs, systemPrompt, llm.model);
+  const responseText =
+      llm.provider === 'ollama' ? await callOllama(msgs, systemPrompt, llm.model)
+    : llm.provider === 'hosted' ? await callHosted(msgs, systemPrompt)
+    :                             await callOpenRouter(msgs, systemPrompt, llm.model);
 
   return { type: 'text', content: responseText, metadata: {} };
 }
 
   // ── Anthropic path — full ReAct tool loop ─────────────────
-  const client = llm.anthropicClient!;
+  //
+  // Guard the client instead of asserting it non-null (v0.7). Every
+  // non-Anthropic provider is handled above, so reaching here means
+  // provider === 'anthropic' — but the cached client is still null when
+  // anthropic-key isn't configured. Returning a clean message keeps the
+  // core loop from crashing on a null deref (P3), and also catches any
+  // future provider that isn't routed above instead of letting it hit a
+  // null client.messages.create().
+  const client = llm.anthropicClient;
+  if (!client) {
+    return {
+      type:    'text',
+      content: 'Anthropic model is selected but anthropic-key is not configured. ' +
+               'Add it at http://localhost:3773/setup, or switch to another model.',
+      metadata: {},
+    };
+  }
 
   const messages: Message[] = [
     ...history,
