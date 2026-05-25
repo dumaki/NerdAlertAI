@@ -176,6 +176,42 @@ export interface AgentConfig {
   skills?: SkillsConfig;       // optional: absent/disabled = no seed, no skills panel
   safety?: SafetyConfig;       // optional: absent/disabled = no snapshots; destructive ops unchanged
   experimental?: ExperimentalConfig; // optional: spike flags; absent = all off
+  models?: ModelEntry[];     // v0.7 Slice 5a: declarative model registry (below).
+                             // Absent = empty registry, so model-switching has
+                             // nothing to allow. Core config, not a removable
+                             // module — seed it in config.yaml.
+}
+
+// --- MODEL REGISTRY (v0.7 Slice 5a) ---
+// One declarative entry per selectable model. Replaces the model facts
+// previously hardcoded in three places (the /api/config/model allowlist,
+// the index.html dropdown array, and its label map). Read via
+// src/config/models.ts, which resolves ${ENV} placeholders in base_url /
+// extra_headers at access time (the yaml loader itself does no
+// interpolation).
+//
+// transport:
+//   'anthropic'         → Anthropic SDK path (base_url / headers ignored).
+//   'openai-compatible' → OpenAI Chat Completions wire format (Ollama,
+//                         OpenRouter, and — from Slice 5d — OpenAI, Groq).
+//
+// requires_secret is a credential-store name (see security-routes.ts
+// ALLOWED). Omitted = no key needed (e.g. a local Ollama model). Slice 5b
+// uses it to hide models whose key isn't configured.
+//
+// tool_loop distinguishes a native ReAct tool loop from the
+// prefetch/pseudo-tool narration path — a capability flag, not a protocol
+// one (a weak model on an openai-compatible transport can still be
+// tool_loop: false). Stored from 5a; consumed by the dispatch in 5d.
+export interface ModelEntry {
+  id:               string;   // full prefixed routing key, e.g. "ollama/mistral-small3.2"
+  label:            string;   // display name for the model dropdown
+  transport:        'anthropic' | 'openai-compatible';
+  base_url?:        string;   // openai-compatible only; may contain ${ENV} / ${ENV:-default}
+  requires_secret?: string;   // credential-store name; omitted = no key needed
+  tool_loop:        boolean;  // native tool loop vs prefetch/pseudo narration
+  context_window?:  number;   // reserved — length / cost warnings in later slices
+  extra_headers?:   Record<string, string>; // may contain ${ENV}; e.g. OpenRouter referer/title
 }
 
 // --- VOICE MODULE CONFIG ---

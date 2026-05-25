@@ -19,6 +19,45 @@ agent:
   personality: "sherman"   # Which personality file to load
   trust_level: 1           # Global trust level — start low, raise deliberatey
 
+# --- MODEL REGISTRY (v0.7 Slice 5a) ---
+# Declarative list of selectable models — the single source of truth that
+# replaces the model facts formerly hardcoded in the /api/config/model
+# allowlist and the index.html dropdown. Read via src/config/models.ts.
+#
+#   id              full prefixed routing key (matches MODEL / getActiveModel)
+#   label           display name in the model dropdown
+#   transport       'anthropic' (SDK path) or 'openai-compatible' (Chat Completions)
+#   base_url        openai-compatible only; ${VAR} and ${VAR:-default} are
+#                   resolved against the environment at read time
+#   requires_secret credential-store name (see /setup); omit = no key needed
+#   tool_loop       true = native ReAct tool loop; false = prefetch/pseudo narration
+#   extra_headers   optional; ${VAR} resolved like base_url
+#
+# Core config, not a removable module: an empty/absent list leaves model-
+# switching with nothing to allow. Add a model here to expose it.
+models:
+  - id: anthropic/claude-sonnet-4-6
+    label: "Claude Sonnet 4.6"
+    transport: anthropic
+    requires_secret: anthropic-key
+    tool_loop: true
+
+  - id: ollama/mistral-small3.2
+    label: "Mistral Small 3.2 (Local)"
+    transport: openai-compatible
+    base_url: "${OLLAMA_HOST:-http://localhost:11434}/v1"
+    tool_loop: true
+
+  - id: nvidia/nemotron-3-super-120b-a12b:free
+    label: "Nemotron 120B (Free)"
+    transport: openai-compatible
+    base_url: "https://openrouter.ai/api/v1"
+    requires_secret: openrouter-key
+    tool_loop: false
+    extra_headers:
+      HTTP-Referer: "https://nerdalert.local"
+      X-Title: "NerdAlert"
+
 # --- CRON ---
 cron:
   enabled: true            # Master switch for the cron engine + cron_manager tool

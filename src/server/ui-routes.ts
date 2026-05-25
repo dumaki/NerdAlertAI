@@ -23,6 +23,7 @@ import type { Express, Request, Response } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 
 import { config }                                from '../config/loader';
+import { listModels }                            from '../config/models';
 import { getServerAuthToken }                    from './auth';
 import { getPersonality }                        from '../personalities';
 import { getAvailableTools, toAnthropicFormat, toOpenAIFormat, findEnabledTool } from '../tools/registry';
@@ -1387,11 +1388,9 @@ export function mountUIRoutes(app: Express): void {
   // ── POST /api/config/model — runtime model switcher ───────
   app.post('/api/config/model', (req: Request, res: Response) => {
     const { model } = req.body as { model: string };
-    const allowed = [
-      'anthropic/claude-sonnet-4-6',
-      'nvidia/nemotron-3-super-120b-a12b:free',
-      'ollama/mistral-small3.2',
-    ];
+    // v0.7 Slice 5a: the allowlist now derives from the declarative model
+    // registry (config.yaml `models:`) instead of a hardcoded array.
+    const allowed = listModels().map(m => m.id);
     if (!allowed.includes(model)) {
       res.status(400).json({ ok: false, error: 'Unknown model' });
       return;
