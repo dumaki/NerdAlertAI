@@ -215,6 +215,12 @@ export interface ModelEntry {
   tpm_ceiling?:     number;   // v0.7 5f: per-minute token ceiling hint for the pre-flight
                               // budget guard. A learned value from the provider's
                               // x-ratelimit headers supersedes this at request time.
+  system_role?:     'system' | 'developer'; // v0.7 Slice 5: chat-message role the system
+                              // prompt is sent under on openai-compatible transports.
+                              // Defaults to 'system' (GPT-4o, Groq, Mistral, ...); OpenAI
+                              // o-series / GPT-5 prefer 'developer'. Threaded into the
+                              // transport in event-adapter-openai.ts, same pattern as
+                              // tpm_ceiling. Ignored on the anthropic transport.
   extra_headers?:   Record<string, string>; // may contain ${ENV}; e.g. OpenRouter referer/title
 }
 

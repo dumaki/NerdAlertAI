@@ -670,6 +670,8 @@ export function buildOpenRouterTransport(): OpenAITransportConfig {
 //   requires_secret → resolved via the credential store into a
 //                     bearer token; absent → keyless (Ollama)
 //   extra_headers   → transport.extraHeaders
+//   system_role     → transport.systemRole (default 'system'; OpenAI
+//                     o-series / GPT-5 prefer 'developer')
 //
 // Async because key resolution hits the credential store. Throws a
 // clear "key not configured" error — surfaced to the user via the
@@ -725,7 +727,7 @@ export async function buildTransportFromRegistry(
     baseUrl:      entry.base_url,
     auth,
     extraHeaders: entry.extra_headers,
-    systemRole:   'system',
+    systemRole:   entry.system_role ?? 'system',
     tpmCeiling:   entry.tpm_ceiling,
     quirks,
   };
