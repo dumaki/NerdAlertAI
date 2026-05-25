@@ -724,31 +724,30 @@ async function handleOpenRouterToolStream(
   void dedupSources(sourceSink);
 }
 
-// ── Groq native streaming handler — v0.7 Slice 5d ───────────
+// ── Hosted native streaming handler ─ v0.7 Slice 5 ───────────
 //
-// Routes Groq-hosted models (llama-3.3-70b-versatile today) through
-// the native OpenAI-compatible tool loop (runOpenAIAdapter), the same
-// adapter the Ollama and OpenRouter-native paths use. Groq is
-// NATIVE-ALWAYS: no prefetch, no narration, no experimental flag —
-// it's a hosted tool-capable provider, so the loop is its only mode.
+// Routes any HOSTED openai-compatible provider (Groq, OpenAI today;
+// Together / DeepSeek tomorrow) through the native OpenAI-compatible
+// tool loop (runOpenAIAdapter), the same adapter the Ollama and
+// OpenRouter-native paths use. Hosted providers are NATIVE-ALWAYS: no
+// prefetch, no narration, no experimental flag — they're hosted
+// tool-capable endpoints, so the loop is their only mode.
 //
-// The ONE thing that makes this different from handleOllamaStream /
-// handleOpenRouterToolStream is the transport source: instead of a
-// hardcoded buildOllamaTransport() / buildOpenRouterTransport(), it
-// builds from the declarative registry via buildTransportFromRegistry()
-// keyed on the full active model id. That resolves base_url, the
-// groq-key bearer token (from the credential store), and the Groq
-// dropped-close-delta quirk — all from config.yaml. Adding the NEXT
-// hosted provider needs no new handler: it routes here too once its
-// prefix lands in resolveProvider, or via the registry-transport
-// generalization a later slice will fold these handlers into.
+// What makes this generic: the transport comes from the declarative
+// registry via buildTransportFromRegistry(getActiveModel()), not a
+// hardcoded builder. That resolves base_url, the bearer token (from the
+// credential store, keyed by the entry's requires_secret), the
+// system_role, the TPM ceiling, and any per-endpoint quirk — all from
+// config.yaml. So adding the NEXT hosted provider needs NO new handler
+// and NO new line here: it's a config row that resolveProvider returns
+// 'hosted' for, and it routes straight through this one function.
 //
-// AUTO-FALLBACK: llama-3.3-70b honors the tools parameter, so the
-// ToolCapabilityError path shouldn't fire — but it's wired to
-// pseudo-tool ('openrouter' transport, the hosted-provider default)
-// for parity with the other native handlers, so a future tools-averse
-// Groq model degrades gracefully instead of erroring.
-async function handleGroqStream(
+// AUTO-FALLBACK: production hosted models honor the tools parameter, so
+// the ToolCapabilityError path shouldn't fire — but it's wired to
+// pseudo-tool ('openrouter' transport, the hosted-provider default) for
+// parity with the other native handlers, so a future tools-averse
+// hosted model degrades gracefully instead of erroring.
+async function handleHostedToolStream(
   res:             Response,
   systemPrompt:    string,
   initialMessages: Anthropic.MessageParam[],
@@ -800,7 +799,7 @@ async function handleGroqStream(
     await runOpenAIAdapter(
       {
         transport,
-        model: llm.model,   // bare Groq model id (prefix stripped by resolveModelString)
+        model: llm.model,   // bare hosted model id (prefix stripped by resolveModelString)
         systemPrompt,
         initialMessages: orMessages,
         tools: openAITools,
@@ -813,7 +812,7 @@ async function handleGroqStream(
     // same safety net as the Ollama / OpenRouter native handlers.
     if (err instanceof ToolCapabilityError) {
       console.log(
-        `[capability] ${llm.model} (Groq) rejected native tools; ` +
+        `[capability] ${llm.model} (hosted) rejected native tools; ` +
         `falling back to pseudo-tool adapter`,
       );
       try {
@@ -1435,15 +1434,17 @@ export function mountUIRoutes(app: Express): void {
       if (llm.provider === 'anthropic') {
         const tools = toAnthropicFormat(getAvailableTools()) as Anthropic.Tool[];
         await handleAnthropicStream(res, systemPromptWithSkills, messages, tools, trustLevel, agentName, telemetry);
-      } else if (llm.provider === 'groq') {
-        // v0.7 Slice 5d: Groq is native-always. No prefetch ran for it
-        // (needsPrefetch excludes everything but ollama/openrouter), so
-        // there's no narration to consider — straight into the registry-
-        // driven native tool loop with the full reasoning prompt, same
-        // call shape as the Anthropic branch. Placed before the nativeOR /
-        // shouldNarrate branches so Groq can never fall into the
-        // narration path.
-        await handleGroqStream(res, systemPromptWithSkills, messages, trustLevel, agentName, telemetry);
+      } else if (llm.provider === 'hosted') {
+        // v0.7 Slice 5: hosted openai-compatible providers (Groq, OpenAI,
+        // ...) are native-always. No prefetch ran for them (needsPrefetch
+        // excludes everything but ollama/openrouter), so there's no
+        // narration to consider — straight into the registry-driven native
+        // tool loop with the full reasoning prompt, same call shape as the
+        // Anthropic branch. Placed before the nativeOR / shouldNarrate
+        // branches so a hosted provider can never fall into the narration
+        // path. The handler is registry-keyed, so every hosted provider
+        // (current and future) shares this one branch.
+        await handleHostedToolStream(res, systemPromptWithSkills, messages, trustLevel, agentName, telemetry);
       } else if (nativeOR) {
         // v0.7 spike (flag-gated): OpenRouter through the native tool loop.
         // nativeOR was excluded from needsPrefetch above, so there's no

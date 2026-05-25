@@ -290,6 +290,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { getCredential, setCredential } from '../security/credential-store';
+import { getModel } from '../config/models';
 
 // ── Read config from environment ──────────────────────────────
 //
@@ -525,28 +526,57 @@ export async function resolveProviderKey(secretName: string): Promise<string | n
 //
 // "anthropic/" → Anthropic SDK
 // "ollama/"    → local Ollama instance at OLLAMA_HOST
-// "groq/"      → Groq cloud (openai-compatible, native tool loop)
+// hosted       → any openai-compatible registry entry that declares a
+//                native tool loop + a hosted base_url + a credential
+//                (Groq today; OpenAI / Together / DeepSeek tomorrow).
+//                Routed by the REGISTRY, not a prefix — adding one is a
+//                config row, not a line here (v0.7 Slice 5: OpenAI).
 // anything else → OpenRouter
+//
+// Why prefix checks survive for anthropic/ollama but NOT the hosted
+// class: those two carry genuinely distinct code paths (the Anthropic
+// SDK; Ollama's capability-cache + prefetch + keyless local transport),
+// so they stay explicit. The hosted-native class is the only one the
+// v0.7 milestone says must be config-only, so only it is generalized.
 
-type Provider = 'anthropic' | 'ollama' | 'groq' | 'openrouter';
+type Provider = 'anthropic' | 'ollama' | 'hosted' | 'openrouter';
 
 function resolveProvider(model: string): Provider {
   if (model.startsWith('anthropic/')) return 'anthropic';
   if (model.startsWith('ollama/'))    return 'ollama';
-  if (model.startsWith('groq/'))      return 'groq';
+
+  // Registry-driven hosted-native detection. A hosted provider is any
+  // openai-compatible entry with a native tool loop, a base_url, and a
+  // required credential. OpenRouter's entry is tool_loop:false so it
+  // falls through to 'openrouter'; Ollama is keyless and already caught
+  // by the prefix above. getModel() is a synchronous in-memory lookup.
+  const entry = getModel(model);
+  if (
+    entry &&
+    entry.transport === 'openai-compatible' &&
+    entry.tool_loop &&
+    Boolean(entry.base_url) &&
+    Boolean(entry.requires_secret)
+  ) {
+    return 'hosted';
+  }
+
   return 'openrouter';
 }
 
 // Strip provider prefix for the downstream client.
-// "anthropic/claude-sonnet-4-6" → "claude-sonnet-4-6"
-// "ollama/qwen3:14b"            → "qwen3:14b"
+// "anthropic/claude-sonnet-4-6"  → "claude-sonnet-4-6"
+// "ollama/qwen3:14b"             → "qwen3:14b"
 // "groq/llama-3.3-70b-versatile" → "llama-3.3-70b-versatile"
-//   (Groq's /openai/v1 wants the bare model id, like Ollama)
+// "openai/gpt-4o"                → "gpt-4o"
+//   Hosted providers want the bare downstream id, so we strip only the
+//   FIRST path segment (the routing prefix) and preserve any internal
+//   slashes (e.g. Together's "org/model" ids survive intact).
 // OpenRouter wants the full path including org prefix — no strip.
 function resolveModelString(model: string, provider: Provider): string {
   if (provider === 'anthropic') return model.replace(/^anthropic\//, '');
   if (provider === 'ollama')    return model.replace(/^ollama\//, '');
-  if (provider === 'groq')      return model.replace(/^groq\//, '');
+  if (provider === 'hosted')    return model.replace(/^[^/]+\//, '');
   return model;
 }
 
@@ -596,12 +626,13 @@ export function getLLMConfig(): LLMConfig {
     };
   }
 
-  // Groq (and future hosted openai-compatible providers routed by
-  // prefix). No SDK client and no key check here — the key is
-  // resolved lazily by buildTransportFromRegistry() at request time
-  // via the credential store, which throws the clear "key not
-  // configured" error if it's missing. getLLMConfig stays synchronous.
-  if (provider === 'groq') {
+  // Hosted openai-compatible providers (Groq, OpenAI, Together, ...),
+  // routed by the registry in resolveProvider above. No SDK client and
+  // no key check here — the key is resolved lazily by
+  // buildTransportFromRegistry() at request time via the credential
+  // store, which throws the clear "key not configured" error if it's
+  // missing. getLLMConfig stays synchronous.
+  if (provider === 'hosted') {
     return {
       provider,
       model:           modelString,
