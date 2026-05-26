@@ -23,8 +23,10 @@ import wikipediaTool   from './builtin/wikipedia-tool';
 import remindersTool   from './builtin/reminders-tool';
 import mapsTool        from './builtin/maps-tool';
 import memoryTool      from './builtin/memory-tool';
-import gmailTool       from './builtin/gmail-tool';
-import gmailSetupTool  from './builtin/gmail-setup';
+import gmailTool        from './builtin/gmail-tool';
+import gmailSetupTool   from './builtin/gmail-setup';
+import gmailSendTool    from './builtin/gmail-send-tool';
+import gmailCleanupTool from './builtin/gmail-cleanup-tool';
 import githubTool      from './builtin/github-tool';
 import githubSetupTool from './builtin/github-setup';
 import helpTool        from './builtin/help-tool';
@@ -88,6 +90,16 @@ const ALL_TOOLS: NerdAlertTool[] = [
 
   timerTool,
   hostMetricsTool,
+
+  // Gmail's L3 dangerous-writes (send / cleanup) sit BEFORE the broad
+  // gmail read/draft tool, same positional-bias mitigation used for the
+  // github/project/rss cluster above: a small model scoring tools top-to-
+  // bottom should match "send this email" against gmail_send before it
+  // reaches the broad gmail tool. Both are filtered out of the model-
+  // visible set below L3, so this ordering only bites once global trust
+  // is raised to 3.
+  gmailSendTool,
+  gmailCleanupTool,
   gmailTool,
   gmailSetupTool,
   cronManagerTool,
