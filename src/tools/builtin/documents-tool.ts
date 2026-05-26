@@ -258,7 +258,18 @@ async function doSearch(params: Record<string, unknown>): Promise<NerdAlertRespo
       // not-found message below. Mirrors resolveStemInProject in
       // project-tool.ts. Exact filenames always take the equality path
       // above and never reach here — strict-superset preserved.
-      const partial = all.filter(d => d.filename.toLowerCase().includes(filename.toLowerCase()))
+      //
+      // v0.7.x: normalize BOTH sides (strip apostrophes, curly quote,
+      // whitespace, underscores, hyphens) before the substring test — the
+      // same normalization doIndex's stem fallback already uses. Without
+      // it, a colloquial stem like "won't" (what extractColloquialFileStem
+      // returns for "Betcha Won't script") never matched
+      // "...Betcha_Won_t.pdf", because the apostrophe and the underscore
+      // were the only difference. This brings the search resolver into
+      // line with the index resolver so the two never disagree on a stem.
+      const normalizeStem = (s: string) => s.toLowerCase().replace(/[' \u2019\s_\-]/g, '')
+      const needle  = normalizeStem(filename)
+      const partial = all.filter(d => normalizeStem(d.filename).includes(needle))
       if (partial.length === 1) {
         docId = partial[0].id
       } else if (partial.length > 1) {

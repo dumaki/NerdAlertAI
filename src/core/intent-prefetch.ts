@@ -1312,6 +1312,32 @@ const INTENT_MAP: Record<string, IntentGroup> = {
         }
       }
 
+      // Shape 7 (v0.7.x): colloquial imperative search / locate — the dotless
+      // twin of Shapes 2 & 3 above. "search the goodnerds script for X" →
+      // query=X; "find X in the betcha script" → query=X. The stem comes from
+      // the shared helper (so capture and the Shape-7 gate never drift) and
+      // is passed as filename so doSearch scopes to that file. Placed after
+      // the colloquial predicate (Shape 6) and before the generic doc-noun
+      // patterns so a colloquial file reference wins over "search the docs
+      // for X".
+      const colloquialSearchStem = extractColloquialFileStem(msg)
+      if (colloquialSearchStem) {
+        const impColloquialMatch = msg.match(
+          /\b(?:check|search|scan|grep|look\s+(?:in|through|inside)|comb\s+through|hunt\s+through)\b.*?\bfor\s+(.+?)[?.!]*\s*$/i
+        )
+        if (impColloquialMatch && impColloquialMatch[1]) {
+          const rawQuery = impColloquialMatch[1].trim().replace(/^['"]+|['"]+$/g, '')
+          return { action: 'search', query: rawQuery, filename: colloquialSearchStem }
+        }
+        const locColloquialMatch = msg.match(
+          /\b(?:find|locate|spot|show\s+me|pull\s+up|surface)\s+(.+?)\s+in\s+(?:the\s+|my\s+|this\s+)?\S/i
+        )
+        if (locColloquialMatch && locColloquialMatch[1]) {
+          const rawQuery = locColloquialMatch[1].trim().replace(/^['"]+|['"]+$/g, '')
+          return { action: 'search', query: rawQuery, filename: colloquialSearchStem }
+        }
+      }
+
       const aboutMatch =
         msg.match(/\b(?:what\s+does\s+(?:the\s+)?(?:document|doc|pdf|contract|file)\s+say\s+about)\s+(.+?)[?.!]*\s*$/i) ||
         msg.match(/\b(?:passages?|the\s+part|the\s+section|the\s+chunk)\s+about\s+(.+?)[?.!]*\s*$/i)
@@ -1711,6 +1737,19 @@ function hasDocumentsSearchShape(message: string): boolean {
   if (/\b(?:what\s+does|does)\b/i.test(message)
       && /\b(?:say|mention|discuss|cover|contain|reference|talk\s+about|touch\s+on)\b/i.test(message)
       && hasColloquialFileReference(message)) return true;
+  // Shape 7 (v0.7.x): colloquial imperative search / locate — the dotless
+  // twin of Shapes 2 & 3. "search the goodnerds script for X" / "find X in
+  // the betcha script". The dotted shapes are anchored on a literal X.pdf;
+  // this one is gated on hasColloquialFileReference so it fires only when a
+  // real <stem> <filetype-noun> pair is present, then confirms search
+  // intent via an imperative-search verb + "for", or a locate verb + "in".
+  // Without it, "search the <stem> script for Y" left documents OUT of the
+  // matched set (every other shape is dot-anchored), so the demotion never
+  // ran and the turn fell to a whole-file project.read. Bare reads ("read
+  // the goodnerds script") have no search verb and stay on project.
+  if (hasColloquialFileReference(message)
+      && (/\b(?:check|search|scan|grep|look\s+(?:in|through|inside)|comb\s+through|hunt\s+through)\b.*\bfor\b/i.test(message)
+          || /\b(?:find|locate|spot|show\s+me|pull\s+up|surface)\b.+?\bin\b/i.test(message))) return true;
   return false;
 }
 
