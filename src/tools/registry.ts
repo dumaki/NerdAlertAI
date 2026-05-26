@@ -322,6 +322,34 @@ export function effectiveTrustLevelOf(name: string): number | undefined {
   return resolveToolPolicy(tool).effectiveMinTrustLevel;
 }
 
+// getModelVisibleTools — the model-facing tool set, narrowed by the active
+// model's per-model trust ceiling (v0.7 Slice 4, item 4b).
+//
+// getAvailableTools() returns every tool enabled at the user's global trust
+// level. A capped model (max_trust_level below global trust) would still SEE
+// tools it can't call: the broker hard-denies them at execute time, but a weak
+// model can waste a turn attempting one and get a denial injected back. This
+// narrows the set the model is SHOWN so a capped model never sees a tool above
+// its ceiling in the first place.
+//
+//   ceiling === undefined -> no cap (Anthropic, or an unconfigured model) ->
+//     returns getAvailableTools() unchanged. Strict-superset: identical to the
+//     pre-4b call, which is why the Anthropic paths pass through untouched.
+//   ceiling is a number    -> drop tools whose effectiveMinTrustLevel exceeds it.
+//
+// Defense-in-depth LAYERED ON the broker's hard-deny, never the boundary itself
+// — the broker stays the single chokepoint. Use this ONLY when building the
+// tool list shown to a model; user-facing surfaces (help) and diagnostics keep
+// calling getAvailableTools() so their output reflects user trust, not whichever
+// model happens to be active.
+export function getModelVisibleTools(ceiling?: number): NerdAlertTool[] {
+  const available = getAvailableTools();
+  if (typeof ceiling !== 'number') return available;
+  return available.filter(
+    tool => resolveToolPolicy(tool).effectiveMinTrustLevel <= ceiling,
+  );
+}
+
 export function logAvailableTools(): void {
   const available = getAvailableTools();
   if (available.length === 0) {

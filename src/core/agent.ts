@@ -30,6 +30,7 @@ import { config } from '../config/loader';
 import { NerdAlertResponse } from '../types/response.types';
 import {
   getAvailableTools,
+  getModelVisibleTools,
   toAnthropicFormat,
   logAvailableTools
 } from '../tools/registry';
@@ -170,7 +171,13 @@ export async function chat(
     { role: 'user', content: message }
   ];
 
-  const availableTools  = getAvailableTools();
+  // getModelVisibleTools narrows the set by the active model's trust
+  // ceiling (v0.7 Slice 4, item 4b). On this Anthropic-only ReAct path the
+  // ceiling is always undefined (getModelTrustCeiling hard-guards anthropic/*),
+  // so this is a guaranteed no-op here — applied for uniformity so every
+  // model-facing tool list goes through the one filter, and so this path is
+  // already correct if a capped model is ever routed through it.
+  const availableTools  = getModelVisibleTools(getModelTrustCeiling(getActiveModel()));
   const anthropicTools  = toAnthropicFormat(availableTools);
 
   let iterations = 0;
