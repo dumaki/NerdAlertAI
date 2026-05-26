@@ -13,6 +13,13 @@
 // status  — show details + recent run history for one job
 // logs    — return the last N run logs for one job
 //
+// TRUST LEVELS
+// ──────────────────────────────────────────────────────────
+// L1 (read)  : list, status, logs, recent_failures
+// L2 (write) : create, delete, pause, resume
+// Compiled floor is L1; write actions are gated to L2 per-action inside
+// execute() so reads stay usable at L1 while job mutation requires L2.
+//
 // ANTI-RECURSION
 // ──────────────────────────────────────────────────────────
 // If IS_CRON_CONTEXT is true, ALL actions are blocked.
@@ -29,6 +36,7 @@ import {
 } from '../../cron/scheduler';
 import { IS_CRON_CONTEXT } from '../../cron/runner';
 import { v4 as uuid } from 'uuid';
+import { config } from '../../config/loader';
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -97,6 +105,22 @@ export const cronManagerTool: NerdAlertTool = {
     }
 
     const action = params.action as string;
+
+    // ── Per-action trust gate (v0.8 L2 re-level) ──────────────
+    // Compiled tool.trustLevel is the L1 floor (reads). Actions that create
+    // or mutate jobs carry real blast radius — a recurring job fires the agent
+    // on a timer — so they require L2. Same posture as documents.forget and
+    // project_write's merge gate: the floor stays L1, the write is gated here
+    // in execute(). No config floor-raise (that would gate the reads too, and
+    // recent_failures/list feed the cron intent-prefetch group at L1).
+    const WRITE_ACTIONS = ['create', 'delete', 'pause', 'resume'];
+    const trustLevel = config.agent?.trust_level ?? 0;
+    if (WRITE_ACTIONS.includes(action) && trustLevel < 2) {
+      return err(
+        `Managing scheduled jobs ("${action}") requires trust level 2; the current level is ${trustLevel}. ` +
+        `Reading schedules and run logs (list, status, logs, recent_failures) stays available at level 1.`
+      );
+    }
 
     switch (action) {
 
