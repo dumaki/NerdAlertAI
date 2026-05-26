@@ -2,7 +2,7 @@
 
 **Baseline:** v0.6.10 (`docs/NerdAlert_Spec_v0_6_10.docx`)
 **Branch:** `dev`
-**Status:** v0.7.0 shipped; 0.7.x in progress (Task 3 transport cleanup outstanding)
+**Status:** v0.7.0 shipped; 0.7.x in progress (post-ship intent-routing fixes; folding into the 0.8.0 cap after L2)
 
 This is a **delta** document. It records only the sections that changed from the
 v0.6.10 baseline across the v0.7 arc. Unchanged sections stand as written in
@@ -224,6 +224,37 @@ approval-card UI consumer, memory per-action gating, culminating in the elevatio
 system). `max_trust_level` is the hinge: the last 0.7 safety primitive **and** the
 precondition for 0.8's blast radius. Approval runs *below* the model layer, so 0.8's
 cards light up for every `tool_loop` model at once.
+
+---
+
+## v0.7.x — Post-Ship Routing Fixes *(in progress; folds into 0.8.0)*
+
+Small, additive intent-routing bug fixes landed on `dev` after the v0.7.0 cap —
+**not** a milestone (no version bump). Tagged `v0.7.x` in code comments to stay
+greppable; this subsection is their interim spec home until the 0.8.0 cap folds
+them in after the L2 arc. Surfaced by a Battery-D re-sweep on
+`ollama/mistral-small3.2` (9-fixture coverage set): **67% → 33% fail.** All three
+`tsc`-clean, strict-superset (bare reads, dotted filenames, and the date/time
+controls untouched), approved at each gate:
+
+- **`f855270` — documents → project misroute.** Colloquial dotless-filename
+  searches ("search the goodnerds script for X") misrouted to whole-file
+  `project.read` on Mistral's narration path. Fixed with **Shape 7** in
+  `hasDocumentsSearchShape` (gated on `hasColloquialFileReference`, the one helper
+  that feeds both the documents gate and the project→documents demotion), its
+  matching `paramExtractor` branch, and a normalized `doSearch` substring fallback
+  in `documents-tool.ts`. Documents domain 0/4 → 3/4.
+- **`1048d1e` — pihole `ads` substring trap.** Bare `ads` matched inside
+  `spre[ads]heet`; gave the pihole group word-boundary matching (as datetime uses).
+- **`d5d57c6` — datetime year/month → prefetch.** "What year is it?" matched no
+  keyword and Mistral hallucinated "2024"; added four anchored phrases
+  (`what year is it`, `current year`, `what month is it`, `current month`) —
+  anchored, not bare, to avoid historical/possessive over-fire.
+
+**Out of scope (remaining Battery-D fails):** `project-write-create` is blocked on
+the L2 `project_write` tool (the L2 arc); `documents-nomatch` routes correctly but
+its >6000-char clip message trips the C1 deflection detector — a wording quirk, not
+a misroute.
 
 ---
 
