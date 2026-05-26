@@ -524,6 +524,12 @@ export async function resolveProviderKey(secretName: string): Promise<string | n
 
 // ── Determine provider from model string ──────────────────────
 //
+// Two transports underlie everything: 'anthropic' and 'openai-compatible'
+// (ModelEntry.transport). The four Provider classes below are just how
+// those two transports get dispatched: anthropic is its own; ollama,
+// hosted, and openrouter are all openai-compatible, split only by routing
+// needs (keyless-local, registry-native, and pseudo/prefetch fallback).
+//
 // "anthropic/" → Anthropic SDK
 // "ollama/"    → local Ollama instance at OLLAMA_HOST
 // hosted       → any openai-compatible registry entry that declares a
