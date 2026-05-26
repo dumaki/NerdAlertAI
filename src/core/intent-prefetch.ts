@@ -1788,6 +1788,18 @@ export function detectIntent(message: string, agentName?: string): string[] {
           new RegExp('\\b' + escapeForRegex(k) + '\\b', 'i').test(message)
         );
       }
+      if (groupName === 'pihole') {
+        // Word-boundary match (same mechanism as datetime). pihole's 'ads'
+        // keyword is a short common substring that fires INSIDE unrelated
+        // words — "spre[ads]heet" pulled a spurious pihole prefetch onto
+        // every spreadsheet query (the bare-common-noun substring trap,
+        // Pattern 30). Word boundaries keep 'ads'/'dns'/'blocked' matching
+        // real tokens without the substring false-positives. 'pi-hole'
+        // still matches — the hyphen is a non-word char, so \bpi-hole\b holds.
+        return group.keywords.some(k =>
+          new RegExp('\\b' + escapeForRegex(k) + '\\b', 'i').test(message)
+        );
+      }
       if (groupName === 'calculate') {
         // Special gate: only fire if the message contains a
         // recognizable digit-operator-digit arithmetic pattern.
