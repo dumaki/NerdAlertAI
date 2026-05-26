@@ -112,12 +112,25 @@ export interface NerdAlertResponse {
 //   We use Record<string, unknown> to mean "an object with string keys
 //   and values we don't know the type of yet" — the tool defines specifics.
 
+/**
+ * Optional per-execution context the broker forwards into execute().
+ * Lets a per-action gate honor the EFFECTIVE trust ceiling — min of global
+ * trust and the active model's max_trust_level — instead of global trust
+ * alone, so a per-action L2 gate denies a capped model exactly as a
+ * tool-level L2 floor would. Additive + optional: tools that ignore it are
+ * byte-identical to before.
+ */
+export interface ToolExecContext {
+  /** min(userTrustLevel, maxModelTrustLevel ?? Infinity), computed by the broker. */
+  effectiveTrustCeiling: number;
+}
+
 export interface NerdAlertTool {
   name: string;           // How the AI refers to this tool e.g. "search_github"
   description: string;    // Plain English — the AI reads this to pick the right tool
   trustLevel: number;     // Minimum trust level required (0–5)
   parameters: object;     // JSON Schema defining what inputs this tool accepts
-  execute: (params: Record<string, unknown>) => Promise<NerdAlertResponse>;
+  execute: (params: Record<string, unknown>, exec?: ToolExecContext) => Promise<NerdAlertResponse>;
 }
 
 

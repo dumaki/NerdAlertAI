@@ -216,8 +216,15 @@ export async function executeTool(
   // belt-and-braces keeps this honest).
   const tool = findTool(call.name)!;
 
+  // Effective ceiling forwarded into execute() so a tool's per-action gate can
+  // honor the per-model cap, not just global trust (v0.8 1a). undefined cap => Infinity.
+  const effectiveTrustCeiling = Math.min(
+    ctx.userTrustLevel,
+    ctx.maxModelTrustLevel ?? Number.POSITIVE_INFINITY,
+  );
+
   try {
-    const response: NerdAlertResponse = await tool.execute(call.args);
+    const response: NerdAlertResponse = await tool.execute(call.args, { effectiveTrustCeiling });
     const output = typeof response.content === 'string'
       ? response.content
       : JSON.stringify(response.content);

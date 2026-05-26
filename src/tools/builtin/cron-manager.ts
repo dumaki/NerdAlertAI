@@ -27,7 +27,7 @@
 // This prevents scheduled jobs from creating more jobs.
 // ============================================================
 
-import { NerdAlertTool, NerdAlertResponse } from '../../types/response.types';
+import { NerdAlertTool, NerdAlertResponse, ToolExecContext } from '../../types/response.types';
 import {
   getAllJobs, getJob, createJob, updateJob, deleteJob, getRecentRuns
 } from '../../cron/store';
@@ -94,7 +94,7 @@ export const cronManagerTool: NerdAlertTool = {
     required: ['action'],
   },
 
-  async execute(params: Record<string, unknown>): Promise<NerdAlertResponse> {
+  async execute(params: Record<string, unknown>, exec?: ToolExecContext): Promise<NerdAlertResponse> {
 
     // ── Anti-recursion gate ─────────────────────────────────
     if (IS_CRON_CONTEXT) {
@@ -114,7 +114,7 @@ export const cronManagerTool: NerdAlertTool = {
     // in execute(). No config floor-raise (that would gate the reads too, and
     // recent_failures/list feed the cron intent-prefetch group at L1).
     const WRITE_ACTIONS = ['create', 'delete', 'pause', 'resume'];
-    const trustLevel = config.agent?.trust_level ?? 0;
+    const trustLevel = exec?.effectiveTrustCeiling ?? config.agent?.trust_level ?? 0;
     if (WRITE_ACTIONS.includes(action) && trustLevel < 2) {
       return err(
         `Managing scheduled jobs ("${action}") requires trust level 2; the current level is ${trustLevel}. ` +

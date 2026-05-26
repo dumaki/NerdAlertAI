@@ -29,7 +29,7 @@ import * as fs   from 'fs'
 import * as path from 'path'
 import * as os   from 'os'
 
-import { NerdAlertTool, NerdAlertResponse } from '../../types/response.types'
+import { NerdAlertTool, NerdAlertResponse, ToolExecContext } from '../../types/response.types'
 import { config } from '../../config/loader'
 import {
   indexDocument,
@@ -529,9 +529,9 @@ Stable across reindex of the same content.
     required: ['action'],
   },
 
-  async execute(params: Record<string, unknown>): Promise<NerdAlertResponse> {
+  async execute(params: Record<string, unknown>, exec?: ToolExecContext): Promise<NerdAlertResponse> {
     const action = params.action as string
-    const trustLevel = config.agent.trust_level
+    const trustLevel = exec?.effectiveTrustCeiling ?? config.agent.trust_level
 
     // Per-action trust gate. The compiled tool.trustLevel is the floor
     // (L1); forget bumps to L2 because it's destructive. Mirrors memory's
