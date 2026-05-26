@@ -1,6 +1,6 @@
 // ============================================================
 // src/server/model-add-route.ts — "Add Your Own Model" route
-// (v0.7 Level B, add-only; credential cut 3a)
+// (v0.7 Level B, add-only; credential cuts 3a + 3b)
 // ============================================================
 // One direct UI→server route that AUTHORS a new model registry row.
 // Like the Visibility / Tool-Toggle panels, this is NOT an agent-callable
@@ -18,17 +18,18 @@
 // ZERO new code. So adding a model is purely (1) write a config.yaml row
 // and (2) make it live in-memory. That is all this file does.
 //
-// CREDENTIAL CUT 3a — NO NEW SECURITY SURFACE
-// ─────────────────────────────────────────────────────────
-// v1 authors rows ONLY for the three providers whose credential is ALREADY
-// in security-routes.ts's ALLOWED + PROVIDER_PROBES: OpenAI, Groq,
-// OpenRouter. So:
-//   • the key is already accepted at /setup (ALLOWED unchanged),
-//   • the existing provider probe already validates it (PROVIDER_PROBES
-//     unchanged),
-//   • security-routes.ts is NOT touched.
-// Onboarding a brand-new provider stays a deliberate 2-line code change
-// (one ALLOWED + one PROVIDER_PROBES entry) — by design (3b, deferred).
+// CREDENTIAL CUTS 3a + 3b — FIXED ALLOWLIST, NO DYNAMIC REGISTRATION
+// ─────────────────────────────────────────────
+// Every provider here is a COMPILE-TIME allowlist entry — never arbitrary,
+// user-supplied credential registration. Two cuts share that floor:
+//   • 3a (OpenAI, Groq, OpenRouter): their credential was ALREADY in
+//     security-routes.ts's ALLOWED + PROVIDER_PROBES, so authoring a row
+//     touched NOTHING there — the key is accepted at /setup and the existing
+//     probe validates it, both unchanged.
+//   • 3b (xAI, v0.7 Task 2): the deliberate path for a brand-new provider —
+//     exactly the 2-line security-routes change the design always called for
+//     (one ALLOWED + one PROVIDER_PROBES entry), plus one PROVIDERS row here.
+//     Onboarding any further provider follows the same fixed pattern.
 //
 // THE config.yaml WRITE — INSERT A WHOLE NEW LIST ITEM
 // ─────────────────────────────────────────────────────────
@@ -59,14 +60,14 @@ import { listCredentials, getCredential }  from '../security/credential-store';
 import { initProviderKey }                 from '../core/llm-client';
 import type { ModelEntry }                 from '../types/response.types';
 
-// ── Provider catalogue (the 3a cut) ───────────────────────
+// ── Provider catalogue (the 3a + 3b cut) ──────────────────
 // Each entry maps a form `provider` choice to the fixed facts the operator
 // must NOT type: the credential-store name, the canonical base_url, and the
 // read-only probe (auth check) for that provider. The probe URLs MIRROR
 // security-routes.ts's PROVIDER_PROBES — if a provider ever changes its
-// endpoint, update BOTH. All three use Bearer auth. Anthropic is absent on
+// endpoint, update BOTH. All four use Bearer auth. Anthropic is absent on
 // purpose: transport 'anthropic' is special-cased and not user-authored.
-type ProviderKey = 'openai' | 'groq' | 'openrouter';
+type ProviderKey = 'openai' | 'groq' | 'openrouter' | 'xai';
 
 interface ProviderSpec {
   credential: string;   // → ModelEntry.requires_secret (already in ALLOWED)
@@ -78,10 +79,11 @@ const PROVIDERS: Record<ProviderKey, ProviderSpec> = {
   openai:     { credential: 'openai-key',     baseUrl: 'https://api.openai.com/v1',      probeUrl: 'https://api.openai.com/v1/models' },
   groq:       { credential: 'groq-key',       baseUrl: 'https://api.groq.com/openai/v1', probeUrl: 'https://api.groq.com/openai/v1/models' },
   openrouter: { credential: 'openrouter-key', baseUrl: 'https://openrouter.ai/api/v1',   probeUrl: 'https://openrouter.ai/api/v1/auth/key' },
+  xai:        { credential: 'xai-key',        baseUrl: 'https://api.x.ai/v1',            probeUrl: 'https://api.x.ai/v1/models' },
 };
 
 function isProviderKey(v: unknown): v is ProviderKey {
-  return v === 'openai' || v === 'groq' || v === 'openrouter';
+  return v === 'openai' || v === 'groq' || v === 'openrouter' || v === 'xai';
 }
 
 // ── Input validation ──────────────────────────────────────
@@ -115,9 +117,10 @@ function defaultDescription(toolLoop: boolean): string {
 }
 
 // ── Read-only provider probe (mirrors /api/setup/test/provider) ──
-// Reimplemented here (not imported) so security-routes.ts stays untouched
-// per the 3a promise. Reads the key from the credential store — never from
-// the request — and GETs an endpoint that requires it; any 2xx = valid.
+// Reimplemented here (not imported) to keep this route decoupled from
+// security-routes.ts internals. Reads the key from the credential store —
+// never from the request — and GETs an endpoint that requires it; any
+// 2xx = valid.
 async function probeProvider(spec: ProviderSpec): Promise<{ ok: boolean; error?: string }> {
   const key = await getCredential(spec.credential);
   if (!key) return { ok: false, error: 'not configured' };

@@ -5899,6 +5899,7 @@
             <option value="openai">OpenAI</option>
             <option value="groq">Groq</option>
             <option value="openrouter">OpenRouter</option>
+            <option value="xai">xAI (Grok)</option>
           </select>
         </label>
         <label style="display:flex;flex-direction:column;gap:3px;font-size:11px;opacity:0.8">
@@ -6048,8 +6049,9 @@
       openai:     'OpenAI model name, e.g. gpt-4o-mini',
       groq:       'Groq model name, e.g. llama-3.3-70b-versatile',
       openrouter: 'OpenRouter slug, e.g. meta-llama/llama-3.3-70b-instruct',
+      xai:        'xAI (Grok) model name, e.g. grok-4',
     };
-    const phs = { openai: 'gpt-4o-mini', groq: 'llama-3.3-70b-versatile', openrouter: 'meta-llama/llama-3.3-70b-instruct' };
+    const phs = { openai: 'gpt-4o-mini', groq: 'llama-3.3-70b-versatile', openrouter: 'meta-llama/llama-3.3-70b-instruct', xai: 'grok-4' };
     if (hint) hint.textContent = hints[v] || '';
     if (slug) slug.placeholder = phs[v] || '';
   }
