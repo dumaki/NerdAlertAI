@@ -1274,7 +1274,13 @@ export function mountUIRoutes(app: Express): void {
 
           prefetchResults = await prefetchTools(
             detectedGroups,
-            { userTrustLevel: trustLevel, modelLabel: llm.model, agentName },
+            // v0.7 Slice 4: thread the active model's trust ceiling into the
+            // prefetch broker calls too. prefetchTools passes this context
+            // straight to executeTool, so without it the prefetch path (the
+            // lane the weaker non-Anthropic models run on) was the one route
+            // that skipped the per-model cap. No-op at global L1; bites only
+            // once global trust rises above the model's ceiling.
+            { userTrustLevel: trustLevel, maxModelTrustLevel: getModelTrustCeiling(getActiveModel()), modelLabel: llm.model, agentName },
             safeMessage,
             historyTurns,
           );

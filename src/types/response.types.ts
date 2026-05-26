@@ -211,6 +211,18 @@ export interface ModelEntry {
   base_url?:        string;   // openai-compatible only; may contain ${ENV} / ${ENV:-default}
   requires_secret?: string;   // credential-store name; omitted = no key needed
   tool_loop:        boolean;  // native tool loop vs prefetch/pseudo narration
+  max_trust_level?: number;   // v0.7 Slice 4: per-model tool-call trust ceiling.
+                              // Caps the highest-trust tool this model may invoke
+                              // through the ReAct/prefetch loop, regardless of the
+                              // user's global trust level — the broker enforces
+                              // min(userTrustLevel, max_trust_level). Absent ⇒ defer
+                              // to getModelTrustCeiling()'s derived default
+                              // (anthropic ⇒ no cap; non-anthropic ⇒ L1). Strict-
+                              // superset: absent on every row + global L1 ⇒ identical
+                              // to today; the cap only bites once global trust rises
+                              // above a model's ceiling. Resolved in
+                              // getModelTrustCeiling() (model-capabilities.ts), which
+                              // prefers this field over the built-in capability map.
   context_window?:  number;   // reserved — length / cost warnings in later slices
   tpm_ceiling?:     number;   // v0.7 5f: per-minute token ceiling hint for the pre-flight
                               // budget guard. A learned value from the provider's

@@ -48,6 +48,8 @@
 // the dropdown currently exposes.
 // ============================================================
 
+import { getModel } from '../config/models';
+
 
 // ── The capability shape ─────────────────────────────────────
 //
@@ -228,7 +230,12 @@ export function getModelCapabilities(model: string): ModelCapabilities {
  *   1. Anthropic is the trusted reference path → never capped, even
  *      for an unlisted future Claude model. Hard-guarded here so the
  *      conservative L1 default below can't accidentally cap Claude.
- *   2. Otherwise defer to the capability map (an explicit per-model
+ *   2. An explicit max_trust_level on the model's config.yaml row
+ *      (ModelEntry) wins next — the BYOK source of truth, so an
+ *      operator-added model is capped from config without a code edit
+ *      here. This is the v0.7 Slice 4 graduation: the ceiling now lives
+ *      in declarative config, not only in the built-in map below.
+ *   3. Otherwise defer to the capability map (an explicit per-model
  *      value, or the conservative L1 default for unknown models).
  *
  * The model string is the FULL prefixed identifier (e.g.
@@ -238,6 +245,20 @@ export function getModelCapabilities(model: string): ModelCapabilities {
  */
 export function getModelTrustCeiling(model: string): number | undefined {
   if (model.startsWith('anthropic/')) return undefined;
+
+  // v0.7 Slice 4: a config-declared ceiling wins. A model authored via
+  // the "Add Your Own Model" panel (or any operator-edited config.yaml
+  // row) carries its ceiling on the ModelEntry — that's the BYOK source
+  // of truth, so a freshly-added model gets a cap from config without a
+  // code edit to the built-in map below.
+  const configured = getModel(model)?.max_trust_level;
+  if (typeof configured === 'number') return configured;
+
+  // No explicit config value → fall back to the built-in capability map
+  // (an explicit per-model entry, else the conservative L1 default for
+  // unknown non-Anthropic models). Behaviour-preserving when
+  // max_trust_level is absent everywhere — identical to the pre-Slice-4
+  // resolution.
   return getModelCapabilities(model).maxTrustLevel;
 }
 
