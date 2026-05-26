@@ -39,7 +39,7 @@
 
 import { randomUUID } from 'crypto';
 
-import { findTool, getAvailableTools } from '../tools/registry';
+import { findTool, getAvailableTools, effectiveTrustLevelOf } from '../tools/registry';
 import type { NerdAlertResponse, Source } from '../types/response.types';
 
 // ── Types ────────────────────────────────────────────────────
@@ -143,8 +143,17 @@ function checkTrust(call: BrokerToolCall, ctx: BrokerContext): string | null {
     return `Tool "${call.name}" not found in registry`;
   }
 
-  // Honor the per-tool minimum.
-  const required = tool.trustLevel ?? 0;
+  // The EFFECTIVE minimum trust for this tool: the config-resolved level
+  // from resolveToolPolicy (per-tool override -> group -> compiled floor,
+  // Math.max), NOT the raw compiled tool.trustLevel. v0.7 Slice 4 (item 4a)
+  // unifies both gates below on this value so a config floor-raise is
+  // honored by the user gate AND the per-model ceiling. effective is always
+  // >= the compiled floor, so switching to it can only ever deny MORE than
+  // the old compiled comparison, never less — outcome-neutral for any tool
+  // with no config raise, and the extra denials it produces are exactly the
+  // ones the `visible` check already caught. Falls back to the compiled
+  // floor if the lookup somehow misses (it can't: findTool returned a tool).
+  const required = effectiveTrustLevelOf(call.name) ?? (tool.trustLevel ?? 0);
   if (required > ctx.userTrustLevel) {
     return (
       `Tool "${call.name}" requires trust level ${required}; ` +
@@ -152,7 +161,9 @@ function checkTrust(call: BrokerToolCall, ctx: BrokerContext): string | null {
     );
   }
 
-  // Honor the per-model ceiling (v0.7 BYOK). Undefined = no cap.
+  // Honor the per-model ceiling (v0.7 BYOK). Undefined = no cap. Compared
+  // against the EFFECTIVE level too, so a config-raised tool above the
+  // model's ceiling is denied even when its compiled floor sits under it.
   if (
     typeof ctx.maxModelTrustLevel === 'number' &&
     required > ctx.maxModelTrustLevel
@@ -167,7 +178,9 @@ function checkTrust(call: BrokerToolCall, ctx: BrokerContext): string | null {
   // Also check that the tool is enabled at the user's current level
   // (config.yaml may disable individual tools even if trust permits).
   // getAvailableTools() already applies both checks; using it here
-  // keeps the broker's view consistent with the registry's view.
+  // keeps the broker's view consistent with the registry's view. With
+  // the effective-level unification above, this now primarily carries
+  // the ENABLED bit — the trust-floor aspect is already enforced.
   const visible = getAvailableTools().some((t) => t.name === call.name);
   if (!visible) {
     return `Tool "${call.name}" is disabled in config.yaml`;

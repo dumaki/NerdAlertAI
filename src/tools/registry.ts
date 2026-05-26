@@ -303,6 +303,25 @@ export function findEnabledTool(name: string): NerdAlertTool | undefined {
   return getAvailableTools().find(tool => tool.name === name);
 }
 
+// effectiveTrustLevelOf — the config-resolved minimum trust for ONE tool.
+//
+// Exposes resolveToolPolicy's effectiveMinTrustLevel (per-tool override ->
+// group -> compiled floor, combined with Math.max) to callers outside the
+// registry — specifically the permission-broker, which gates BOTH the user
+// trust level and the per-model trust ceiling against the EFFECTIVE level,
+// not the raw compiled tool.trustLevel. Without this, a config floor-raise
+// (tool_groups or a per-tool override) is invisible to the ceiling check.
+//
+// resolveToolPolicy stays private; this is the single sanctioned read of a
+// tool's effective floor from outside. Returns undefined when the name isn't
+// in the registry, so the broker can keep its "not found" branch distinct
+// from a real L0 tool.
+export function effectiveTrustLevelOf(name: string): number | undefined {
+  const tool = findTool(name);
+  if (!tool) return undefined;
+  return resolveToolPolicy(tool).effectiveMinTrustLevel;
+}
+
 export function logAvailableTools(): void {
   const available = getAvailableTools();
   if (available.length === 0) {
