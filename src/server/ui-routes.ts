@@ -80,6 +80,7 @@ import { mountDocumentsRoute }     from './documents-route';
 import { mountToolToggleRoute }    from './tool-toggle-route';
 import { mountModelVisibilityRoute } from './model-visibility-route';
 import { mountModelAddRoute }        from './model-add-route';
+import { mountModelRemoveRoute }     from './model-remove-route';
 import { resolveModelHidden }      from './model-visibility-overrides';
 import { mountSkillsRoute }        from './skills-route';
 import { createToolTurnObserver }  from '../skills/telemetry';
@@ -2022,5 +2023,10 @@ export function mountUIRoutes(app: Express): void {
   // module). Direct write route only; no agent path (P7). Strict-superset:
   // unused ⇒ no new rows ⇒ registry + dropdown identical to today.
   mountModelAddRoute(app);
+
+  // v0.7 Level B — "Remove a model". Same always-mounted rationale; deletes
+  // only user-authored rows (provenance-scoped), never a seed/curated row
+  // or the active model. No agent path (P7).
+  mountModelRemoveRoute(app);
 
 }

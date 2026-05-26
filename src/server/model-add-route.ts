@@ -164,6 +164,7 @@ function buildRowLines(entry: ModelEntry): string[] {
     `    base_url: "${entry.base_url}"`,
     `    requires_secret: ${entry.requires_secret}`,
     `    tool_loop: ${entry.tool_loop}`,
+    ...(entry.user_authored ? ['    user_authored: true'] : []),
   ];
 }
 
@@ -318,6 +319,7 @@ export function mountModelAddRoute(app: Express): void {
       base_url:        spec.baseUrl,
       requires_secret: spec.credential,
       tool_loop:       effectiveToolLoop,
+      user_authored:   true,
     };
 
     const written = writeNewModel(entry);

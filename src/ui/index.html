@@ -5981,10 +5981,15 @@
     const save  = isActive
       ? ''
       : `<button class="tools-save" title="Save as default" onclick="event.stopPropagation(); saveModelVisibility('${r.id}', ${r.hidden})">SAVE</button>`;
+    // REMOVE shows only on user-authored rows (provenance-scoped) that
+    // aren't the active model — mirrors the server's remove-route guards.
+    const remove = (r.userAuthored && !isActive)
+      ? `<button class="tools-save" title="Remove this model" onclick="event.stopPropagation(); removeModel('${r.id}')">REMOVE</button>`
+      : '';
     return `
       <div class="tools-row ${cls}" ${click}>
         <span class="tools-row-name">${escapeHTML(r.label)}${needs}${unsaved}</span>
-        <span class="tools-row-right">${save}<span class="tools-state">${stateLabel}</span></span>
+        <span class="tools-row-right">${save}${remove}<span class="tools-state">${stateLabel}</span></span>
       </div>`;
   }
 
@@ -6082,6 +6087,33 @@
     } catch (err) {
       setStatus('Add failed — see console.', false);
       console.warn('[Add Model] failed:', err);
+    }
+  }
+
+  // Remove a user-authored model (v0.7 Level B). Confirms, POSTs to
+  // /api/models/remove, then refreshes the panel + dropdown. Errors surface
+  // in the shared add-model status line. The server enforces the same
+  // provenance + active-model guards regardless of what the UI shows.
+  async function removeModel(id) {
+    const row  = MODELVIS_STATE && MODELVIS_STATE.models.find(m => m.id === id);
+    const name = row ? row.label : id;
+    const ok = await naConfirm(`Remove “${name}” permanently? This deletes the row from config.yaml. Your provider key in Setup is kept.`);
+    if (!ok) return;
+    const statusEl = document.getElementById('addmodel-status');
+    const setStatus = (msg, good) => { if (statusEl) { statusEl.textContent = msg; statusEl.style.color = good ? '#6c6' : '#e66'; } };
+    try {
+      const data = await naPost('/api/models/remove', { id });
+      if (!data || !data.ok) {
+        setStatus((data && data.error) || 'Remove failed.', false);
+        console.warn('[Model Remove] failed:', data && data.error);
+        return;
+      }
+      setStatus(`Removed “${name}”.`, true);
+      await loadModelVisibilityPanel();   // row leaves the panel
+      loadModels();                       // …and the topbar dropdown
+    } catch (err) {
+      setStatus('Remove failed — see console.', false);
+      console.warn('[Model Remove] failed:', err);
     }
   }
 

@@ -228,6 +228,12 @@ export interface ModelEntry {
                               // Resolved overlay-first (session) then this field (persisted)
                               // in server/model-visibility-overrides.ts.
   extra_headers?:   Record<string, string>; // may contain ${ENV}; e.g. OpenRouter referer/title
+  user_authored?:   boolean;  // v0.7 Level B: true ⇒ this row was authored via the
+                              // "Add Your Own Model" panel, so the panel may remove it.
+                              // Absent ⇒ seed/curated row: no Remove affordance and no
+                              // remove-route path (provenance-scoped deletion). Strict-
+                              // superset: absent on every pre-existing row ⇒ identical
+                              // behaviour to today.
 }
 
 // --- VOICE MODULE CONFIG ---

@@ -274,6 +274,7 @@ interface ModelVisibilityRow {
   isActive:        boolean;   // the model the agent is currently using
   group:           'anthropic' | 'hosted' | 'local';
   canSaveDefault:  boolean;
+  userAuthored:    boolean;   // v0.7 Level B: row authored via the add panel ⇒ removable here
 }
 
 interface ModelVisibilityState {
@@ -303,6 +304,7 @@ async function buildVisibilityState(): Promise<ModelVisibilityState> {
       isActive:        m.id === current,
       group,
       canSaveDefault:  true,
+      userAuthored:    m.user_authored ?? false,
     };
   });
 
