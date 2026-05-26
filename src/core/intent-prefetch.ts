@@ -174,7 +174,21 @@ const INTENT_MAP: Record<string, IntentGroup> = {
     // 'current time', and 'clock'. If "what's today's date" stops
     // resolving for a tester, add it back — but the cost on every
     // "X today" query is high.
-    keywords: ['time', 'date', 'what day', 'what time', 'current time', 'clock'],
+    //
+    // v0.7.x: added the year/month current-date phrasings. "What year
+    // is it?" / "what month is it?" matched NO keyword, skipped
+    // prefetch, and fell to the native Ollama tool loop — where Mistral
+    // called no get_datetime tool at all and hallucinated the year
+    // (Battery-D datetime-year, tool-loop path). Datetime-via-narration
+    // is reliable for Mistral (the 'date'/'time' fixtures pass), so the
+    // fix is to get year/month queries ONTO that path. The phrases are
+    // deliberately anchored ('what year is it', 'current year') rather
+    // than bare 'year'/'month': the datetime group is word-boundary
+    // matched, and bare 'year' would over-fire on historical ("what year
+    // did the moon landing happen") and possessive ("this year's budget")
+    // queries that must NOT pull a get_datetime prefetch.
+    keywords: ['time', 'date', 'what day', 'what time', 'current time', 'clock',
+               'what year is it', 'current year', 'what month is it', 'current month'],
     tools:    ['get_datetime'],
   },
 
