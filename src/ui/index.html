@@ -5252,6 +5252,7 @@
       title.textContent = 'MODEL VISIBILITY';
       body.innerHTML = getModelVisibilityPanelHTML();
       loadModelVisibilityPanel();
+      onAddModelProviderChange();   // init the add-model form's hint/placeholder
     }
   }
 
@@ -5883,6 +5884,43 @@
         <button class="settings-action-btn" onclick="resetModelVisibility()">RESET SESSION TOGGLES</button>
       </div>
       <div id="modelvis-rows"><div class="tools-loading">LOADING MODELS…</div></div>
+
+      <div class="tools-section-label" style="margin-top:14px">ADD A MODEL</div>
+      <div class="tools-panel-intro" style="margin-top:4px">
+        Add a model from a provider whose key you've set in Setup
+        (OpenAI, Groq, or OpenRouter). It appears in the dropdown
+        immediately and is saved to config.yaml.
+      </div>
+      <div id="addmodel-form" style="padding:4px 2px 2px;display:flex;flex-direction:column;gap:8px">
+        <label style="display:flex;flex-direction:column;gap:3px;font-size:11px;opacity:0.8">
+          PROVIDER
+          <select id="addmodel-provider" onchange="onAddModelProviderChange()"
+                  style="background:#111;color:#ddd;border:1px solid #333;padding:5px;border-radius:4px">
+            <option value="openai">OpenAI</option>
+            <option value="groq">Groq</option>
+            <option value="openrouter">OpenRouter</option>
+          </select>
+        </label>
+        <label style="display:flex;flex-direction:column;gap:3px;font-size:11px;opacity:0.8">
+          MODEL SLUG
+          <input id="addmodel-slug" type="text" autocomplete="off"
+                 style="background:#111;color:#ddd;border:1px solid #333;padding:5px;border-radius:4px">
+          <span id="addmodel-slug-hint" style="opacity:0.5;font-size:10px"></span>
+        </label>
+        <label style="display:flex;flex-direction:column;gap:3px;font-size:11px;opacity:0.8">
+          LABEL
+          <input id="addmodel-label" type="text" maxlength="60" autocomplete="off"
+                 style="background:#111;color:#ddd;border:1px solid #333;padding:5px;border-radius:4px">
+        </label>
+        <label id="addmodel-toolloop-wrap" style="display:none;align-items:center;gap:6px;font-size:11px;opacity:0.8">
+          <input id="addmodel-toolloop" type="checkbox" checked>
+          Model supports native tool calling
+        </label>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="settings-action-btn" onclick="submitAddModel()">ADD MODEL</button>
+          <span id="addmodel-status" style="font-size:11px"></span>
+        </div>
+      </div>
     `;
   }
 
@@ -5983,6 +6021,68 @@
       const data = await naPost('/api/models/visibility/reset', {});
       if (!modelVisApplyState(data)) console.warn('[Model Visibility] reset failed');
     } catch (err) { console.warn('[Model Visibility] reset failed:', err); }
+  }
+
+  // ── Add-model form (v0.7 Level B) ──────────────────
+  // Authors a new registry row via POST /api/models/add. The provider
+  // picker is limited to the three already-wired BYOK credentials (3a),
+  // so no new security surface. tool_loop is only meaningful for
+  // OpenRouter (OpenAI/Groq are always native), so its checkbox shows
+  // only then. On success we refresh the panel + the dropdown so the new
+  // model is immediately selectable — no restart.
+  function onAddModelProviderChange() {
+    const p    = document.getElementById('addmodel-provider');
+    const wrap = document.getElementById('addmodel-toolloop-wrap');
+    const hint = document.getElementById('addmodel-slug-hint');
+    const slug = document.getElementById('addmodel-slug');
+    if (!p) return;
+    const v = p.value;
+    // OpenAI/Groq are always native; only OpenRouter offers the choice.
+    if (wrap) wrap.style.display = (v === 'openrouter') ? 'flex' : 'none';
+    const hints = {
+      openai:     'OpenAI model name, e.g. gpt-4o-mini',
+      groq:       'Groq model name, e.g. llama-3.3-70b-versatile',
+      openrouter: 'OpenRouter slug, e.g. meta-llama/llama-3.3-70b-instruct',
+    };
+    const phs = { openai: 'gpt-4o-mini', groq: 'llama-3.3-70b-versatile', openrouter: 'meta-llama/llama-3.3-70b-instruct' };
+    if (hint) hint.textContent = hints[v] || '';
+    if (slug) slug.placeholder = phs[v] || '';
+  }
+
+  async function submitAddModel() {
+    const statusEl = document.getElementById('addmodel-status');
+    const setStatus = (msg, ok) => { if (statusEl) { statusEl.textContent = msg; statusEl.style.color = ok ? '#6c6' : '#e66'; } };
+
+    const provider = document.getElementById('addmodel-provider').value;
+    const slug     = document.getElementById('addmodel-slug').value.trim();
+    const label    = document.getElementById('addmodel-label').value.trim();
+    const toolLoop = (provider === 'openrouter')
+      ? document.getElementById('addmodel-toolloop').checked
+      : true;
+
+    if (!slug)  { setStatus('Enter a model slug.', false); return; }
+    if (!label) { setStatus('Enter a label.', false); return; }
+
+    setStatus('Validating…', true);
+    try {
+      const data = await naPost('/api/models/add', { provider, slug, label, toolLoop });
+      if (!data || !data.ok) {
+        if (data && data.needsCredential) {
+          setStatus(`Add the ${data.needsCredential} key in Setup first, then retry.`, false);
+        } else {
+          setStatus((data && data.error) || 'Add failed.', false);
+        }
+        return;
+      }
+      setStatus(`Added “${data.label}”.`, true);
+      document.getElementById('addmodel-slug').value  = '';
+      document.getElementById('addmodel-label').value = '';
+      await loadModelVisibilityPanel();   // new row appears in the panel
+      loadModels();                       // …and in the topbar dropdown
+    } catch (err) {
+      setStatus('Add failed — see console.', false);
+      console.warn('[Add Model] failed:', err);
+    }
   }
 
 

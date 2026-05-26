@@ -79,6 +79,7 @@ import { mountMemoryCardsRoute }   from './memory-cards-route';
 import { mountDocumentsRoute }     from './documents-route';
 import { mountToolToggleRoute }    from './tool-toggle-route';
 import { mountModelVisibilityRoute } from './model-visibility-route';
+import { mountModelAddRoute }        from './model-add-route';
 import { resolveModelHidden }      from './model-visibility-overrides';
 import { mountSkillsRoute }        from './skills-route';
 import { createToolTurnObserver }  from '../skills/telemetry';
@@ -2015,5 +2016,11 @@ export function mountUIRoutes(app: Express): void {
   // (P7). Strict-superset: with no overlay and no persisted `hidden`
   // flags, GET /api/models returns every model exactly as before.
   mountModelVisibilityRoute(app);
+
+  // v0.7 Level B — "Add Your Own Model". Always mounted, same rationale
+  // as the panels above (it AUTHORS registry rows, not a removable
+  // module). Direct write route only; no agent path (P7). Strict-superset:
+  // unused ⇒ no new rows ⇒ registry + dropdown identical to today.
+  mountModelAddRoute(app);
 
 }
