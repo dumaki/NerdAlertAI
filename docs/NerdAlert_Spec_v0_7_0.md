@@ -34,8 +34,12 @@ Landed (all on `origin/dev`, `tsc`-clean, Ben-tested):
   `29ba1a8` (capped tools filtered from the model-visible set).
 - **Task 2 — xAI (Grok) direct BYOK:** `a03d7e0`.
 
-**Outstanding 0.7.x:** Task 3 (transport-refactor cleanup) — behaviour-preserving
-only; deferred. The `experimental.native_tools` flag (§9.3) remains until then.
+**0.7.x status:** Task 3 (transport cleanup) shipped: the
+`experimental.native_tools` spike flag is retired. Its only live effects were
+already obsolete - native OpenRouter routes via the `hosted` path, and the flag
+defaulted off so its OpenRouter-native branch was unreachable. The flag's
+*skip-prefetch-for-`tool_loop`* idea was a genuine behaviour change (it moves
+Mistral off the prefetch path) and stays deferred to a future Battery-D sweep.
 
 ---
 
@@ -149,9 +153,11 @@ Per-model `tool_loop` selects native loop vs prefetch path. `system_role`
 under on openai-compatible transports (defaults to `'system'`; OpenAI o-series /
 GPT-5 prefer `'developer'`).
 
-**§9.3 note:** `experimental.native_tools` remains as documented in v0.6.10 (default
-false, inert when off). Its retirement into permanent per-model `tool_loop`
-behaviour is **Task 3** (transport cleanup), not yet shipped.
+**§9.3 note:** `experimental.native_tools` is now **retired**. Native OpenRouter is reached via the `hosted` path (a
+`tool_loop: true` openai-compatible row resolves to `handleHostedToolStream`),
+which superseded the flag's OpenRouter-native branch. With the flag gone, Ollama
+and `tool_loop:false` OpenRouter keep their prefetch/pseudo behaviour unchanged;
+the flag's skip-prefetch semantics were **not** adopted (deferred).
 
 ---
 
@@ -203,10 +209,11 @@ edit-branch prune.
 
 **§28.2 v0.7 — substantially delivered:** transport refactor to two types; per-model
 `tool_loop`; BYOK via `/setup`; Add Your Own Model (Level A + B); per-model
-`max_trust_level`; direct xAI BYOK. **Remaining 0.7.x:** Task 3 transport-refactor
-cleanup — retire `experimental.native_tools` into per-model behaviour and tidy
-`resolveProvider`'s four classes toward the clean two-transport model.
-**Behaviour-preserving only**; revert on any routing regression.
+`max_trust_level`; direct xAI BYOK. Task 3 transport cleanup shipped: retire the `experimental.native_tools` flag
+and document `resolveProvider` as the two-transport model. The four routing
+classes were **not** collapsed (`ollama` keeps its keyless-local +
+capability-cache path). **Behaviour-preserving**; the flag's skip-prefetch
+semantics were deferred, not adopted.
 
 **§28.3 hygiene:** this document promotes the v0.7 design out of the
 `llm-client.ts` comment block into `docs/`. The `heartbeat.enabled` /
