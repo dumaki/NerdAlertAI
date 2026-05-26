@@ -175,7 +175,6 @@ export interface AgentConfig {
   documents?: DocumentsConfig; // optional — absent / disabled = tool hidden, no chunk store
   skills?: SkillsConfig;       // optional: absent/disabled = no seed, no skills panel
   safety?: SafetyConfig;       // optional: absent/disabled = no snapshots; destructive ops unchanged
-  experimental?: ExperimentalConfig; // optional: spike flags; absent = all off
   models?: ModelEntry[];     // v0.7 Slice 5a: declarative model registry (below).
                              // Absent = empty registry, so model-switching has
                              // nothing to allow. Core config, not a removable
@@ -387,20 +386,4 @@ export interface SnapshotRetentionConfig {
 
 export interface GitSafetyConfig {
   enabled: boolean;
-}
-
-// --- EXPERIMENTAL CONFIG (spike flags) ---
-// Short-lived feature flags for in-flight experiments. Everything here
-// defaults OFF (absent block = all false) so a config without an
-// `experimental:` section behaves exactly as before — strict-superset.
-//
-// native_tools (v0.7 spike): when true, OpenRouter models route through
-// the native OpenAI-compatible tool loop (runOpenAIAdapter via
-// handleOpenRouterToolStream) instead of the pseudo-tool XML protocol,
-// and skip intent-prefetch so the loop gets a clean shot at the question
-// — same shape as the Anthropic path. Lets Battery D measure native vs.
-// pseudo head-to-head. Graduates into per-model transport config in v0.7
-// proper; this flag goes away then.
-export interface ExperimentalConfig {
-  native_tools?: boolean;
 }

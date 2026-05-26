@@ -35,7 +35,6 @@ import {
   setActiveModel,
   streamOllama,
   streamOpenRouter,
-  resolveOpenRouterKey,
   type ORMessage,
   type OpenAIContentPart,
 } from '../core/llm-client';
@@ -95,7 +94,6 @@ import { runPseudoToolAdapter } from '../core/event-adapter-pseudo';
 import {
   runOpenAIAdapter,
   buildOllamaTransport,
-  buildOpenRouterTransport,
   buildTransportFromRegistry,
   ToolCapabilityError,
 } from '../core/event-adapter-openai';
@@ -614,127 +612,13 @@ async function handlePseudoToolStream(
   void dedupSources(sourceSink);
 }
 
-// ── OpenRouter OpenAI-native streaming handler — v0.7 spike (flag-gated) ──
-//
-// Routes OpenRouter models (Nemotron today) through the SAME native
-// OpenAI-compatible tool loop the Ollama path uses (runOpenAIAdapter),
-// instead of the pseudo-tool XML protocol. Reached ONLY when
-// experimental.native_tools is on (see the /chat/stream dispatch); flag
-// off, OpenRouter stays on handlePseudoToolStream and this function is
-// never called — strict-superset preserved.
-//
-// Differs from handleOllamaStream in two deliberate ways:
-//   - the transport is buildOpenRouterTransport() with the OpenRouter key
-//     INJECTED. buildOpenRouterTransport reads process.env.OPENROUTER_API_KEY,
-//     which is empty in this app (the key lives in the OS keychain), so we
-//     resolve it the keychain-backed way (resolveOpenRouterKey, the same
-//     path streamOpenRouter uses) and set transport.auth ourselves.
-//   - the model string is passed WHOLE — OpenRouter wants the full
-//     org/model path; only the ollama/ prefix gets stripped (elsewhere).
-//
-// AUTO-FALLBACK: if the model/tier rejects the tools parameter
-// (ToolCapabilityError), fall back to the pseudo-tool adapter on the same
-// response — the same safety net handleOllamaStream uses for un-flagged
-// Ollama models. Belt-and-braces for OpenRouter's free tier.
-async function handleOpenRouterToolStream(
-  res:             Response,
-  systemPrompt:    string,
-  initialMessages: Anthropic.MessageParam[],
-  prefetchSources: Source[],
-  trustLevel:      number,
-  agentName:       string,
-  telemetry:       ((event: AgentEvent) => void) | undefined,
-): Promise<void> {
-
-  const llm = getLLMConfig();
-
-  // OpenRouter keeps secrets in the credential store, not .env, so
-  // buildOpenRouterTransport()'s process.env read comes back empty.
-  // Resolve the key the keychain-backed way and inject it.
-  const transport = buildOpenRouterTransport();
-  const orKey = await resolveOpenRouterKey();
-  if (orKey) {
-    transport.auth = { type: 'bearer', token: orKey };
-  }
-
-  const orMessages: ORMessage[] = convertHistoryForOpenAI(initialMessages);
-
-  const sourceSink: Source[] = [...prefetchSources];
-
-  const emit = buildSSEBridge(res, {
-    onEvent: (event: AgentEvent) => {
-      if (event.kind === 'tool_result' && event.sources?.length) {
-        sourceSink.push(...event.sources);
-      }
-      telemetry?.(event);
-    },
-  });
-
-  const availableTools = getModelVisibleTools(getModelTrustCeiling(getActiveModel()));
-  const openAITools = toOpenAIFormat(availableTools);
-
-  const brokerContext: BrokerContext = {
-    userTrustLevel: trustLevel,
-    maxModelTrustLevel: getModelTrustCeiling(getActiveModel()),
-    modelLabel: llm.model,
-    agentName,
-  };
-
-  try {
-    await runOpenAIAdapter(
-      {
-        transport,
-        model: llm.model,   // full OpenRouter path — no prefix strip
-        systemPrompt,
-        initialMessages: orMessages,
-        tools: openAITools,
-        brokerContext,
-      },
-      emit,
-    );
-  } catch (err: unknown) {
-    // Tools rejected (e.g. a free-tier model that doesn't honor the
-    // parameter) → fall back to pseudo-tool on the same response, exactly
-    // as the Ollama path does for un-flagged models.
-    if (err instanceof ToolCapabilityError) {
-      console.log(
-        `[capability] ${llm.model} (OpenRouter) rejected native tools; ` +
-        `falling back to pseudo-tool adapter`,
-      );
-      try {
-        await runPseudoToolAdapter(
-          {
-            transport: 'openrouter',
-            model: llm.model,
-            systemPrompt,
-            initialMessages: orMessages,
-            availableTools,
-            brokerContext,
-          },
-          emit,
-        );
-      } catch (fallbackErr: unknown) {
-        const fbMessage = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-        sseEvent(res, 'error', { message: fbMessage });
-      }
-    } else {
-      const message = err instanceof Error ? err.message : String(err);
-      sseEvent(res, 'error', { message });
-    }
-  } finally {
-    res.end();
-  }
-
-  void dedupSources(sourceSink);
-}
-
 // ── Hosted native streaming handler ─ v0.7 Slice 5 ───────────
 //
 // Routes any HOSTED openai-compatible provider (Groq, OpenAI today;
 // Together / DeepSeek tomorrow) through the native OpenAI-compatible
-// tool loop (runOpenAIAdapter), the same adapter the Ollama and
-// OpenRouter-native paths use. Hosted providers are NATIVE-ALWAYS: no
-// prefetch, no narration, no experimental flag — they're hosted
+// tool loop (runOpenAIAdapter), the same adapter the Ollama path
+// uses. Hosted providers are NATIVE-ALWAYS: no
+// prefetch, no narration — they're hosted
 // tool-capable endpoints, so the loop is their only mode.
 //
 // What makes this generic: the transport comes from the declarative
@@ -1229,28 +1113,12 @@ export function mountUIRoutes(app: Express): void {
 
       // ── Run prefetch for non-Anthropic providers ──────────
       //
-      // Both Ollama and OpenRouter benefit from prefetch. Ollama
-      // also supports native tool calling for follow-up calls,
-      // but the prefetch primes commonly-asked queries with real
-      // data so the first response is fast and accurate.
-
-      // v0.7 spike: when experimental.native_tools is on, native-capable
-      // providers SKIP intent-prefetch so the native tool loop gets a clean
-      // shot at the question (option 1b — same shape as the Anthropic path):
-      //   OpenRouter → pseudo-tool flips to the native loop
-      //                (handleOpenRouterToolStream), so nativeOR ALSO needs
-      //                its own dispatch branch below.
-      //   Ollama     → already native (handleOllamaStream); skipping prefetch
-      //                alone drops it onto that existing no-prefetch branch,
-      //                so nativeOllama needs NO new branch — just this
-      //                prefetch exclusion here.
-      // Excluding both from needsPrefetch is what gives Battery D a clean
-      // native-vs-pseudo (and, for Ollama, native-vs-narration) comparison;
-      // with prefetch still firing, narration would mask the loop's behavior.
-      // Flag off → both false → unchanged.
-      const nativeOR = config.experimental?.native_tools === true && llm.provider === 'openrouter';
-      const nativeOllama = config.experimental?.native_tools === true && llm.provider === 'ollama';
-      const needsPrefetch = (llm.provider === 'openrouter' || llm.provider === 'ollama') && !nativeOR && !nativeOllama;
+      // Both Ollama and OpenRouter run on the prefetch path: prefetch
+      // primes commonly-asked queries with real data so the first
+      // response is fast and accurate. The native-always providers
+      // ('anthropic', 'hosted') are not in this set, so they never
+      // prefetch - they drive their own native tool loop.
+      const needsPrefetch = llm.provider === 'openrouter' || llm.provider === 'ollama';
 
       let enrichedPrompt = systemPrompt;
       const prefetchSources: Source[] = [];
@@ -1450,20 +1318,11 @@ export function mountUIRoutes(app: Express): void {
         // excludes everything but ollama/openrouter), so there's no
         // narration to consider — straight into the registry-driven native
         // tool loop with the full reasoning prompt, same call shape as the
-        // Anthropic branch. Placed before the nativeOR / shouldNarrate
-        // branches so a hosted provider can never fall into the narration
+        // Anthropic branch. Placed before the shouldNarrate
+        // branch so a hosted provider can never fall into the narration
         // path. The handler is registry-keyed, so every hosted provider
         // (current and future) shares this one branch.
         await handleHostedToolStream(res, systemPromptWithSkills, messages, trustLevel, agentName, telemetry);
-      } else if (nativeOR) {
-        // v0.7 spike (flag-gated): OpenRouter through the native tool loop.
-        // nativeOR was excluded from needsPrefetch above, so there's no
-        // prefetch/narration to consider here — straight into the loop with
-        // the full reasoning prompt and empty sources, same call shape as
-        // the Anthropic branch. Reached only when experimental.native_tools
-        // is true; flag off, this branch is unreachable and OpenRouter falls
-        // through to handlePseudoToolStream exactly as before.
-        await handleOpenRouterToolStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry);
       } else if (shouldNarrate) {
         const outcome = await handleNarrationStream(
           res,
