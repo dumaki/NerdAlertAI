@@ -5,19 +5,25 @@
 // Implements NerdAlertTool so the ReAct loop can call Gmail
 // the same way it calls memory or datetime — via the registry.
 //
-// Trust levels:
-//   L1 — read-only: list, search, fetch, triage, subjects
-//   L2 — write: mark-read, move, snooze, draft, reply-draft
-//   L3 — send / cleanup: sendDraft, executePromoCleanup
-//        (these require approved:true in the payload AND
-//         the current trust level to be at least L3)
+// Trust levels (enforced as of the v0.8 L2 re-level):
+//   L1 — read-only: list, search, fetch, triage, mailboxes, test,
+//        snooze-list. Compiled floor is L1.
+//   L2 — lesser writes: mark-read, move, draft, reply-draft, snooze,
+//        snooze-clear. Gated per-action INSIDE execute() (same pattern as
+//        cron_manager / documents.forget), honoring the effective trust
+//        ceiling (1a) so a capped model is denied exactly as a tool-level
+//        L2 floor would. The compiled floor stays L1 so reads work.
+//   L3 — send / cleanup: MOVED OUT to the dedicated gmail_send and
+//        gmail_cleanup tools (compiled trustLevel: 3). The broker and the
+//        per-model ceiling enforce those natively; getModelVisibleTools
+//        hides them from capped models. They are no longer actions here.
 //
-// Approval gates are enforced in the engine functions themselves
-// (sendDraft, executePromoCleanup both check approved:true).
-// The trust level gate in the registry provides a second layer.
+// The approved:true two-step still lives in the engine functions
+// (sendDraft / executePromoCleanup) and now backs gmail_send / gmail_cleanup.
 // ============================================================
 
-import { NerdAlertTool, NerdAlertResponse } from '../../types/response.types'
+import { NerdAlertTool, NerdAlertResponse, ToolExecContext } from '../../types/response.types'
+import { config } from '../../config/loader'
 import {
   isGmailConfigured,
   testConfig,
@@ -30,15 +36,13 @@ import {
   moveMessage,
   createDraft,
   createReplyDraft,
-  sendDraft,
-  executePromoCleanup,
 } from '../../gmail/client'
 import { snoozeMessage, listSnoozed, clearSnooze } from '../../gmail/snooze'
 
 const gmailTool: NerdAlertTool = {
   name:       'gmail',
   description: `Access and manage Gmail. Actions:
-'triage'         — summarize what's in the inbox and suggest cleanup actions.
+'triage'         — summarize what's in the inbox and suggest cleanup actions (read-only; does not move anything).
 'list'           — list recent messages. Optional: mailbox, limit, unread.
 'search'         — search messages. Optional: from, subject, since, before, unread.
 'fetch'          — fetch full message body and attachments by uid.
@@ -46,13 +50,12 @@ const gmailTool: NerdAlertTool = {
 'move'           — move a message to a different mailbox by uid.
 'draft'          — compose a new draft for review. Requires: to, subject, body.
 'reply-draft'    — compose a reply draft for review. Requires: uid of original message.
-'send'           — send a draft. Requires approved:true after user confirms.
-'cleanup'        — execute promo cleanup (move coupons/vinyl/review). Requires approved:true.
 'snooze'         — snooze a message. Requires: uid. Optional: hours.
 'snooze-list'    — list all active snoozed messages.
 'snooze-clear'   — clear a snooze by uid.
 'mailboxes'      — list all mailboxes/folders.
 'test'           — test IMAP and SMTP connectivity.
+To actually SEND a drafted message, use the separate 'gmail_send' tool; to run promotional cleanup that MOVES messages, use 'gmail_cleanup'. Both require elevated trust.
 Respond with a concise summary of results. Do not repeat raw message content verbatim.`,
 
   trustLevel: 1,
@@ -64,7 +67,7 @@ Respond with a concise summary of results. Do not repeat raw message content ver
         type: 'string',
         enum: [
           'triage', 'list', 'search', 'fetch', 'mark-read', 'move',
-          'draft', 'reply-draft', 'send', 'cleanup',
+          'draft', 'reply-draft',
           'snooze', 'snooze-list', 'snooze-clear',
           'mailboxes', 'test',
         ],
@@ -142,7 +145,7 @@ Respond with a concise summary of results. Do not repeat raw message content ver
     required: ['action'],
   },
 
-  async execute(params: Record<string, unknown>): Promise<NerdAlertResponse> {
+  async execute(params: Record<string, unknown>, exec?: ToolExecContext): Promise<NerdAlertResponse> {
     const action = params.action as string
 
     // ── Not configured check ──────────────────────────────────────────────────
@@ -160,6 +163,30 @@ Respond with a concise summary of results. Do not repeat raw message content ver
         ].join('\n'),
         metadata: { title: 'Gmail not configured', sources: [] },
       }
+    }
+
+    // ── Per-action trust gate (v0.8 L2 re-level) ──────────
+    // Compiled tool.trustLevel is the L1 floor (reads + the not-configured
+    // prompt). Actions that mutate mailbox state — marking read, moving,
+    // drafting, replying, snoozing — require L2. Same posture as cron_manager
+    // and documents.forget: the floor stays L1, the write is gated here in
+    // execute(). Reads stay usable at L1.
+    //
+    // Honors the effective trust ceiling (1a): exec.effectiveTrustCeiling is
+    // min(global trust, the active model's max_trust_level), so a capped BYOK
+    // model is denied an L2 write exactly as a tool-level L2 floor would.
+    // Falls back to global trust for non-broker/direct callers.
+    //
+    // The two genuinely dangerous writes (send, cleanup) are NOT gated here
+    // — they moved to the dedicated L3 gmail_send / gmail_cleanup tools.
+    const WRITE_ACTIONS = ['mark-read', 'move', 'draft', 'reply-draft', 'snooze', 'snooze-clear']
+    const trustLevel = exec?.effectiveTrustCeiling ?? config.agent?.trust_level ?? 0
+    if (WRITE_ACTIONS.includes(action) && trustLevel < 2) {
+      return err(
+        `Gmail "${action}" requires trust level 2; the current level is ${trustLevel}. ` +
+        `Reading mail (list, search, fetch, triage, mailboxes) stays available at level 1. ` +
+        `Sending email and promotional cleanup are separate tools that require level 3.`
+      )
     }
 
     try {
@@ -282,27 +309,7 @@ Respond with a concise summary of results. Do not repeat raw message content ver
           )
         }
 
-        // ── SEND / CLEANUP (L3) ───────────────────────────────────────────
-
-        case 'send': {
-          const result = await sendDraft(undefined, params)
-          if (!result.ok && (result as any).approvalRequired) {
-            return ok('Approval required', 'This message has not been sent. Confirm with approved: true to proceed.')
-          }
-          return ok('Message sent', `Sent to ${(result as any).sent?.to}. Message ID: ${(result as any).sent?.messageId}`)
-        }
-
-        case 'cleanup': {
-          const result = await executePromoCleanup(undefined, params)
-          if (!result.ok && (result as any).approvalRequired) {
-            return ok('Approval required', 'Cleanup has not run. Confirm with approved: true to proceed.')
-          }
-          const s = (result as any).summary ?? {}
-          return ok(
-            'Cleanup complete',
-            `Coupons: ${s.couponsMoved} moved | Vinyl: ${s.vinylMoved} moved | Review: ${s.reviewMoved} moved | Failures: ${s.failures}`
-          )
-        }
+        // ── SEND / CLEANUP moved to gmail_send / gmail_cleanup tools (L3) ───────────────────────────────────────────
 
         // ── SNOOZE ────────────────────────────────────────────────────────
 
