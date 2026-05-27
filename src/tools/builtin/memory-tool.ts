@@ -4,10 +4,16 @@
 // Implements the NerdAlertTool interface so the ReAct loop can call memory
 // operations the same way it calls any other tool — via the registry.
 //
-// Trust level: L1 (read) / L2 (write)
-//   - search and recent are L1 — read-only, no side effects
-//   - capture and supersede are L2 — write operations that modify stored state
-//   - sweep is L2 — maintenance write
+// Trust levels (enforced as of the v0.8 L2 re-level):
+//   - Reads (search, recent, context, subjects, count) are L1 — no side effects.
+//   - Additive writes (capture, capture_batch) stay L1 — recoverable via
+//     supersede/decay, and capture is the backbone of capture-on-prefetch
+//     ("remember that X" on the narration path), which a capped model runs
+//     at an effective L1 ceiling. Gating capture would break that.
+//   - Mutating/maintenance writes (supersede, sweep) are gated to L2
+//     per-action INSIDE execute() (same pattern as cron_manager and
+//     gmail / documents.forget), honoring the effective trust ceiling (1a).
+//     The compiled floor stays L1 so reads + captures keep working.
 //
 // Exposed operations (via the 'action' parameter):
 //   search    — keyword search across memory
@@ -19,7 +25,8 @@
 //   count     — quick stats
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { NerdAlertTool, NerdAlertResponse } from '../../types/response.types'
+import { NerdAlertTool, NerdAlertResponse, ToolExecContext } from '../../types/response.types'
+import { config } from '../../config/loader'
 import {
   capture,
   captureBatch,
@@ -47,7 +54,7 @@ Use 'subjects' to see what topic areas have stored memory.
 Use 'sweep' to run decay maintenance (operator use only).
 Use 'count' to check memory database statistics.`,
 
-  trustLevel: 1,  // read operations; write operations checked inside execute()
+  trustLevel: 1,  // L1 floor (reads + additive captures); supersede/sweep gated to L2 per-action in execute()
 
   parameters: {
     type: 'object',
@@ -108,11 +115,31 @@ Use 'count' to check memory database statistics.`,
 
   // ── execute() ──────────────────────────────────────────────────────────────
   // Routes the action parameter to the correct engine function.
-  // Write operations (capture, supersede, sweep) require trustLevel 2 in config.
-  // The registry enforces trust gating before execute() is called,
-  // but we log write intent here for the audit trail regardless.
-  async execute(params: Record<string, unknown>): Promise<NerdAlertResponse> {
+  // Reads run at the L1 compiled floor. The per-action gate below refuses the
+  // mutating/maintenance writes (supersede, sweep) below L2; additive captures
+  // (capture, capture_batch) are intentionally NOT gated, so capture-on-prefetch
+  // keeps working at L1.
+  async execute(params: Record<string, unknown>, exec?: ToolExecContext): Promise<NerdAlertResponse> {
     const action = params.action as string
+
+    // ── Per-action trust gate (v0.8 L2 re-level) ──────────
+    // Mutating/maintenance writes carry real blast radius: supersede overwrites
+    // an existing record, sweep bulk-archives via decay. They require L2 and are
+    // never on the prefetch path. Additive captures (capture, capture_batch) are
+    // deliberately absent here — they stay at the L1 floor so capture-on-prefetch
+    // ("remember that X") still commits for a capped model running at an effective
+    // L1 ceiling. Same posture as cron_manager / gmail / documents.forget: the
+    // floor stays L1, the write is gated here. Honors the 1a effective ceiling
+    // (min of global trust and the model cap); falls back to global trust for
+    // non-broker callers.
+    const WRITE_ACTIONS = ['supersede', 'sweep']
+    const trustLevel = exec?.effectiveTrustCeiling ?? config.agent?.trust_level ?? 0
+    if (WRITE_ACTIONS.includes(action) && trustLevel < 2) {
+      return errorResponse(
+        `Memory "${action}" requires trust level 2; the current level is ${trustLevel}. ` +
+        `Reading memory and capturing new records stay available at level 1.`
+      )
+    }
 
     try {
       switch (action) {
@@ -209,7 +236,7 @@ Use 'count' to check memory database statistics.`,
           }
         }
 
-        // ── WRITE OPERATIONS (L2) ───────────────────────────────────────────
+        // ── WRITE OPERATIONS (capture/capture_batch L1; supersede/sweep L2) ───────────────────────────────────────────
 
         case 'capture': {
           if (!params.subject) {
