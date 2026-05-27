@@ -43,6 +43,17 @@
 // and fires via Telegram — both L1 surfaces in the existing
 // trust ladder. No external system access beyond Telegram,
 // which is itself L1.
+//
+// L1 is a DELIBERATE choice under the v0.8 write-gating principle,
+// not an un-gated oversight (cf. the audit-sweep trap of comments
+// claiming a level the code didn't enforce). set/cancel are gated
+// on the additive-vs-mutating axis, not the word "write": set is
+// additive (a self-contained future fire, the reminder analogue of
+// memory.capture), and cancel only drops a still-pending one-shot —
+// neither deletes data nor touches a security surface. So both stay
+// L1 by design. If reminders ever gain a destructive/bulk action
+// (e.g. clear-all), THAT earns an L2 per-action gate like
+// cron_manager / memory.supersede; set/cancel do not.
 // ============================================================
 
 import { NerdAlertTool, NerdAlertResponse } from '../../types/response.types';

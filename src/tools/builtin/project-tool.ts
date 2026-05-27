@@ -8,10 +8,16 @@
 //     are scoped to ~/.nerdalert/projects/<name>/ — a directory
 //     the user has consciously populated (drag-and-drop in the UI,
 //     or files placed there manually).
-//   - Three actions, all L1 read:
-//       projects — list all top-level project directories.
-//       list     — list files inside one project (depth-capped).
-//       read     — return the contents of one file (size-capped).
+//   - Seven actions, all L1. Five are reads; switch and clear mutate only
+//     the small active-project pointer (recoverable, low blast radius), so
+//     they stay L1 too:
+//       projects — list all top-level project directories (read).
+//       list     — list files inside one project, depth-capped (read).
+//       read     — return the contents of one file, size-capped (read).
+//       switch   — set the active project / persisted pointer (write).
+//       current  — report which project is active (read).
+//       clear    — forget the active project / persisted pointer (write).
+//       search   — grep one project's plain-text files (read).
 //   - Hermes pattern: when read() runs against a file in a project
 //     that has a NERDALERT.md at its root, that file's contents are
 //     prepended as PROJECT CONTEXT. This is what makes file reads
@@ -34,7 +40,8 @@
 //     "I see it but can't extract contents yet" message rather
 //     than dumping garbled bytes to the model.
 //
-// Trust level: L1 — local sandboxed read, no network, no auth.
+// Trust level: L1 — local sandboxed reads plus the active-project pointer
+// (switch / clear); no network, no auth, no project-file writes.
 // ============================================================
 
 import { NerdAlertTool, NerdAlertResponse, Source } from '../../types/response.types';

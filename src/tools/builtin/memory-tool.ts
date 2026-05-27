@@ -15,14 +15,16 @@
 //     gmail / documents.forget), honoring the effective trust ceiling (1a).
 //     The compiled floor stays L1 so reads + captures keep working.
 //
-// Exposed operations (via the 'action' parameter):
-//   search    — keyword search across memory
-//   recent    — time-ordered records by subject
-//   capture   — write a new memory record
-//   context   — build session context block (used at session start)
-//   subjects  — list all subject buckets
-//   sweep     — run decay maintenance
-//   count     — quick stats
+// Exposed operations (via the 'action' parameter); trust in parens:
+//   search        — keyword search across memory                       (L1)
+//   recent        — time-ordered records by subject                    (L1)
+//   capture       — write a new memory record (additive)               (L1)
+//   capture_batch — write several records in one call (additive)       (L1)
+//   context       — build session context block (session start)        (L1)
+//   subjects      — list all subject buckets                           (L1)
+//   supersede     — overwrite an existing record                       (L2)
+//   sweep         — run decay maintenance                              (L2)
+//   count         — quick stats                                        (L1)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NerdAlertTool, NerdAlertResponse, ToolExecContext } from '../../types/response.types'

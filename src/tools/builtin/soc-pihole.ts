@@ -18,7 +18,7 @@
 import { NerdAlertTool, NerdAlertResponse } from '../../types/response.types';
 import { queryOpenClaw } from './soc-client';
 
-const pileholeSummary: NerdAlertTool = {
+const piholeSummary: NerdAlertTool = {
   name:       'pihole_summary',
   description: 'Get Pi-hole overall statistics: total queries today, percentage blocked, number of domains on blocklists, and current blocking status.',
   trustLevel: 1,
@@ -169,7 +169,7 @@ const piholeQueryLog: NerdAlertTool = {
 };
 
 export const piholeTools: NerdAlertTool[] = [
-  pileholeSummary,
+  piholeSummary,
   piholeTopBlocked,
   piholeTopClients,
   piholeRecentBlocked,
