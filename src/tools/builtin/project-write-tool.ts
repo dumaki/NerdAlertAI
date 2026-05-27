@@ -10,7 +10,7 @@
 // false ⇒ tool hidden ⇒ no write surface ⇒ byte-identical to v0.6.7.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { NerdAlertTool, NerdAlertResponse } from '../../types/response.types'
+import { NerdAlertTool, NerdAlertResponse, ToolExecContext } from '../../types/response.types'
 import * as fs   from 'fs'
 import * as path from 'path'
 
@@ -93,17 +93,19 @@ async function doStatus(project: string): Promise<NerdAlertResponse> {
 // the deliberate "apply my edits" step. It carries two gates a write does not:
 //   1. L3 trust floor (Option A'). Writing is L2 (isolated on a branch,
 //      recoverable); APPLYING those edits to base is higher-stakes, so merge
-//      self-checks the GLOBAL trust level and refuses below L3. It reads the
-//      same config.agent.trust_level the broker gated the tool on, and lives
-//      here in the tool — the same self-gating posture as gitEnabled() — so the
-//      core execute(params) contract and the broker dispatch stay untouched.
+//      honors the 1a effective trust ceiling (min of global trust and the
+//      active model's cap) and refuses below L3, so a capped model is denied an
+//      L3 merge exactly as cron_manager / gmail / memory gate their writes. It
+//      falls back to global trust for non-broker/direct callers, and lives here
+//      in the tool — the same self-gating posture as gitEnabled() — so the core
+//      execute() contract and the broker dispatch stay untouched.
 //   2. approved:true confirmation (gmail-style, adapter-agnostic). A first call
 //      (no approved) only SUMMARIZES what would merge and leaves base untouched;
 //      the merge runs only on a second call carrying approved:true.
-async function doMerge(project: string, params: Record<string, unknown>): Promise<NerdAlertResponse> {
-  // Gate 1 — L3 trust floor. Refuse before summarizing or merging, so nothing
-  // about a merge happens below L3.
-  const trust = config.agent?.trust_level ?? 0
+async function doMerge(project: string, params: Record<string, unknown>, exec?: ToolExecContext): Promise<NerdAlertResponse> {
+  // Gate 1 — L3 effective-ceiling gate (1a). Refuse before summarizing or
+  // merging, so nothing about a merge happens below L3.
+  const trust = exec?.effectiveTrustCeiling ?? config.agent?.trust_level ?? 0
   if (trust < MERGE_MIN_TRUST) {
     return text(
       `Applying edits to the base branch requires trust level ${MERGE_MIN_TRUST}; the current level is ${trust}. ` +
@@ -177,7 +179,7 @@ Use write when the user asks you to create, edit, update, or save a file in a pr
     },
     required: ['action'],
   },
-  async execute(params: Record<string, unknown>): Promise<NerdAlertResponse> {
+  async execute(params: Record<string, unknown>, exec?: ToolExecContext): Promise<NerdAlertResponse> {
     if (!gitEnabled()) {
       return text('Project writes are disabled: file-safety git enforcement (safety.git.enabled) is off. Writes are only allowed when git soft-enforce is on, so a change can be isolated on a branch and recovered. Enable safety.git in config.yaml.')
     }
@@ -189,7 +191,7 @@ Use write when the user asks you to create, edit, update, or save a file in a pr
     try {
       if (action === 'write')  return await doWrite(project, params)
       if (action === 'status') return await doStatus(project)
-      if (action === 'merge')  return await doMerge(project, params)
+      if (action === 'merge')  return await doMerge(project, params, exec)
       return text(`Unknown action "${action}". Use write, status, or merge.`)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
