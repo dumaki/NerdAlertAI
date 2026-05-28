@@ -12,8 +12,6 @@
 //   crowdsec_alerts         — recent detection alerts
 //   crowdsec_metrics        — engine performance metrics
 //   crowdsec_search_ip      — full threat profile for an IP
-//   crowdsec_bouncers       — registered bouncer status
-//   crowdsec_machines       — registered CrowdSec agents
 // ============================================================
 
 import { NerdAlertTool, NerdAlertResponse } from '../../types/response.types';
@@ -108,32 +106,6 @@ const crowdsecSearchIp: NerdAlertTool = {
     const ip = params.ip as string;
     const result = await queryOpenClaw(
       `Use the CrowdSec crowdsec_search_ip tool to return the full threat profile for IP ${ip}. Include any active decisions, past alerts, attack scenarios, and community reputation data.`
-    );
-    return { type: 'text', content: result, metadata: {} };
-  },
-};
-
-const crowdsecBouncers: NerdAlertTool = {
-  name:       'crowdsec_bouncers',
-  description: 'List all registered CrowdSec bouncers and their status. Bouncers are the enforcement agents that actually block IPs at the firewall or application level.',
-  trustLevel: 1,
-  parameters: { type: 'object', properties: {}, required: [] },
-  execute: async (): Promise<NerdAlertResponse> => {
-    const result = await queryOpenClaw(
-      'Use the CrowdSec crowdsec_get_bouncers tool to list all registered bouncers. Include name, type, last seen timestamp, and whether each is active.'
-    );
-    return { type: 'text', content: result, metadata: {} };
-  },
-};
-
-const crowdsecMachines: NerdAlertTool = {
-  name:       'crowdsec_machines',
-  description: 'List all registered CrowdSec machines (agents sending logs to the engine). Use this to verify all nodes are reporting correctly.',
-  trustLevel: 1,
-  parameters: { type: 'object', properties: {}, required: [] },
-  execute: async (): Promise<NerdAlertResponse> => {
-    const result = await queryOpenClaw(
-      'Use the CrowdSec crowdsec_get_machines tool to list all registered machines. Include machine name, IP, last seen timestamp, and version.'
     );
     return { type: 'text', content: result, metadata: {} };
   },
