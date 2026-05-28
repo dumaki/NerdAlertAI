@@ -16,10 +16,17 @@
 //   - Response bodies get TYPED at the boundary (the `as` cast
 //     inside githubFetch). Beyond that we trust the shape.
 //
-// Trust posture: L1 read-only. Every function below corresponds
-// to a GET on api.github.com. No POST/PATCH/PUT/DELETE in this
-// file — write actions will land in a separate write-client at
-// L3 in a future release.
+// Trust posture is enforced at the TOOL layer, not here. The read
+// surface (getUser, listRepos, ...) is wrapped by github-tool at L1;
+// the write surface (createIssue, commentIssue, closeIssue,
+// reopenIssue, addLabels, removeLabel, assignIssue) is wrapped by
+// github-write-tool at L3 with a per-action approved:true two-step.
+// Keeping all CRUD in one engine file means githubFetch (auth, rate-
+// limit parsing, error normalisation) stays a single private chokepoint
+// instead of being exported or duplicated.
+//
+// Writes deferred to a later slice (history-altering): create_pull_
+// request, merge_pr, push (commits), delete_branch, delete_issue.
 //
 // Mirrors the shape of src/gmail/client.ts so the github-tool
 // surface looks familiar to anyone who's worked on gmail-tool.
@@ -215,7 +222,7 @@ export interface GithubFileContents {
 
 async function githubFetch<T>(
   pathAndQuery: string,
-  options: { method?: string } = {},
+  options: { method?: string; body?: unknown } = {},
 ): Promise<GithubResult<T> | GithubError> {
 
   const token = getGithubToken();
@@ -235,14 +242,22 @@ async function githubFetch<T>(
       ? pathAndQuery
       : `${API_BASE}${pathAndQuery}`;
 
+    // Build headers. Content-Type is set only when sending a body —
+    // a stray Content-Type on a GET makes some proxies fussy.
+    const headers: Record<string, string> = {
+      'Authorization':         `Bearer ${token}`,
+      'Accept':                'application/vnd.github+json',
+      'X-GitHub-Api-Version':  API_VERSION,
+      'User-Agent':            USER_AGENT,
+    };
+    if (options.body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+    }
+
     const response = await fetch(url, {
       method: options.method ?? 'GET',
-      headers: {
-        'Authorization':         `Bearer ${token}`,
-        'Accept':                'application/vnd.github+json',
-        'X-GitHub-Api-Version':  API_VERSION,
-        'User-Agent':            USER_AGENT,
-      },
+      headers,
+      body:   options.body !== undefined ? JSON.stringify(options.body) : undefined,
       signal: ctrl.signal,
     });
 
@@ -290,6 +305,32 @@ async function githubFetch<T>(
           ok:        false,
           error:     'not_found',
           hint:      "GitHub returned 404. The resource doesn't exist, or your token doesn't have permission to see it.",
+          status,
+          rateLimit,
+        };
+      }
+      if (status === 422) {
+        // GitHub validation error on writes — e.g. a label that doesn't
+        // exist, an assignee who isn't a collaborator, or a missing title.
+        // The body is JSON with `message` plus an `errors[]` array carrying
+        // per-field detail; surface both when present.
+        let detail = '';
+        try {
+          const parsed = JSON.parse(text);
+          if (parsed?.message) detail = parsed.message;
+          if (Array.isArray(parsed?.errors) && parsed.errors.length) {
+            const fields = parsed.errors.map((e: any) =>
+              `${e.field ?? '?'}: ${e.code ?? e.message ?? 'invalid'}`,
+            ).join('; ');
+            detail = detail ? `${detail} (${fields})` : fields;
+          }
+        } catch {
+          // Body wasn't JSON — fall through to the truncated text.
+        }
+        return {
+          ok:        false,
+          error:     'validation_error',
+          hint:      `GitHub rejected the request: ${detail || truncate(text, 200)}`,
           status,
           rateLimit,
         };
@@ -632,6 +673,218 @@ export async function listNotifications(opts: {
 
 export async function testConnection(): Promise<GithubResult<GithubUser> | GithubError> {
   return getUser();
+}
+
+
+// ── Write API (L3 — wrapped by github-write-tool) ────────────
+//
+// Each write function:
+//   - returns the same GithubResult<T> | GithubError shape as reads,
+//   - never throws (transport errors funnel through githubFetch),
+//   - projects the GitHub response down to the GithubIssueWriteResult
+//     shape the wrapper renders.
+//
+// The wrapper enforces L3 trust + an approved:true two-step before
+// any of these run, and supplies all params after validation. These
+// functions trust their inputs and don't re-validate beyond what
+// GitHub itself rejects (422).
+
+
+// GithubIssueWriteResult — the slim projection wrappers show back
+// to the user after a successful write. Carries the URL so the
+// wrapper can put it in the response's sources block, and enough
+// surface (number, title, state, labels, assignees) for the agent
+// to summarise what changed.
+export interface GithubIssueWriteResult {
+  number:    number;
+  title:     string;
+  state:     'open' | 'closed';
+  htmlUrl:   string;
+  repo:      string;          // "owner/repo"
+  labels:    string[];
+  assignees: string[];
+}
+
+
+// createIssue — POST /repos/{owner}/{repo}/issues
+//
+// `body`, `labels`, and `assignees` are all optional. GitHub
+// rejects (422) if a label doesn't exist or an assignee isn't
+// a collaborator on the repo — the validation_error branch in
+// githubFetch surfaces the field-level detail.
+export async function createIssue(
+  owner: string,
+  repo:  string,
+  params: {
+    title:      string;
+    body?:      string;
+    labels?:    string[];
+    assignees?: string[];
+  },
+): Promise<GithubResult<GithubIssueWriteResult> | GithubError> {
+  const r = await githubFetch<IssuePayload>(
+    `/repos/${enc(owner)}/${enc(repo)}/issues`,
+    {
+      method: 'POST',
+      body: {
+        title:     params.title,
+        body:      params.body,
+        labels:    params.labels,
+        assignees: params.assignees,
+      },
+    },
+  );
+  if (!r.ok) return r;
+  return { ok: true, rateLimit: r.rateLimit, data: projectIssueWrite(r.data, `${owner}/${repo}`) };
+}
+
+
+// commentIssue — POST /repos/{owner}/{repo}/issues/{number}/comments
+//
+// GitHub treats PRs as issues for the comments endpoint, so the
+// same call works on both. The returned comment URL is included
+// in the result so the wrapper can render a clickable source.
+export async function commentIssue(
+  owner:  string,
+  repo:   string,
+  number: number,
+  body:   string,
+): Promise<GithubResult<{ commentUrl: string; body: string }> | GithubError> {
+  const r = await githubFetch<{ html_url: string; body: string }>(
+    `/repos/${enc(owner)}/${enc(repo)}/issues/${number}/comments`,
+    { method: 'POST', body: { body } },
+  );
+  if (!r.ok) return r;
+  return {
+    ok:        true,
+    rateLimit: r.rateLimit,
+    data: { commentUrl: r.data.html_url, body: r.data.body },
+  };
+}
+
+
+// closeIssue — PATCH /repos/{owner}/{repo}/issues/{number}
+//
+// `stateReason` is optional and accepts GitHub's enum values:
+// 'completed' | 'not_planned' | 'reopened' | 'duplicate'. We
+// pass it through unchanged — an invalid value produces a 422
+// which the wrapper surfaces.
+export async function closeIssue(
+  owner:        string,
+  repo:         string,
+  number:       number,
+  stateReason?: string,
+): Promise<GithubResult<GithubIssueWriteResult> | GithubError> {
+  const r = await githubFetch<IssuePayload>(
+    `/repos/${enc(owner)}/${enc(repo)}/issues/${number}`,
+    {
+      method: 'PATCH',
+      body: stateReason
+        ? { state: 'closed', state_reason: stateReason }
+        : { state: 'closed' },
+    },
+  );
+  if (!r.ok) return r;
+  return { ok: true, rateLimit: r.rateLimit, data: projectIssueWrite(r.data, `${owner}/${repo}`) };
+}
+
+
+// reopenIssue — PATCH /repos/{owner}/{repo}/issues/{number}
+export async function reopenIssue(
+  owner:  string,
+  repo:   string,
+  number: number,
+): Promise<GithubResult<GithubIssueWriteResult> | GithubError> {
+  const r = await githubFetch<IssuePayload>(
+    `/repos/${enc(owner)}/${enc(repo)}/issues/${number}`,
+    { method: 'PATCH', body: { state: 'open' } },
+  );
+  if (!r.ok) return r;
+  return { ok: true, rateLimit: r.rateLimit, data: projectIssueWrite(r.data, `${owner}/${repo}`) };
+}
+
+
+// addLabels — POST /repos/{owner}/{repo}/issues/{number}/labels
+//
+// GitHub's add-labels endpoint returns the FULL set of labels
+// on the issue after the add (not just the labels we sent),
+// so the caller sees the complete resulting state. Note: with a
+// 'repo'-scoped token, GitHub auto-creates any label name that
+// doesn't already exist on the repo — confirmed via v0.8.1 live
+// smoke test. The wrapper surfaces this to the agent in its
+// description so the agent can confirm with the user first.
+export async function addLabels(
+  owner:  string,
+  repo:   string,
+  number: number,
+  labels: string[],
+): Promise<GithubResult<string[]> | GithubError> {
+  const r = await githubFetch<Array<{ name: string }>>(
+    `/repos/${enc(owner)}/${enc(repo)}/issues/${number}/labels`,
+    { method: 'POST', body: { labels } },
+  );
+  if (!r.ok) return r;
+  return { ok: true, rateLimit: r.rateLimit, data: r.data.map(l => l.name) };
+}
+
+
+// removeLabel — DELETE /repos/{owner}/{repo}/issues/{number}/labels/{name}
+//
+// Returns the REMAINING labels on the issue (same shape as addLabels).
+// 404 from this endpoint means the label wasn't on the issue — the
+// wrapper can translate that into a friendlier message before surfacing
+// it, but the engine returns the raw 404 to keep the contract uniform.
+export async function removeLabel(
+  owner:  string,
+  repo:   string,
+  number: number,
+  label:  string,
+): Promise<GithubResult<string[]> | GithubError> {
+  const r = await githubFetch<Array<{ name: string }>>(
+    `/repos/${enc(owner)}/${enc(repo)}/issues/${number}/labels/${enc(label)}`,
+    { method: 'DELETE' },
+  );
+  if (!r.ok) return r;
+  return { ok: true, rateLimit: r.rateLimit, data: r.data.map(l => l.name) };
+}
+
+
+// assignIssue — POST /repos/{owner}/{repo}/issues/{number}/assignees
+//
+// GitHub silently drops any assignee that isn't a collaborator on
+// the repo (no 422). The returned issue's `assignees` field reflects
+// who actually got assigned — the wrapper can diff it against the
+// requested set to surface drops to the user.
+export async function assignIssue(
+  owner:     string,
+  repo:      string,
+  number:    number,
+  assignees: string[],
+): Promise<GithubResult<GithubIssueWriteResult> | GithubError> {
+  const r = await githubFetch<IssuePayload>(
+    `/repos/${enc(owner)}/${enc(repo)}/issues/${number}/assignees`,
+    { method: 'POST', body: { assignees } },
+  );
+  if (!r.ok) return r;
+  return { ok: true, rateLimit: r.rateLimit, data: projectIssueWrite(r.data, `${owner}/${repo}`) };
+}
+
+
+// projectIssueWrite — project an IssuePayload into the slim
+// GithubIssueWriteResult shape. Different from projectIssueSummary
+// because writes care about assignees (which the read query may
+// not request) and not commentCount (which a write doesn't change
+// meaningfully). Kept local to the write block for clarity.
+function projectIssueWrite(p: IssuePayload, repoFullName: string): GithubIssueWriteResult {
+  return {
+    number:    p.number,
+    title:     p.title,
+    state:     (p.state === 'closed' ? 'closed' : 'open'),
+    htmlUrl:   p.html_url,
+    repo:      repoFullName,
+    labels:    (p.labels ?? []).map(l => typeof l === 'string' ? l : l.name),
+    assignees: (p.assignees ?? []).map(a => a.login),
+  };
 }
 
 

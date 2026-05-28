@@ -21,9 +21,16 @@
 //   - 'list_notifications' → notification inbox
 //   - 'test'            → connectivity sanity check
 //
-// L3 follow-ons (NOT in this release):
-//   create_issue, comment, push, merge, etc. These live in a
-//   future github-write-tool.ts at trust level 3.
+// L3 interaction writes (see github-write-tool.ts):
+//   create_issue, comment_issue, close_issue, reopen_issue,
+//   add_labels, remove_label, assign_issue
+//
+// L3 history-altering writes (deferred to a follow-on slice):
+//   create_pull_request, merge_pr, push (commits), delete_branch,
+//   delete_issue. These will live in a separate github-publish-tool
+//   when they ship — different blast radius, different design
+//   pressure (push needs branch/ref resolution; merge wants CI-pass
+//   awareness).
 //
 // not_configured handling:
 //   First check at top of execute(). Returns a friendly message

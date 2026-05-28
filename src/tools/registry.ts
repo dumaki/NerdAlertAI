@@ -27,8 +27,9 @@ import gmailTool        from './builtin/gmail-tool';
 import gmailSetupTool   from './builtin/gmail-setup';
 import gmailSendTool    from './builtin/gmail-send-tool';
 import gmailCleanupTool from './builtin/gmail-cleanup-tool';
-import githubTool      from './builtin/github-tool';
-import githubSetupTool from './builtin/github-setup';
+import githubTool       from './builtin/github-tool';
+import githubWriteTool  from './builtin/github-write-tool';
+import githubSetupTool  from './builtin/github-setup';
 import helpTool        from './builtin/help-tool';
 import weatherTool     from './builtin/weather-tool';
 import rssTool         from './builtin/rss-tool';
@@ -80,6 +81,13 @@ const ALL_TOOLS: NerdAlertTool[] = [
   // be a web search?". Web's description still routes these domains
   // away from itself (see web-tool.ts), but ordering is belt-and-
   // braces for models that don't read every description thoroughly.
+  //
+  // Within the github cluster: github_write (L3 dangerous-writes) sits BEFORE
+  // github (broad read), same positional-bias mitigation as the gmail send/
+  // cleanup and cron_delete clusters below. github_write is filtered out of the
+  // model-visible set below L3, so this ordering only bites once global trust
+  // is raised to 3.
+  githubWriteTool,
   githubTool,
   githubSetupTool,
   projectTool,
