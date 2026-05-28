@@ -38,6 +38,7 @@ import projectTool     from './builtin/project-tool';
 import projectWriteTool from './builtin/project-write-tool';
 import documentsTool   from './builtin/documents-tool';
 import { webTool }         from './builtin/web-tool';
+import cronDeleteTool      from './builtin/cron-delete-tool';
 import { cronManagerTool } from './builtin/cron-manager';
 
 // SOC tools — imported as arrays since each file exports multiple tools
@@ -102,6 +103,14 @@ const ALL_TOOLS: NerdAlertTool[] = [
   gmailCleanupTool,
   gmailTool,
   gmailSetupTool,
+
+  // cron's L3 dangerous-write (delete) sits BEFORE the broad cron_manager
+  // tool — same positional-bias mitigation as the gmail send/cleanup cluster
+  // above: a small model scoring tools top-to-bottom should match "delete this
+  // scheduled job" against cron_delete before it reaches cron_manager.
+  // cron_delete is filtered out of the model-visible set below L3, so this
+  // ordering only bites once global trust is raised to 3.
+  cronDeleteTool,
   cronManagerTool,
 
   // SOC — Wazuh SIEM
