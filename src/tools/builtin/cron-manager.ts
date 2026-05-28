@@ -7,18 +7,20 @@
 // ──────────────────────────────────────────────────────────
 // create  — schedule a new job
 // list    — show all jobs with status
-// delete  — remove a job permanently
 // pause   — disable a job without deleting it
 // resume  — re-enable a paused job
 // status  — show details + recent run history for one job
 // logs    — return the last N run logs for one job
+//          (permanent delete + history wipe is the cron_delete tool — L3)
 //
 // TRUST LEVELS
 // ──────────────────────────────────────────────────────────
 // L1 (read)  : list, status, logs, recent_failures
-// L2 (write) : create, delete, pause, resume
-// Compiled floor is L1; write actions are gated to L2 per-action inside
-// execute() so reads stay usable at L1 while job mutation requires L2.
+// L2 (write) : create, pause, resume
+// L3 (delete): moved to cron_delete tool (compiled L3 floor)
+// Compiled floor is L1; lesser writes are gated to L2 per-action inside
+// execute() so reads stay usable at L1. Permanent deletion of a job +
+// its run history is the cron_delete tool — irreversible, compiled L3.
 //
 // ANTI-RECURSION
 // ──────────────────────────────────────────────────────────
@@ -29,7 +31,7 @@
 
 import { NerdAlertTool, NerdAlertResponse, ToolExecContext } from '../../types/response.types';
 import {
-  getAllJobs, getJob, createJob, updateJob, deleteJob, getRecentRuns
+  getAllJobs, getJob, createJob, updateJob, getRecentRuns
 } from '../../cron/store';
 import {
   validateExpression, getNextRuns, SYSTEM_TIMEZONE
@@ -52,14 +54,14 @@ function err(content: string): NerdAlertResponse {
 
 export const cronManagerTool: NerdAlertTool = {
   name:        'cron_manager',
-  description: `Manage scheduled jobs. Use this tool to create recurring tasks, list existing schedules, pause/resume/delete jobs, or read run logs for a specific job. Actions: create, list, delete, pause, resume, status, logs.`,
+  description: `Manage scheduled jobs. Use this tool to create recurring tasks, list existing schedules, pause/resume jobs, or read run logs for a specific job. To permanently delete a job and its run history, use the cron_delete tool instead (separate L3 tool — irreversible). Actions: create, list, pause, resume, status, logs.`,
   trustLevel:  1,
   parameters: {
     type: 'object',
     properties: {
       action: {
         type: 'string',
-        enum: ['create', 'list', 'delete', 'pause', 'resume', 'status', 'logs', 'recent_failures'],
+        enum: ['create', 'list', 'pause', 'resume', 'status', 'logs', 'recent_failures'],
         description: 'The operation to perform.'
       },
       name: {
@@ -84,7 +86,7 @@ export const cronManagerTool: NerdAlertTool = {
       },
       job_id: {
         type: 'string',
-        description: 'The job ID for delete, pause, resume, status, or logs actions.'
+        description: 'The job ID for pause, resume, status, or logs actions.'
       },
       limit: {
         type: 'number',
@@ -108,12 +110,16 @@ export const cronManagerTool: NerdAlertTool = {
 
     // ── Per-action trust gate (v0.8 L2 re-level) ──────────────
     // Compiled tool.trustLevel is the L1 floor (reads). Actions that create
-    // or mutate jobs carry real blast radius — a recurring job fires the agent
-    // on a timer — so they require L2. Same posture as documents.forget and
-    // project_write's merge gate: the floor stays L1, the write is gated here
-    // in execute(). No config floor-raise (that would gate the reads too, and
-    // recent_failures/list feed the cron intent-prefetch group at L1).
-    const WRITE_ACTIONS = ['create', 'delete', 'pause', 'resume'];
+    // or mutate jobs (create/pause/resume) carry real blast radius — a
+    // recurring job fires the agent on a timer — so they require L2. Same
+    // posture as documents.forget and project_write's merge gate: the floor
+    // stays L1, the write is gated here in execute(). No config floor-raise
+    // (that would gate the reads too, and recent_failures/list feed the cron
+    // intent-prefetch group at L1).
+    //
+    // The destructive write (delete) moved to the dedicated L3 cron_delete
+    // tool — irreversible (drops job + run history). It is not gated here.
+    const WRITE_ACTIONS = ['create', 'pause', 'resume'];
     const trustLevel = exec?.effectiveTrustCeiling ?? config.agent?.trust_level ?? 0;
     if (WRITE_ACTIONS.includes(action) && trustLevel < 2) {
       return err(
@@ -188,17 +194,7 @@ export const cronManagerTool: NerdAlertTool = {
         return ok(lines.join('\n\n'));
       }
 
-      // ── delete ────────────────────────────────────────────
-      case 'delete': {
-        const job_id = params.job_id as string;
-        if (!job_id) return err('delete requires job_id.');
-
-        const job = getJob(job_id);
-        if (!job) return err(`No job found with ID "${job_id}".`);
-
-        deleteJob(job_id);
-        return ok(`Job "${job.name}" (${job_id}) deleted permanently, including all run history.`);
-      }
+      // ── (delete moved to cron_delete tool, L3) ────────────────────────────────────────────
 
       // ── pause ─────────────────────────────────────────────
       case 'pause': {
@@ -359,7 +355,7 @@ export const cronManagerTool: NerdAlertTool = {
       }
 
       default:
-        return err(`Unknown action: "${action}". Valid actions: create, list, delete, pause, resume, status, logs, recent_failures.`);
+        return err(`Unknown action: "${action}". Valid actions: create, list, pause, resume, status, logs, recent_failures.`);
     }
   }
 };
