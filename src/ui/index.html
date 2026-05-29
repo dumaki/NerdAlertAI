@@ -3450,6 +3450,21 @@
       font-size: 11px; line-height: 1.55; color: var(--agent-text);
     }
     .doc-view-empty { color: var(--text-dim); font-style: italic; }
+
+    /* v0.8.x — Render Window viewer. The iframe fills the flex:1 panel-body
+       (minus its 12px padding) and is sandboxed allow-scripts +
+       allow-same-origin so an in-frame widget may use its own localStorage. */
+    .render-frame { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
+    .render-empty { color: var(--text-dim); font-style: italic; padding: 4px 2px; }
+    .render-code  { white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono); font-size: 12px; color: var(--text); }
+    /* v0.8.x — Render Window top bar: filename + a refresh button that re-fetches
+       the artifact from disk (faster than close/reopen after an edit). */
+    .render-wrap  { display: flex; flex-direction: column; height: 100%; }
+    .render-bar   { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+    .render-bar-title { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .render-refresh { flex-shrink: 0; cursor: pointer; background: transparent; border: 1px solid var(--border); color: var(--cyan); font-size: 13px; line-height: 1; padding: 3px 9px; border-radius: 3px; font-family: var(--font-mono); transition: all var(--transition-fast); }
+    .render-refresh:hover { border-color: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
+    .render-stage { flex: 1; min-height: 0; overflow: auto; }
     .memory-card-snippet {
       margin-top: 4px; font-size: 10px; line-height: 1.4; color: var(--text);
       overflow: hidden;
@@ -3692,6 +3707,13 @@
            panel to the documents row without disturbing dock-icon state. -->
       <button class="dock-icon" data-view="documents" onclick="switchView('documents', null)" aria-label="Documents" style="display: none;">
         <span class="dock-icon-glyph">▤</span>
+      </button>
+      <!-- v0.8.x — Render Window. Ephemeral artifact viewer. Ships hidden; a
+           capability probe (GET /api/render/get -> 400 live / 404 disabled)
+           un-hides it on load. Strict-superset: module off -> stays hidden. -->
+      <button class="dock-icon" data-view="render" onclick="switchView('render', null)" aria-label="Render" style="display: none;">
+        <span class="dock-icon-glyph">▦</span>
+        <span class="dock-badge" id="render-badge" style="display:none"></span>
       </button>
       <button class="dock-icon" data-view="export" onclick="switchView('export', null)" aria-label="Export">
         <span class="dock-icon-glyph">⤓</span>
@@ -5201,6 +5223,7 @@
       }
       return;
     }
+    if (view === 'render')   { openPanel('render'); return; }
     if (view === 'tools')    { openPanel('tools'); return; }
     if (view === 'models')   { openPanel('models'); return; }
     if (view === 'export')   { openPanel('export');   return; }
@@ -5253,6 +5276,9 @@
       body.innerHTML = getModelVisibilityPanelHTML();
       loadModelVisibilityPanel();
       onAddModelProviderChange();   // init the add-model form's hint/placeholder
+    } else if (type === 'render') {
+      title.textContent = 'RENDER';
+      loadRenderPanel();
     }
   }
 
@@ -5276,6 +5302,213 @@
     document.querySelector('.dock-icon[data-view="chat"]')?.classList.add('active');
     currentView = 'chat';
   }
+
+  // ============================================================
+  // RENDER WINDOW (v0.8.x) — ephemeral artifact viewer
+  // ============================================================
+  // Displays the most-recent agent-produced artifact (HTML / markdown /
+  // code) that project_write wrote to a project folder. View-only and
+  // ephemeral: the durable copy lives on disk; this just fetches + renders.
+  //
+  // SLICE BOUNDARY: this slice builds the panel, the fetch, and the three
+  // render shapes. The localStorage pointer that decides WHICH artifact to
+  // show — and the dock badge — are wired in slice 3. Until then
+  // _renderPointer stays null and the panel shows its empty state;
+  // window.__setRenderPointer is exposed for slice 3 to populate it.
+  // ============================================================
+
+  // { project, path, title } | null. Persisted in localStorage under a key
+  // namespaced by the server bootId (CFG.bootId, injected in slice 1), so the
+  // pointer survives closing/reopening the window WITHIN a server session but
+  // is forgotten after a restart: a new bootId means a new key, the old key no
+  // longer matches, and stale keys are GC'd on load. No content is stored —
+  // only the pointer; the bytes always come fresh from the project folder.
+  var _renderPointer = null;
+  var _renderEnabled = false;   // flipped true by the capability probe below
+
+  var RENDER_KEY_PREFIX = 'nerdalert:render:';
+  function _renderKey() { return RENDER_KEY_PREFIX + ((CFG && CFG.bootId) || 'nobootid'); }
+
+  // Light/clear the dock badge. Lit = a fresh artifact arrived this session
+  // and hasn't been viewed yet; cleared when the render panel is opened.
+  function setRenderBadge(on) {
+    var b = document.getElementById('render-badge');
+    if (b) b.style.display = on ? '' : 'none';
+  }
+
+  // Persist (or clear) the current pointer under the bootId-keyed slot.
+  function _persistRenderPointer() {
+    try {
+      if (_renderPointer) localStorage.setItem(_renderKey(), JSON.stringify(_renderPointer));
+      else                localStorage.removeItem(_renderKey());
+    } catch (e) { /* storage unavailable/full — pointer still works in-memory */ }
+  }
+
+  // Set the pointer to a freshly-created artifact: persist it and light the
+  // badge (a NEW artifact is unviewed by definition). Exposed on window
+  // because the caller — the artifact-created hook — lives in another code
+  // region. A malformed ptr clears everything.
+  window.__setRenderPointer = function(ptr) {
+    _renderPointer = (ptr && ptr.project && ptr.path) ? ptr : null;
+    _persistRenderPointer();
+    setRenderBadge(!!_renderPointer);
+  };
+
+  // Hydrate the in-memory pointer from localStorage on load, and GC any keys
+  // from previous server sessions (different bootId). Hydration does NOT light
+  // the badge — a reloaded last-artifact isn't "new", so the panel quietly
+  // remembers it without nagging. Runs once.
+  (function hydrateRenderPointer() {
+    var current = _renderKey();
+    try {
+      for (var i = localStorage.length - 1; i >= 0; i--) {
+        var k = localStorage.key(i);
+        if (k && k.indexOf(RENDER_KEY_PREFIX) === 0 && k !== current) {
+          localStorage.removeItem(k);   // stale — from a prior server session
+        }
+      }
+      var raw = localStorage.getItem(current);
+      if (raw) {
+        var p = JSON.parse(raw);
+        if (p && p.project && p.path) _renderPointer = p;
+      }
+    } catch (e) { /* storage unavailable / bad JSON — start with no pointer */ }
+  })();
+
+  // Render fetched artifact data into #panel-body by type.
+  function renderArtifactInPanel(data) {
+    var body = document.getElementById('panel-body');
+    if (!body) return;
+    body.innerHTML = '';
+
+    // Scaffold: a thin top bar (filename + refresh) over a flex stage the
+    // artifact fills. Refresh re-runs loadRenderPanel, which re-fetches the
+    // file fresh from disk via /api/render/get — so an edit shows without
+    // closing and reopening the panel.
+    var wrap = document.createElement('div');
+    wrap.className = 'render-wrap';
+
+    var bar = document.createElement('div');
+    bar.className = 'render-bar';
+    var titleEl = document.createElement('span');
+    titleEl.className = 'render-bar-title';
+    titleEl.textContent = data.title || 'artifact';
+    titleEl.title = data.title || '';
+    var refreshBtn = document.createElement('button');
+    refreshBtn.className = 'render-refresh';
+    refreshBtn.type = 'button';
+    refreshBtn.title = 'Reload this artifact from disk';
+    refreshBtn.textContent = '⟳';
+    refreshBtn.addEventListener('click', function () { loadRenderPanel(); });
+    bar.appendChild(titleEl);
+    bar.appendChild(refreshBtn);
+
+    var stage = document.createElement('div');
+    stage.className = 'render-stage';
+
+    if (data.type === 'webpage') {
+      // Full HTML → sandboxed iframe via the .srcdoc PROPERTY (not an
+      // attribute string), so the artifact's own markup never needs
+      // quote-escaping. allow-same-origin lets an in-frame widget use its
+      // own localStorage (DECISION 3); allow-scripts lets it run. No
+      // allow-top-navigation / allow-popups — it can't touch the host.
+      var frame = document.createElement('iframe');
+      frame.className = 'render-frame';
+      frame.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+      frame.srcdoc = data.content || '';
+      stage.appendChild(frame);
+    } else if (data.type === 'document' || data.type === 'script') {
+      // No markdown renderer ships in the UI today (the doc-view path
+      // escapes raw text too), so markdown and code both render as escaped,
+      // pre-wrapped text via textContent. Markdown prettification is a
+      // tracked follow-up.
+      var pre = document.createElement('div');
+      pre.className = 'render-code';
+      pre.textContent = data.content || '';
+      stage.appendChild(pre);
+    } else {
+      stage.innerHTML = '<div class="render-empty">Unsupported artifact type.</div>';
+    }
+
+    wrap.appendChild(bar);
+    wrap.appendChild(stage);
+    body.appendChild(wrap);
+  }
+
+  // Called by openPanel('render'). Reads the current pointer, fetches the
+  // artifact, renders it. No pointer (slice-2 default / cleared) → empty
+  // state. A 404 or !ok (file gone, module disabled) clears the pointer and
+  // shows the empty state — same fail-safe as a bootId miss.
+  function loadRenderPanel() {
+    var body = document.getElementById('panel-body');
+    if (!body) return;
+
+    setRenderBadge(false);   // opening the panel = viewing → clear the dot
+
+    if (!_renderPointer) {
+      body.innerHTML = '<div class="render-empty">No artifact to display yet.</div>';
+      return;
+    }
+
+    body.innerHTML = '<div class="render-empty">Loading…</div>';
+    var url = BASE_URL + '/api/render/get'
+      + '?project=' + encodeURIComponent(_renderPointer.project)
+      + '&path='    + encodeURIComponent(_renderPointer.path);
+
+    fetch(url, { headers: { 'Authorization': 'Bearer ' + CFG.token } })
+      .then(function(res) { return res.ok ? res.json() : null; })
+      .then(function(data) {
+        if (!data || !data.ok) {
+          _renderPointer = null;
+          body.innerHTML = '<div class="render-empty">Artifact no longer available.</div>';
+          return;
+        }
+        renderArtifactInPanel(data);
+      })
+      .catch(function(err) {
+        console.warn('[render] load failed:', err);
+        body.innerHTML = '<div class="render-empty">Could not load artifact.</div>';
+      });
+  }
+  window.loadRenderPanel = loadRenderPanel;
+
+  // Turn-complete hook (Option 3): ask the server for the newest viewable
+  // file in the dedicated artifacts project. When that file is newer than the
+  // pointer we already hold, treat it as a freshly-created artifact — point at
+  // it and light the badge. Same-or-older mtime → nothing happens, so a turn
+  // that wrote no artifact never nags. Gated on _renderEnabled, so it is a
+  // no-op when the module is disabled. Called from the chat stream's 'done'.
+  function checkLatestArtifact() {
+    if (!_renderEnabled) return;
+    fetch(BASE_URL + '/api/render/latest', {
+      headers: { 'Authorization': 'Bearer ' + CFG.token }
+    }).then(function(res) { return res.ok ? res.json() : null; })
+      .then(function(data) {
+        if (!data || !data.ok || !data.latest) return;
+        var prevMtime = (_renderPointer && _renderPointer.mtime) || 0;
+        if (data.latest.mtime > prevMtime) {
+          window.__setRenderPointer(data.latest);   // persists pointer + lights badge
+        }
+      })
+      .catch(function() { /* transient — try again next turn */ });
+  }
+  window.checkLatestArtifact = checkLatestArtifact;
+
+  // Capability probe + dock-icon un-hide. The route returns 400 (missing
+  // params) when mounted, 404 when the module is disabled. A 400 means the
+  // render module is live → reveal the dock icon; anything else leaves it
+  // hidden. Mirrors the documents-tile un-hide. Runs once at load.
+  (function probeRenderCapability() {
+    fetch(BASE_URL + '/api/render/get', {
+      headers: { 'Authorization': 'Bearer ' + CFG.token }
+    }).then(function(res) {
+      if (res.status === 400) {
+        _renderEnabled = true;
+        var icon = document.querySelector('.dock-icon[data-view="render"]');
+        if (icon) icon.style.display = '';
+      }
+    }).catch(function() { /* offline / error → leave hidden */ });
+  })();
 
   async function loadEmailPanel() {
     console.log('[Email Panel] Loading — fetching /api/email/triage');
@@ -7699,6 +7932,7 @@
             clearPendingImages();
 
             parseForApprovals(parsed.text || fullText);
+            checkLatestArtifact();   // Option 3: light the render badge if a new artifact landed
           }
 
           else if (eventType === 'vision_required') {
