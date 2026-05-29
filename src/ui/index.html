@@ -1160,15 +1160,27 @@
     .module-dock {
       border-top: 1px solid var(--border);
       padding: 8px 10px;
-      display: flex;
+      display: grid;
+      grid-template-columns: repeat(var(--dock-cols), 1fr);
       gap: 6px;
       background: var(--bg-base);
       flex-shrink: 0;
+      /* Dock size tiers. Defaults below = MED (5 icons per row). The
+         .dock-lg / .dock-md / .dock-sm classes (toggled from Settings,
+         persisted to localStorage.nerdalert_dock_size) override only
+         these three variables. Larger size = fewer columns = bigger,
+         more visible icons; icons past the column count wrap to a new
+         row. Reuses .module-dock itself as the wrapper. v0.8.x. */
+      --dock-cols: 5;
+      --dock-h: 38px;
+      --dock-glyph: 16px;
     }
+    .module-dock.dock-lg { --dock-cols: 4; --dock-h: 44px; --dock-glyph: 18px; }
+    .module-dock.dock-md { --dock-cols: 5; --dock-h: 38px; --dock-glyph: 16px; }
+    .module-dock.dock-sm { --dock-cols: 6; --dock-h: 32px; --dock-glyph: 14px; }
 
     .dock-icon {
-      flex: 1;
-      height: 34px;
+      height: var(--dock-h, 38px);
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -1179,7 +1191,7 @@
       border-radius: 1px;
       transition: all var(--transition-fast);
       font-family: var(--font-mono);
-      font-size: 14px;
+      font-size: var(--dock-glyph, 16px);
       position: relative;
       padding: 0;
     }
@@ -1204,7 +1216,7 @@
        SERVICES (group master + expander) and INDIVIDUAL TOOLS (by
        L-level). Mirrors the settings-module-row language: mono,
        uppercase, bg-base rows, cyan ON / dim OFF, amber MIXED. */
-    .dock-icon-glyph svg { width: 16px; height: 16px; display: block; }
+    .dock-icon-glyph svg { width: var(--dock-glyph, 16px); height: var(--dock-glyph, 16px); display: block; }
 
     .tools-panel-intro {
       font-size: 9px; line-height: 1.5; color: var(--text-muted);
@@ -2414,6 +2426,38 @@
     .settings-action-btn:hover {
       background: var(--cyan-dim);
       border-color: var(--cyan);
+    }
+
+    /* Dock size control -- Settings > DISPLAY. Three-way segmented
+       picker (LARGE / MED / SMALL) that sets dock icons-per-row and
+       icon size. Pure client preference, persisted to localStorage.
+       Active tier mirrors the .dock-icon.active cyan treatment. v0.8.x. */
+    .dock-size-control { display: flex; gap: 6px; }
+    .dock-size-btn {
+      flex: 1;
+      padding: 8px 0;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      text-align: center;
+      color: var(--text-dim);
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 1px;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .dock-size-btn:hover {
+      color: var(--cyan);
+      border-color: var(--cyan-mid);
+      background: var(--cyan-dim);
+    }
+    .dock-size-btn.active {
+      color: var(--cyan);
+      border-color: var(--cyan);
+      background: var(--cyan-dim);
+      text-shadow: 0 0 6px var(--cyan);
     }
 
     /* ── Module toggles ── v0.5.17 pre3
@@ -4400,6 +4444,11 @@
     // safe to call here even before the user opens Settings.
     applyDisabledModules();
 
+    // v0.8.x: apply the saved dock-size preference (icons-per-row +
+    // icon size). MED is also the .module-dock CSS default, so this
+    // only visibly changes things when the user has picked LARGE/SMALL.
+    applyDockSize(getDockSize());
+
     // Voice module Slice 2: discover which personalities can speak
     // right now. One-shot fetch; result lives in voiceablePersonalities.
     // Empty result (voice disabled, or no ONNX files present) is fine —
@@ -5652,6 +5701,51 @@
   `;
 }
 
+  // -- Dock size preference -- v0.8.x
+  //
+  // Pure client-side UI preference: how many module-dock icons appear
+  // per row, and how large they render (for visibility / accessibility).
+  // Tiers map to icons-per-row -- LARGE=4, MED=5, SMALL=6 -- and anything
+  // past the column count wraps to a new row (the dock is a CSS grid whose
+  // column count + icon-size variables are driven by a .dock-* class).
+  // Persisted to localStorage only: no server, config.yaml, broker, or
+  // trust-ladder involvement. Default = MED (also baked into the
+  // .module-dock CSS, so the dock looks right even before this runs).
+  var DOCK_SIZE_KEY = 'nerdalert_dock_size';
+  var DOCK_SIZES = ['lg', 'md', 'sm'];
+
+  function getDockSize() {
+    var v = localStorage.getItem(DOCK_SIZE_KEY);
+    return DOCK_SIZES.indexOf(v) >= 0 ? v : 'md';
+  }
+
+  function applyDockSize(size) {
+    var dock = document.getElementById('module-dock');
+    if (!dock) return;
+    dock.classList.remove('dock-lg', 'dock-md', 'dock-sm');
+    dock.classList.add('dock-' + size);
+  }
+
+  function setDockSize(size) {
+    if (DOCK_SIZES.indexOf(size) < 0) return;
+    localStorage.setItem(DOCK_SIZE_KEY, size);
+    applyDockSize(size);
+    // Re-render the segmented buttons so the active highlight follows the
+    // new choice, if the Settings panel happens to be open right now.
+    var ctrl = document.getElementById('dock-size-control');
+    if (ctrl) ctrl.innerHTML = renderDockSizeButtons();
+  }
+
+  function renderDockSizeButtons() {
+    var cur = getDockSize();
+    var tiers = [['lg', 'LARGE'], ['md', 'MED'], ['sm', 'SMALL']];
+    return tiers.map(function(t) {
+      return '<button class="dock-size-btn' + (cur === t[0] ? ' active' : '') +
+             '" data-size="' + t[0] + '" onclick="setDockSize(\'' + t[0] + '\')">' +
+             t[1] + '</button>';
+    }).join('');
+  }
+
   function getSettingsPanelHTML() {
     return `
       <div class="settings-section-label">TRUST LEVEL</div>
@@ -5663,6 +5757,10 @@
 
       <div class="settings-section-label" style="margin-top:16px">VOICE</div>
       <div class="settings-modules-list" id="settings-voice-list">${renderVoiceToggleRows()}</div>
+
+      <div class="settings-section-label" style="margin-top:16px">DISPLAY</div>
+      <div class="dock-size-control" id="dock-size-control">${renderDockSizeButtons()}</div>
+      <div class="trust-levels-note">Dock icons per row: large 4 / med 5 / small 6</div>
 
       <div class="settings-section-label" style="margin-top:16px">QUICK ACTIONS</div>
       <div class="settings-actions-list">
