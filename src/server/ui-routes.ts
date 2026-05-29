@@ -26,6 +26,7 @@ import { config }                                from '../config/loader';
 import { listModels }                            from '../config/models';
 import { listCredentials }                       from '../security/credential-store';
 import { getServerAuthToken }                    from './auth';
+import { getBootId }                            from './boot-id';
 import { getPersonality }                        from '../personalities';
 import { getAvailableTools, getModelVisibleTools, toAnthropicFormat, toOpenAIFormat, findEnabledTool } from '../tools/registry';
 import { buildActiveProjectContext }              from '../projects/active';
@@ -983,6 +984,7 @@ export function mountUIRoutes(app: Express): void {
       port:       cfg.server?.port             ?? 3773,
       model:      process.env.MODEL            ?? 'nvidia/nemotron-3-super-120b-a12b:free',
       version:    VERSION,
+      bootId:     getBootId(),
     };
 
     html = html.replace(

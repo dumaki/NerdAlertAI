@@ -23,6 +23,7 @@ import { mountFilesRoutes, ensureProjectsRoot } from './files-routes';
 import { mountVoiceRoutes, ensureVoicesDir, ensureWhisperModelsDir } from './voice-routes';
 import { mountMemoryRoutes, logMemoryBootCapability } from './memory-routes';
 import { mountApprovalRoutes } from './approval-routes';
+import { mountRenderRoute } from './render-route';
 import { runBackfill } from '../memory/backfill';
 import { seedDefaults as seedSkillDefaults } from '../skills/engine';
 import { startTelegram } from '../telegram';
@@ -142,6 +143,16 @@ mountSecurityRoutes(app);
 // the chat UI. Files are stored under ~/.nerdalert/projects/<X-Project>/
 // (default "inbox"), where the project tool can later read them.
 mountFilesRoutes(app);
+
+// ---- RENDER WINDOW ROUTE ----
+// GET /api/render/get?project=&path= returns one project file (HTML /
+// markdown / code) for the ephemeral Render Window viewer. Conditional
+// mount — when config.render_window.enabled is false/absent, the route
+// never registers and the viewer's fetch 404s. Strict-superset preserved,
+// same contract as the voice routes below.
+if (config.render_window?.enabled) {
+  mountRenderRoute(app);
+}
 
 // ---- VOICE ROUTES ----
 // POST /api/tts synthesizes speech from text using a personality's Piper

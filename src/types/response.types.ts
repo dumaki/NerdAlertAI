@@ -188,6 +188,7 @@ export interface AgentConfig {
   documents?: DocumentsConfig; // optional — absent / disabled = tool hidden, no chunk store
   skills?: SkillsConfig;       // optional: absent/disabled = no seed, no skills panel
   safety?: SafetyConfig;       // optional: absent/disabled = no snapshots; destructive ops unchanged
+  render_window?: RenderWindowConfig; // optional: absent/disabled = no /api/render/get route, no viewer
   models?: ModelEntry[];     // v0.7 Slice 5a: declarative model registry (below).
                              // Absent = empty registry, so model-switching has
                              // nothing to allow. Core config, not a removable
@@ -398,5 +399,12 @@ export interface SnapshotRetentionConfig {
 }
 
 export interface GitSafetyConfig {
+  enabled: boolean;
+}
+
+// --- RENDER WINDOW MODULE (v0.8.x) ---
+// Ephemeral artifact viewer. Absent/disabled => the /api/render/get route is
+// not mounted, the dock icon is hidden, and the UI is byte-identical.
+export interface RenderWindowConfig {
   enabled: boolean;
 }
