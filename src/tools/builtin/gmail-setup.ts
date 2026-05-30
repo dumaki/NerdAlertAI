@@ -1,9 +1,11 @@
 // ============================================================
 // src/tools/builtin/gmail-setup.ts  — Gmail Onboarding Tool
 // ============================================================
-// Guides a first-time user through Gmail App Password setup
-// and writes their secrets file without them ever touching
-// a config file manually.
+// Guides a first-time user through Gmail setup: collects their
+// email + signature and writes the mail config scaffold, without
+// them touching a config file manually. The App Password itself is
+// entered separately via the /setup panel — it never passes through
+// chat or the model.
 //
 // ACTIONS
 // ───────
@@ -12,11 +14,14 @@
 //             The agent presents one step at a time and waits
 //             for confirmation before continuing.
 //
-//   save   — receives the three collected values (email,
-//             appPassword, signature), validates them, writes
-//             ~/.nerdalert/secrets/email-gmail.json, updates
-//             GMAIL_CONFIG_PATH in .env, and flips
-//             gmail.enabled: true in config.yaml.
+//   save   — receives the collected email + signature, validates
+//             the email, writes the mail config scaffold to
+//             ~/.nerdalert/secrets/email-gmail.json (App Password
+//             left blank), updates GMAIL_CONFIG_PATH in .env, and
+//             flips gmail.enabled: true in config.yaml.
+//             The App Password is NOT handled here — the user enters
+//             it via the /setup panel, where it is stored in the
+//             credential store and layered in by loadGmailConfig.
 //
 // TRUST LEVEL
 // ───────────
@@ -26,7 +31,7 @@
 //
 // WHAT GETS WRITTEN
 // ─────────────────
-//   ~/.nerdalert/secrets/email-gmail.json  — the secrets file
+//   ~/.nerdalert/secrets/email-gmail.json  — mail config scaffold (App Password left blank)
 //   .env                                   — GMAIL_CONFIG_PATH added/updated
 //   config.yaml                            — gmail.enabled set to true
 // ============================================================
@@ -65,28 +70,17 @@ function getPlaybookPath(): string {
 
 // ── Validation ────────────────────────────────────────────────────────────────
 
-// App Passwords are 16 letters — Google shows them with spaces but
-// the actual credential has none. We strip spaces before validating.
-function validateAppPassword(raw: string): { ok: boolean; cleaned: string; error?: string } {
-  const cleaned = raw.replace(/\s+/g, '')
-  if (!/^[a-zA-Z]{16}$/.test(cleaned)) {
-    return {
-      ok: false,
-      cleaned,
-      error: `App Passwords are 16 letters with no numbers or symbols. Got ${cleaned.length} characters: "${cleaned}". Try copying it again from the Google page.`,
-    }
-  }
-  return { ok: true, cleaned }
-}
-
 function validateEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
 }
 
 // ── Build the secrets JSON ────────────────────────────────────────────────────
 // All IMAP/SMTP fields are the same for every Gmail account.
-// Only email, appPassword, and signature are user-supplied.
-function buildSecretsJson(email: string, appPassword: string, signature: string): object {
+// Only email and signature are user-supplied here. The App Password is left
+// blank on purpose: it is entered through /setup, stored in the credential
+// store, and layered in by loadGmailConfig at read time (the keychain value
+// takes precedence over this file). This keeps the live credential out of chat.
+function buildSecretsJson(email: string, signature: string): object {
   const trimmedEmail = email.trim().toLowerCase()
   return {
     accountId: 'gmail-main',
@@ -103,8 +97,10 @@ function buildSecretsJson(email: string, appPassword: string, signature: string)
       secure: true,
     },
     auth: {
+      // Placeholder — the real App Password is entered via /setup and overridden
+      // by loadGmailConfig from the credential store at read time.
       user:        trimmedEmail,
-      appPassword: appPassword,
+      appPassword: '',
     },
     defaults: {
       mailbox:      'INBOX',
@@ -185,7 +181,10 @@ function enableGmailInConfig(): { ok: boolean; note: string } {
 
 const gmailSetupTool: NerdAlertTool = {
   name: 'gmail-setup',
-  description: `Guides the user through Gmail App Password setup and saves their credentials.
+  description: `Guides the user through Gmail setup. Collects their email address and
+signature and writes the mail config scaffold. The 16-character App Password is entered
+separately by the user through the /setup panel (the gmail-app-password field), never
+through chat — this tool never sees or stores the credential.
 Use this when:
   - The user asks to set up email
   - The user says "run email setup"
@@ -194,10 +193,13 @@ Use this when:
 Actions:
   'start'  — reads the setup playbook and begins the guided flow.
              Present the playbook one step at a time, pausing between each.
-             Collect: email address, App Password (16 chars), email signature.
-  'save'   — call this once all three values are collected.
-             Writes the secrets file, updates .env, enables gmail in config.yaml.
-             Never call save until you have confirmed all three values with the user.`,
+             Collect: email address and email signature. Do NOT ask the user to
+             paste their App Password into chat — that is entered in /setup.
+  'save'   — call this once email and signature are confirmed.
+             Writes the scaffold, updates .env, enables gmail in config.yaml.
+             Then tell the user to paste their App Password into the
+             gmail-app-password field in /setup to finish, and to restart the server.
+             Never call save until you have confirmed the email and signature.`,
 
   trustLevel: 1,
 
@@ -212,10 +214,6 @@ Actions:
       email: {
         type:        'string',
         description: 'The user\'s Gmail address. Required for save.',
-      },
-      appPassword: {
-        type:        'string',
-        description: 'The 16-character Google App Password. Spaces will be stripped. Required for save.',
       },
       signature: {
         type:        'string',
@@ -243,7 +241,6 @@ Actions:
     // ── SAVE: validate, write, enable ─────────────────────────────────────────
     if (action === 'save') {
       const email       = (params.email       as string ?? '').trim()
-      const appPassword = (params.appPassword  as string ?? '').trim()
       const signature   = (params.signature    as string ?? '').trim()
 
       // Validate email
@@ -251,14 +248,9 @@ Actions:
         return err(`"${email}" doesn't look like a valid email address. Double-check and try again.`)
       }
 
-      // Validate App Password
-      const pwCheck = validateAppPassword(appPassword)
-      if (!pwCheck.ok) {
-        return err(pwCheck.error!)
-      }
-
-      // Build secrets object
-      const secrets     = buildSecretsJson(email, pwCheck.cleaned, signature)
+      // Build secrets object. The App Password is NOT collected here — it is
+      // entered via /setup and layered in by loadGmailConfig at read time.
+      const secrets     = buildSecretsJson(email, signature)
       const secretsPath = getSecretsPath()
       const secretsDir  = path.dirname(secretsPath)
 
@@ -290,13 +282,15 @@ Actions:
 
       // Build confirmation message
       const lines = [
-        `✓ Secrets file written to ${secretsPath}`,
+        `✓ Mail config scaffold written to ${secretsPath}`,
         `✓ .env updated with GMAIL_CONFIG_PATH`,
         `✓ ${configResult.note}`,
         '',
-        configResult.ok
-          ? `Email is live. You'll need to restart the server for the config change to take effect.`
-          : `Email credentials are saved but you may need to manually set gmail.enabled: true in config.yaml, then restart the server.`,
+        'One step left: open /setup, paste your 16-character Gmail App Password into',
+        'the gmail-app-password field, and click Save. It is stored in the credential',
+        'store and never travels through chat. Email will not connect until this is done.',
+        '',
+        `Then restart the server for the changes to take effect.`,
         '',
         signature
           ? `Your signature is set to:\n${signature}`
