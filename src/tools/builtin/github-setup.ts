@@ -23,10 +23,6 @@
 //                  On pending: tells agent to ask user to wait
 //                  a moment and retry.
 //
-//   'save_pat'   — alternative path for users who already have a
-//                  Personal Access Token. Validates by hitting
-//                  /user, stores in keychain on success.
-//
 // Why server-side state for the device_code:
 //   v0.5.31.0 made the agent carry the long opaque device_code
 //   between connect and check tool calls. Smaller models (Mistral
@@ -66,16 +62,6 @@ const READ_ONLY_SCOPES = [
   'read:org',
   'notifications',
 ];
-
-
-// PAT length sanity bounds. GitHub PATs come in two shapes:
-//   classic       — 40-char hex string after "ghp_" or older
-//                   variants; full length 40-50 chars.
-//   fine-grained  — starts with "github_pat_", full length
-//                   ~85-90 chars.
-// We bound to 30..200 to accept both with margin.
-const PAT_MIN_LEN = 30;
-const PAT_MAX_LEN = 200;
 
 
 // ── Module-scope state ──────────────────────────────────────
@@ -122,9 +108,10 @@ Actions (call these in order during a setup conversation):
                  the prior 'connect'. Returns either success (with the connected
                  username) or a pending/error status. If pending, ask the user to
                  wait a moment and try again.
-  'save_pat'   — alternative path: user has an existing Personal Access Token
-                 they want to use instead. Validates and stores it.
 
+If the user already has a Personal Access Token they would rather use, tell them to open
+the /setup panel and paste it into the github-token field. Tokens are entered through the
+setup panel, never through chat.
 Never call 'check' before the user has confirmed they completed the authorization on GitHub.
 A new 'connect' replaces any prior in-flight setup.`,
 
@@ -135,12 +122,8 @@ A new 'connect' replaces any prior in-flight setup.`,
     properties: {
       action: {
         type: 'string',
-        enum: ['start', 'connect', 'check', 'save_pat'],
+        enum: ['start', 'connect', 'check'],
         description: 'Which step of the GitHub setup flow to run.',
-      },
-      pat: {
-        type:        'string',
-        description: "Required for 'save_pat'. A GitHub Personal Access Token.",
       },
     },
     required: ['action'],
@@ -329,50 +312,7 @@ A new 'connect' replaces any prior in-flight setup.`,
     }
 
 
-    // ── save_pat ─────────────────────────────────────────────
-    if (action === 'save_pat') {
-      const pat = (params.pat as string ?? '').trim();
-
-      if (!pat) {
-        return err("'save_pat' requires a Personal Access Token in the 'pat' parameter.");
-      }
-      if (pat.length < PAT_MIN_LEN || pat.length > PAT_MAX_LEN) {
-        return err(`That doesn't look like a valid Personal Access Token (length ${pat.length}; expected ${PAT_MIN_LEN}-${PAT_MAX_LEN} chars). Double-check what you copied and try again.`);
-      }
-
-      // Stash first, verify second. Order matters: if storing
-      // fails we never want to claim "connected".
-      try {
-        await setCredential('github-token', pat);
-      } catch (e: any) {
-        return err(`Could not store the token: ${e?.message ?? 'unknown error'}.`);
-      }
-
-      await initGithubCredential();
-
-      // PAT path also clears any pendingSetup — if the user
-      // gave up on Device Flow mid-attempt and pasted a PAT
-      // instead, we don't want stale state hanging around.
-      pendingSetup = null;
-
-      const userR = await getUser();
-      if (!userR.ok) {
-        return err(`Token saved but GitHub rejected it: ${userR.hint}. Check that the token has the required scopes (repo, read:org, read:user, notifications) and try again.`);
-      }
-
-      const u = userR.data;
-      return ok(
-        'GitHub connected (via PAT)',
-        [
-          'status: connected',
-          `Connected as @${u.login}${u.name ? ` (${u.name})` : ''}`,
-          'GitHub is ready. Note: PATs expire — if you set an expiration date, mark your calendar to refresh it.',
-        ].join('\n'),
-      );
-    }
-
-
-    return err(`Unknown action: "${action}". Use 'start', 'connect', 'check', or 'save_pat'.`);
+    return err(`Unknown action: "${action}". Use 'start', 'connect', or 'check'.`);
   },
 };
 
