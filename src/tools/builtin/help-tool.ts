@@ -28,47 +28,145 @@ import { getAvailableTools, findTool, findEnabledTool } from '../registry'
 import { listCredentials } from '../../security/credential-store'
 
 // ── Category grouping ─────────────────────────────────────────
-// Maps tool names to display groups. Anything not listed here
-// falls into 'Other'. Update when new tools are added.
-const TOOL_CATEGORIES: Record<string, string> = {
-  datetime:        'Core',
-  memory:          'Core',
-  help:            'Core',
-  project:         'Files',
-  gmail:           'Email',
-  'gmail-setup':   'Email',
-  'cron-manager':  'Automation',
-  wazuh:           'SOC',
-  pihole:          'SOC',
-  crowdsec:        'SOC',
-  pfsense:         'SOC',
-  fail2ban:        'SOC',
-  ntopng:          'SOC',
-  nmap:            'SOC',
-  loki:            'SOC',
-  influxdb:        'SOC',
+// Tools are grouped for display by an ordered rule list rather than a
+// flat name->category map. Each rule matches by exact tool name or by
+// name prefix, so a whole family (wazuh_*, gmail*, github*, ...) maps
+// from one entry -- and new per-action tools in a family can't silently
+// fall into 'Other', which is exactly how the old exact-match map kept
+// going stale across tool renames. First matching rule wins.
+interface CategoryRule {
+  match:    string
+  prefix?:  boolean
+  category: string
+}
+
+const CATEGORY_RULES: CategoryRule[] = [
+  // Core assistant utilities
+  { match: 'help',            category: 'Core' },
+  { match: 'memory',          category: 'Core' },
+  { match: 'get_datetime',    category: 'Core' },
+  { match: 'calculate',       category: 'Core' },
+  { match: 'currency',        category: 'Core' },
+  { match: 'timer',           category: 'Core' },
+  { match: 'reminders',       category: 'Core' },
+  // External lookup / reference
+  { match: 'web',             category: 'Knowledge' },
+  { match: 'wikipedia',       category: 'Knowledge' },
+  { match: 'maps',            category: 'Knowledge' },
+  { match: 'weather',         category: 'Knowledge' },
+  { match: 'rss',             category: 'Knowledge' },
+  // Files & projects
+  { match: 'project',         prefix: true, category: 'Files' },      // project, project_write
+  { match: 'documents',       category: 'Files' },
+  // Email
+  { match: 'gmail',           prefix: true, category: 'Email' },      // gmail, -setup, _send, _cleanup
+  // Calendar
+  { match: 'google_calendar', category: 'Calendar' },
+  { match: 'calendar-setup',  category: 'Calendar' },
+  // Dev
+  { match: 'github',          prefix: true, category: 'Dev' },       // github, -setup, _write
+  // Automation
+  { match: 'cron',            prefix: true, category: 'Automation' }, // cron_manager, cron_delete
+  // SOC / infrastructure monitoring
+  { match: 'host_metrics',    category: 'SOC' },
+  { match: 'wazuh_',          prefix: true, category: 'SOC' },
+  { match: 'pihole_',         prefix: true, category: 'SOC' },
+  { match: 'crowdsec_',       prefix: true, category: 'SOC' },
+  { match: 'pfsense_',        prefix: true, category: 'SOC' },
+  { match: 'fail2ban_',       prefix: true, category: 'SOC' },
+  { match: 'ntopng_',         prefix: true, category: 'SOC' },
+  { match: 'nmap_',           prefix: true, category: 'SOC' },
+  { match: 'loki_',           prefix: true, category: 'SOC' },
+  { match: 'influxdb_',       prefix: true, category: 'SOC' },
+]
+
+// First matching rule wins; unmatched tools fall into 'Other'.
+function categoryOf(name: string): string {
+  for (const rule of CATEGORY_RULES) {
+    if (rule.prefix ? name.startsWith(rule.match) : name === rule.match) {
+      return rule.category
+    }
+  }
+  return 'Other'
 }
 
 // ── One-liner summaries ───────────────────────────────────────
 // Short descriptions shown in the list view. Kept separate from
-// the full tool description so the list stays scannable.
+// the full tool description so the list stays scannable. Keyed by the
+// real registered tool name; any tool without an entry falls back to
+// the first line of its own description.
 const TOOL_SUMMARIES: Record<string, string> = {
-  datetime:       'Current date, time, and timezone.',
-  memory:         'Store and retrieve facts across sessions.',
-  help:           'List available tools or get detail on one.',
-  project:        'Read files the user has dropped into the inbox or other projects.',
-  gmail:          'Read, triage, draft, and clean up email.',
-  'gmail-setup':  'Configure Gmail credentials interactively.',
-  'cron-manager': 'View and manage scheduled automation jobs.',
-  wazuh:          'SIEM alerts, agent status, rule queries.',
-  pihole:         'DNS block stats, query log, whitelist/blacklist.',
-  crowdsec:       'Intrusion decisions, alerts, hub status.',
-  pfsense:        'Firewall rules, interface stats, DHCP leases.',
-  fail2ban:       'Banned IPs, jail status, recent failures.',
-  ntopng:         'Live network traffic and top talkers.',
-  nmap:           'Network host and port scanning.',
-  loki:           'Log aggregation queries and stream tailing.',
-  influxdb:       'Metrics queries and time-series data.',
+  // Core
+  help:                    'List available tools or get detail on one.',
+  memory:                  'Store and retrieve facts across sessions.',
+  get_datetime:            'Current date, time, and timezone.',
+  calculate:               'Evaluate math expressions.',
+  currency:                'Convert between currencies.',
+  timer:                   'Set and check countdown timers.',
+  reminders:               'Set and list reminders.',
+  // Knowledge
+  web:                     'Search the web.',
+  wikipedia:               'Look up Wikipedia articles.',
+  maps:                    'Look up places, directions, and travel times.',
+  weather:                 'Current conditions and forecast for a location.',
+  rss:                     'Fetch and read RSS feeds.',
+  // Files
+  project:                 'Read files in projects under ~/.nerdalert/projects.',
+  project_write:           'Create or modify files in a project.',
+  documents:               'Search and read indexed documents.',
+  // Email
+  gmail:                   'Read, triage, draft, and clean up email.',
+  'gmail-setup':           'Connect Gmail (guided setup).',
+  gmail_send:              'Send a composed, reviewed email.',
+  gmail_cleanup:           'Move promotional mail out of the inbox.',
+  // Calendar
+  google_calendar:         'Read upcoming calendar events.',
+  'calendar-setup':        'Connect Google Calendar (guided OAuth).',
+  // Dev
+  github:                  'Read repos, issues, and pull requests.',
+  'github-setup':          'Connect GitHub (guided OAuth).',
+  github_write:            'Create/close issues, comment, manage labels.',
+  // Automation
+  cron_manager:            'View and manage scheduled automation jobs.',
+  cron_delete:             'Permanently delete a job and its run history.',
+  // SOC / infrastructure monitoring
+  host_metrics:            'Local host CPU, memory, and disk stats.',
+  wazuh_agent_status:      'Wazuh agent status and health.',
+  wazuh_alert_summary:     'Wazuh alert summary counts.',
+  wazuh_get_alerts:        'Recent Wazuh security alerts.',
+  wazuh_search_ip:         'Search Wazuh alerts for an IP.',
+  wazuh_top_rules:         'Top firing Wazuh rules.',
+  pihole_summary:          'Pi-hole stats: queries and % blocked.',
+  pihole_query_log:        'Recent Pi-hole DNS queries.',
+  pihole_recent_blocked:   'Recently blocked Pi-hole domains.',
+  pihole_search_domain:    'Search Pi-hole logs for a domain.',
+  pihole_top_blocked:      'Top blocked Pi-hole domains.',
+  pihole_top_clients:      'Top Pi-hole clients by query count.',
+  crowdsec_alerts:         'Recent CrowdSec alerts.',
+  crowdsec_decisions:      'Active CrowdSec decisions (bans/blocks).',
+  crowdsec_metrics:        'CrowdSec metrics overview.',
+  crowdsec_search_ip:      'Search CrowdSec for an IP.',
+  pfsense_blocked_traffic: 'pfSense recently blocked traffic.',
+  pfsense_dhcp_leases:     'pfSense DHCP leases.',
+  pfsense_gateway_status:  'pfSense gateway status and latency.',
+  pfsense_interfaces:      'pfSense interface stats.',
+  pfsense_system_info:     'pfSense system info.',
+  fail2ban_status:         'Fail2ban jail status.',
+  fail2ban_banned_ips:     'Fail2ban currently banned IPs.',
+  fail2ban_recent_bans:    'Fail2ban recent bans.',
+  fail2ban_check_ip:       'Check if an IP is banned in Fail2ban.',
+  ntopng_top_hosts:        'ntopng top talkers.',
+  ntopng_interface_stats:  'ntopng interface traffic stats.',
+  ntopng_alerts:           'ntopng traffic alerts.',
+  ntopng_search_host:      'ntopng lookup for a host.',
+  nmap_quick_scan:         'Nmap quick scan of a host.',
+  nmap_port_scan:          'Nmap port scan of a host.',
+  nmap_ping_sweep:         'Nmap ping sweep of a subnet.',
+  loki_service_logs:       'Loki logs for a service.',
+  loki_host_logs:          'Loki logs for a host.',
+  loki_search_ip:          'Search Loki logs for an IP.',
+  influxdb_list_hosts:     'InfluxDB: list monitored hosts.',
+  influxdb_host_overview:  'InfluxDB: host metrics overview.',
 }
 
 // ── Connectable integrations ────────────────────────────
@@ -115,12 +213,12 @@ function formatList(tools: NerdAlertTool[], connections: ConnList): string {
   // Group by category
   const groups: Record<string, NerdAlertTool[]> = {}
   for (const tool of tools) {
-    const cat = TOOL_CATEGORIES[tool.name] ?? 'Other'
+    const cat = categoryOf(tool.name)
     if (!groups[cat]) groups[cat] = []
     groups[cat].push(tool)
   }
 
-  const ORDER = ['Core', 'Files', 'Email', 'Automation', 'SOC', 'Other']
+  const ORDER = ['Core', 'Knowledge', 'Files', 'Email', 'Calendar', 'Dev', 'Automation', 'SOC', 'Other']
   const lines: string[] = [
     '━━ AVAILABLE TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
     '',
@@ -153,7 +251,7 @@ function formatList(tools: NerdAlertTool[], connections: ConnList): string {
   lines.push('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
   lines.push('')
   lines.push('Type /help <tool> for a full breakdown of any tool.')
-  lines.push('Example: /help memory   /help gmail   /help pihole')
+  lines.push('Example: /help memory   /help gmail   /help pihole_summary')
 
   return lines.join('\n')
 }
