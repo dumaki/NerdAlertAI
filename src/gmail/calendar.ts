@@ -23,19 +23,92 @@
 import https from 'https'
 import fs    from 'fs'
 import { CalendarConfig, CalendarEvent, CalendarMatch, GmailMessage } from '../types/gmail.types'
+import { getCredential } from '../security/credential-store'
 
 // ── Config loading ────────────────────────────────────────────────────────────
 const DEFAULT_CALENDAR_SECRET_PATH =
   process.env.GOOGLE_CALENDAR_SECRET_PATH ??
   (process.env.HOME ?? '/tmp') + '/.nerdalert/secrets/google-calendar.json'
 
+// Defaults for the non-secret settings when the config is synthesized purely
+// from the credential store (no legacy JSON file present). A single-user
+// install reads the primary calendar and looks a week ahead — the same values
+// the original google-calendar.json shipped with.
+const DEFAULT_CALENDAR_ID     = 'primary'
+const DEFAULT_LOOK_AHEAD_DAYS = 7
+
+// Credential cache (Calendar Slice B).
+// The OAuth client id/secret and the minted refresh token move onto the
+// credential store (keychain or chmod-600 fallback), away from the loose JSON.
+// getCredential is async but loadCalendarConfig is called synchronously, so we
+// resolve once at boot / after a /setup write and cache here — the exact mirror
+// of initGmailCredential in src/gmail/config.ts.
+//
+// Until initCalendarCredential runs (or if nothing is stored), all three stay
+// null and loadCalendarConfig falls back to the legacy JSON file, byte-identical
+// to the pre-Slice-B behaviour.
+let cachedClientId:     string | null = null
+let cachedClientSecret: string | null = null
+let cachedRefreshToken: string | null = null
+
+/**
+ * Pull the calendar OAuth credentials from the credential store and cache them
+ * for synchronous reads. Call once at server boot and again after the /setup
+ * panel or the OAuth callback writes a new value.
+ *
+ * Returns true if the full triple (client id + secret + refresh token) is
+ * present — i.e. the credential store alone can drive the calendar. Returns
+ * false otherwise, in which case loadCalendarConfig falls back to the JSON file.
+ */
+export async function initCalendarCredential(): Promise<boolean> {
+  try {
+    cachedClientId     = (await getCredential('google-calendar-client-id'))     || null
+    cachedClientSecret = (await getCredential('google-calendar-client-secret')) || null
+    cachedRefreshToken = (await getCredential('google-calendar-refresh-token')) || null
+  } catch {
+    // Keychain read failed (rare) — treat as not-configured, fall back to JSON.
+    cachedClientId = cachedClientSecret = cachedRefreshToken = null
+    return false
+  }
+  return !!(cachedClientId && cachedClientSecret && cachedRefreshToken)
+}
+
 export function loadCalendarConfig(secretPath?: string): CalendarConfig | null {
+  // Base layer: the legacy JSON file, if present. Existing installs keep
+  // working unchanged — this is the migration fallback, the same role the JSON
+  // plays for gmail's appPassword.
+  let base: CalendarConfig | null = null
   const targetPath = secretPath ?? DEFAULT_CALENDAR_SECRET_PATH
   try {
-    return JSON.parse(fs.readFileSync(targetPath, 'utf8')) as CalendarConfig
+    base = JSON.parse(fs.readFileSync(targetPath, 'utf8')) as CalendarConfig
   } catch {
-    return null   // calendar is optional — null means skip gracefully
+    base = null   // no file — fine, we may still build from the credential store
   }
+
+  // Credential-store layer: overrides the secret fields when cached. The
+  // keychain copy wins over the JSON, so the moment the OAuth flow stores a
+  // fresh refresh token it supersedes any stale value left in the file.
+  if (base) {
+    if (cachedClientId)     base.clientId     = cachedClientId
+    if (cachedClientSecret) base.clientSecret = cachedClientSecret
+    if (cachedRefreshToken) base.refreshToken = cachedRefreshToken
+    return base
+  }
+
+  // No JSON file: synthesize the config from the credential store alone, but
+  // only when the full triple is present — a partial set can't drive the API.
+  if (cachedClientId && cachedClientSecret && cachedRefreshToken) {
+    return {
+      clientId:      cachedClientId,
+      clientSecret:  cachedClientSecret,
+      refreshToken:  cachedRefreshToken,
+      calendarId:    DEFAULT_CALENDAR_ID,
+      lookAheadDays: DEFAULT_LOOK_AHEAD_DAYS,
+    }
+  }
+
+  // Neither source usable — calendar is not configured.
+  return null
 }
 
 // ── HTTPS helper ──────────────────────────────────────────────────────────────
