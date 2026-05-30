@@ -27,6 +27,7 @@ import gmailTool        from './builtin/gmail-tool';
 import gmailSetupTool   from './builtin/gmail-setup';
 import gmailSendTool    from './builtin/gmail-send-tool';
 import gmailCleanupTool from './builtin/gmail-cleanup-tool';
+import googleCalendarTool from './builtin/google-calendar-tool';
 import githubTool       from './builtin/github-tool';
 import githubWriteTool  from './builtin/github-write-tool';
 import githubSetupTool  from './builtin/github-setup';
@@ -111,6 +112,11 @@ const ALL_TOOLS: NerdAlertTool[] = [
   gmailCleanupTool,
   gmailTool,
   gmailSetupTool,
+
+  // Google Calendar (read-only, L1) — the calendar half of the email/calendar
+  // module. Wraps the existing src/gmail/calendar.ts read path. Sits with the
+  // gmail cluster; web-tool's description already routes calendar intents here.
+  googleCalendarTool,
 
   // cron's L3 dangerous-write (delete) sits BEFORE the broad cron_manager
   // tool — same positional-bias mitigation as the gmail send/cleanup cluster
