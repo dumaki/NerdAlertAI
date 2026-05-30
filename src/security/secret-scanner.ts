@@ -80,6 +80,15 @@ const RULES: ScanRule[] = [
     pattern: /\bgh[opusr]_[A-Za-z0-9]{36,}\b/g,
   },
   {
+    name: 'GITHUB-FINE-GRAINED-PAT',
+    tier: 'critical',
+    description: 'GitHub fine-grained personal access token',
+    // github_pat_ prefix, then a 22-char base62 segment, an underscore, and a
+    // 59-char base62 segment. The internal underscore is why the classic
+    // GITHUB-TOKEN rule (no underscores in the body) misses these.
+    pattern: /\bgithub_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59}\b/g,
+  },
+  {
     name: 'AWS-ACCESS-KEY',
     tier: 'critical',
     description: 'AWS access key ID',

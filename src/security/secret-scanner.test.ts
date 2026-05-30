@@ -21,6 +21,8 @@ const cases: Case[] = [
   { label: 'Anthropic key', input: 'my key is sk-ant-api03-aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789', expectTier: 'critical', expectRedacted: true },
   { label: 'OpenAI key', input: 'sk-proj-abc123def456ghi789jkl012mno345pqr', expectTier: 'critical', expectRedacted: true },
   { label: 'GitHub PAT', input: 'token: ghp_abcdefghijklmnopqrstuvwxyz0123456789', expectTier: 'critical', expectRedacted: true },
+  { label: 'GitHub fine-grained PAT', input: 'token: github_pat_11ABCDEFG0HiJkLmNoPqRs_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789AbCdEfGhIjKlMnOpQrStUvW', expectTier: 'critical', expectRedacted: true },
+  { label: 'github_pat substring in prose (no match)', input: 'the github_pattern we discussed earlier', expectTier: null, expectClean: true },
   { label: 'AWS access key', input: 'AKIAIOSFODNN7EXAMPLE in my config', expectTier: 'critical', expectRedacted: true },
   { label: 'Telegram bot token', input: 'TELEGRAM_BOT_TOKEN=123456789:AAEhBP0av28FQ_8iuO-aBcDeFgHiJkLmNoP', expectTier: 'critical', expectRedacted: true },
   { label: 'Slack token', input: 'xoxb-1234567890-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx', expectTier: 'critical', expectRedacted: true },
