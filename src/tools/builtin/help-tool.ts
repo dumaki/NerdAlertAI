@@ -25,6 +25,7 @@
 
 import { NerdAlertTool, NerdAlertResponse } from '../../types/response.types'
 import { getAvailableTools, findTool, findEnabledTool } from '../registry'
+import { listCredentials } from '../../security/credential-store'
 
 // ── Category grouping ─────────────────────────────────────────
 // Maps tool names to display groups. Anything not listed here
@@ -70,8 +71,47 @@ const TOOL_SUMMARIES: Record<string, string> = {
   influxdb:       'Metrics queries and time-series data.',
 }
 
+// ── Connectable integrations ────────────────────────────
+// Discoverability surface for /help: the integrations a user can
+// connect through a guided setup tool, shown with live status.
+// Kept declarative so it lifts cleanly into a shared integrations
+// module when the Connections view is built — both that view and
+// this list would read the same set and the same credential-
+// presence signal that /api/setup/status already uses.
+//
+// statusKey is the credential whose presence means "connected".
+// For Calendar that is the minted refresh token (the actually-
+// connected state), not the pasted client id.
+interface Connectable {
+  label:     string
+  blurb:     string
+  phrase:    string   // what the user says to start setup
+  statusKey: string   // credential-store key; present => connected
+}
+
+type ConnList = (Connectable & { connected: boolean })[] | null
+
+const CONNECTABLE: Connectable[] = [
+  { label: 'Gmail',           blurb: 'Read, triage, draft, and clean up email.', phrase: 'run gmail setup',    statusKey: 'gmail-app-password' },
+  { label: 'GitHub',          blurb: 'Read repos, issues, and pull requests.',   phrase: 'run github setup',   statusKey: 'github-token' },
+  { label: 'Google Calendar', blurb: 'See your upcoming events.',                phrase: 'run calendar setup', statusKey: 'google-calendar-refresh-token' },
+]
+
+// One credential-store read resolves every integration's status.
+// Returns null on any error so /help degrades to "no Connections
+// section" rather than breaking or falsely showing everything as
+// disconnected.
+async function resolveConnections(): Promise<ConnList> {
+  try {
+    const stored = await listCredentials()
+    return CONNECTABLE.map(c => ({ ...c, connected: stored.includes(c.statusKey) }))
+  } catch {
+    return null
+  }
+}
+
 // ── Format: list view ─────────────────────────────────────────
-function formatList(tools: NerdAlertTool[]): string {
+function formatList(tools: NerdAlertTool[], connections: ConnList): string {
   // Group by category
   const groups: Record<string, NerdAlertTool[]> = {}
   for (const tool of tools) {
@@ -92,6 +132,20 @@ function formatList(tools: NerdAlertTool[]): string {
     for (const tool of groups[cat]) {
       const summary = TOOL_SUMMARIES[tool.name] ?? tool.description.split('\n')[0]
       lines.push(`  ${tool.name.padEnd(16)} ${summary}`)
+    }
+    lines.push('')
+  }
+
+  // Connectable integrations with live status — the discoverability
+  // surface. Shows a checkbox per integration; the "say ..." setup
+  // nudge appears only for ones not yet connected. Omitted entirely
+  // when status could not be resolved (resolveConnections → null).
+  if (connections && connections.length > 0) {
+    lines.push('[ CONNECTIONS ]')
+    for (const c of connections) {
+      const box   = c.connected ? '[✓]' : '[ ]'
+      const nudge = c.connected ? '' : `  ·  say "${c.phrase}"`
+      lines.push(`  ${box} ${c.label.padEnd(16)} ${c.blurb}${nudge}`)
     }
     lines.push('')
   }
@@ -168,10 +222,11 @@ Triggered by /help (list) or /help <toolname> (detail).`,
     const action = params.action as string
 
     if (action === 'list') {
-      const available = getAvailableTools()
+      const available   = getAvailableTools()
+      const connections = await resolveConnections()
       return {
         type:    'text',
-        content: formatList(available),
+        content: formatList(available, connections),
         metadata: { title: 'Available tools', sources: [] },
       }
     }
