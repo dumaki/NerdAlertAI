@@ -4409,7 +4409,7 @@
         div.className = 'message agent';
         div.innerHTML = `
           <div class="message-label">${activeAgentName.toUpperCase()}</div>
-          <div class="message-bubble"><span style="white-space:pre-wrap">${escapeHTML(msg.content)}</span></div>
+          <div class="message-bubble"><span style="white-space:pre-wrap">${linkifyText(msg.content)}</span></div>
         `;
         container.appendChild(div);
 
@@ -7387,6 +7387,22 @@
     return div;
   }
 
+  // Turn http(s) links in finalized agent text into clickable anchors. Escape
+  // first, then linkify markdown [label](url) and bare URLs. A placeholder pass
+  // keeps the bare-URL regex from re-matching a URL already wrapped as a
+  // markdown link. http/https only; opens in a new tab with noopener. URLs are
+  // matched excluding quotes so a URL can't break out of the href attribute.
+  function linkifyText(raw) {
+    let html = escapeHTML(raw);
+    const stash = [];
+    const stub = (anchor) => '\u0000' + (stash.push(anchor) - 1) + '\u0000';
+    html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)"']+)\)/g,
+      (_m, label, url) => stub('<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + '</a>'));
+    html = html.replace(/(https?:\/\/[^\s<>"']+)/g,
+      (_m, url) => stub('<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + url + '</a>'));
+    return html.replace(/\u0000(\d+)\u0000/g, (_m, i) => stash[+i]);
+  }
+
   function finalizeAgentMessage(text) {
     const bubble = document.getElementById('streaming-bubble');
     const cursor = document.getElementById('streaming-cursor');
@@ -7394,7 +7410,13 @@
     if (bubble) {
       bubble.removeAttribute('id');
       const span = bubble.querySelector('#streaming-text');
-      if (span) span.removeAttribute('id');
+      if (span) {
+        // Linkify the finalized text — turn markdown / bare URLs into clickable
+        // anchors. Done once here (not per streamed token), on the text already
+        // displayed in the span.
+        span.innerHTML = linkifyText(span.textContent);
+        span.removeAttribute('id');
+      }
       const prefetch = bubble.querySelector('#prefetch-blocks');
       if (prefetch) prefetch.removeAttribute('id');
 
