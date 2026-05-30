@@ -96,6 +96,8 @@ function loopbackOnly(req: Request, res: Response, next: NextFunction) {
 const ALLOWED: Record<string, { description: string; minLen: number; maxLen: number; test?: 'gmail' | 'provider' }> = {
   'gmail-app-password':     { description: 'Gmail App Password (16 chars, may include spaces)', minLen: 16, maxLen: 64, test: 'gmail' },
   'github-token':           { description: 'GitHub access token (OAuth Device Flow or Personal Access Token). Run github-setup for the guided OAuth flow.', minLen: 30, maxLen: 200 },
+  'google-calendar-client-id':     { description: 'Google Calendar OAuth client ID (Desktop-app client, ends .apps.googleusercontent.com). Run calendar-setup for the guided flow.', minLen: 30, maxLen: 120 },
+  'google-calendar-client-secret': { description: 'Google Calendar OAuth client secret (paired with the client ID above)',                                       minLen: 16, maxLen: 80  },
   'telegram-bot-token':     { description: 'Telegram Bot Token',                                minLen: 40, maxLen: 80 },
   'sonarr-api-key':         { description: 'Sonarr API key',                                    minLen: 16, maxLen: 64 },
   'radarr-api-key':         { description: 'Radarr API key',                                    minLen: 16, maxLen: 64 },
@@ -134,6 +136,26 @@ const PROVIDER_PROBES: Record<string, { url: string; auth: 'bearer' | 'x-api-key
   'anthropic-key':  { url: 'https://api.anthropic.com/v1/models',    auth: 'x-api-key', extraHeaders: { 'anthropic-version': '2023-06-01' } },
 };
 
+// ---------- Calendar OAuth callback page ----------
+// Tiny self-contained status page shown in the browser after the Google
+// redirect. No external assets. The message is HTML-escaped because on the
+// error path it can carry text from Google's response.
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function calendarCallbackPage(ok: boolean, message: string): string {
+  const title = ok ? 'Calendar connected' : 'Calendar connection failed';
+  const color = ok ? '#2e7d32' : '#c62828';
+  return '<!doctype html><html><head><meta charset="utf-8"><title>' + title + '</title>' +
+    '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+    '<style>body{font-family:system-ui,-apple-system,sans-serif;background:#0b0f14;color:#e6edf3;' +
+    'display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}' +
+    '.card{max-width:440px;padding:32px;text-align:center}' +
+    'h1{color:' + color + ';font-size:20px;margin:0 0 12px}p{line-height:1.5;color:#9fb0c0}</style></head>' +
+    '<body><div class="card"><h1>' + title + '</h1><p>' + escapeHtml(message) + '</p></div></body></html>';
+}
+
 // ---------- Mount ----------
 
 export function mountSecurityRoutes(app: Express): void {
@@ -162,6 +184,43 @@ export function mountSecurityRoutes(app: Express): void {
       status[name] = stored.includes(name);
     }
     res.json({ backend, status, allowed: ALLOWED });
+  });
+
+  // GET /api/setup/calendar/callback — Google OAuth loopback redirect target.
+  // The user's BROWSER lands here after granting consent (no bearer token on a
+  // top-level navigation), so this path is exempted from auth in index.ts and
+  // guarded instead by loopbackOnly + the server-side state nonce that
+  // handleCallback validates. It sits under /api/setup/* so the secret scanner
+  // already exempts the ?code param. The exchange happens server-side; the
+  // browser only ever receives a status page, never a token.
+  app.get('/api/setup/calendar/callback', loopbackOnly, async (req: Request, res: Response) => {
+    const code       = typeof req.query.code  === 'string' ? req.query.code  : '';
+    const state      = typeof req.query.state === 'string' ? req.query.state : '';
+    const oauthError = typeof req.query.error === 'string' ? req.query.error : '';
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+
+    if (oauthError) {
+      return res.status(400).send(calendarCallbackPage(false, `Google returned an error: ${oauthError}`));
+    }
+    if (!code || !state) {
+      return res.status(400).send(calendarCallbackPage(false, 'The callback was missing its code or state.'));
+    }
+
+    try {
+      const { handleCallback } = require('../gmail/calendar-oauth');
+      const result = await handleCallback(code, state);
+      if (result.ok) {
+        console.log(`[security] calendar oauth callback ok ts=${new Date().toISOString()}`);
+        return res.send(calendarCallbackPage(true, 'Google Calendar is connected. You can close this tab and return to NerdAlert.'));
+      }
+      console.warn(`[security] calendar oauth callback failed: ${result.error}`);
+      return res.status(400).send(calendarCallbackPage(false, result.error));
+    } catch (e: any) {
+      console.error(`[security] calendar oauth callback threw: ${e?.message}`);
+      return res.status(500).send(calendarCallbackPage(false, 'Internal error completing the calendar connection.'));
+    }
   });
 
   // POST /api/setup/credential — accept a credential
@@ -298,6 +357,19 @@ export function mountSecurityRoutes(app: Express): void {
           await initGithubCredential();
         } catch (e: any) {
           console.warn('[security] github cache refresh after credential write failed:', e?.message);
+        }
+      }
+
+      // Calendar OAuth client id/secret — refresh the calendar credential cache
+      // so the next connect/callback (and loadCalendarConfig) see the new values
+      // without a server restart. The refresh TOKEN is not written through this
+      // route; it is minted by the OAuth callback, which refreshes the cache too.
+      if (name === 'google-calendar-client-id' || name === 'google-calendar-client-secret') {
+        try {
+          const { initCalendarCredential } = require('../gmail/calendar');
+          await initCalendarCredential();
+        } catch (e: any) {
+          console.warn('[security] calendar cache refresh after credential write failed:', e?.message);
         }
       }
 

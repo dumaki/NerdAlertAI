@@ -38,6 +38,7 @@ import {
 import { startReminders, stopReminders } from '../reminders';
 import { initGmailCredential } from '../gmail/config';
 import { initGithubCredential } from '../github/config';
+import { initCalendarCredential } from '../gmail/calendar';
 import { initActiveProject } from '../projects/active';
 import { initOpenRouterKey, initAnthropicKey, initProviderKey } from '../core/llm-client';
 import { listModels } from '../config/models';
@@ -105,6 +106,7 @@ app.use((req, res, next) => {
   if (req.method === 'GET' && req.path === '/api/soc/wall')       return next();
   if (req.method === 'GET' && req.path === '/api/host/metrics')   return next();
   if (req.method === 'GET' && req.path === '/api/setup/panel')    return next();
+  if (req.method === 'GET' && req.path === '/api/setup/calendar/callback') return next();
   requireAuth(req, res, next);
 });
 
@@ -322,6 +324,17 @@ startTelegram().catch((err: unknown) => {
     if (found) console.log('[NerdAlert] GitHub credential loaded from credential store');
   }).catch((err: unknown) => {
     console.error('[NerdAlert] initGithubCredential failed:', err);
+  });
+
+  // Pull the calendar OAuth credentials (client id/secret + refresh token)
+  // from the credential store once at boot, so loadCalendarConfig() reads them
+  // synchronously. Same fire-and-forget shape and migration story as the
+  // gmail/github inits above: if nothing is stored, loadCalendarConfig falls
+  // back to the legacy google-calendar.json.
+  initCalendarCredential().then(found => {
+    if (found) console.log('[NerdAlert] Calendar credential loaded from credential store');
+  }).catch((err: unknown) => {
+    console.error('[NerdAlert] initCalendarCredential failed:', err);
   });
 
   // ── Active project state (v0.6.0) ───────────────────────
