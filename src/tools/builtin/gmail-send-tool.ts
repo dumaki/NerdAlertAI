@@ -43,6 +43,13 @@ const gmailSendTool: NerdAlertTool = {
 
   trustLevel: 3,
 
+  // Route through the broker's structural approval card (executeOrPropose) on
+  // card-capable transports: the side-effect-free preview branch below
+  // (approved !== true) signals readiness via metadata.approvalReady, the broker
+  // parks the approved variant, and the human Approve click sends it. The
+  // sendDraft() approved:true self-check stays as the Telegram/CLI fallback.
+  requiresApproval: true,
+
   parameters: {
     type: 'object',
     properties: {
@@ -95,6 +102,47 @@ const gmailSendTool: NerdAlertTool = {
           "You'll just need to grab a password from your Google account settings.",
         ].join('\n'),
         metadata: { title: 'Gmail not configured', sources: [] },
+      }
+    }
+
+    // ── Approval preview (side-effect-free) ───────────────────────────────────
+    // Mirrors google_calendar_delete: when not approved, build a human-readable
+    // preview and signal readiness so the broker parks the approved variant and
+    // raises a real Approve/Deny card. We do NOT call sendDraft() here — the
+    // preview must touch no SMTP path. The broker forces approved:false for the
+    // preview turn (confabulation guard), so a model-supplied approved:true can
+    // never skip this branch on a card-capable transport.
+    const to      = typeof params.to      === 'string' ? params.to.trim()      : ''
+    const cc      = typeof params.cc      === 'string' ? params.cc.trim()      : ''
+    const subject = typeof params.subject === 'string' ? params.subject.trim() : ''
+    const body    = typeof params.body    === 'string' ? params.body           : ''
+
+    if (params.approved !== true) {
+      // Missing essentials -> relay to the model as a normal error (NOT a card),
+      // same posture as calendar's not-found/disambiguation previews, which omit
+      // approvalReady and are therefore relayed rather than carded.
+      if (!to || !subject) {
+        return err('gmail_send requires "to" and "subject" to preview the message.')
+      }
+      const ccLine  = cc ? `\n  Cc: ${cc}` : ''
+      const preview = body.trim() || '(empty body)'
+      return {
+        type: 'text',
+        content:
+          `About to send this email:\n` +
+          `  To: ${to}${ccLine}\n` +
+          `  Subject: ${subject}\n\n` +
+          `${preview}\n\n` +
+          `(A configured signature, if any, is appended automatically on send.)\n` +
+          `This delivers over SMTP and cannot be unsent. Confirm to send.`,
+        // Single resolved target -> becomes an approval card. The two error
+        // returns (not_configured above, missing to/subject) omit this signal,
+        // so they are relayed to the model normally instead of carded.
+        metadata: {
+          approvalReady: true,
+          approvalTitle: `Send email to ${to}: ${subject}`,
+          sources:       [],
+        },
       }
     }
 
