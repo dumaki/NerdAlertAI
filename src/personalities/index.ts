@@ -78,4 +78,16 @@ function wrapWithSecurityRules(p: Personality): Personality {
   };
 }
 
+// ── Registry introspection (used by personalities/active.ts) ──
+// PERSONALITIES is intentionally private; these expose the two facts the
+// active-personality store needs (is this id real, what is its canonical
+// display name) without leaking the map itself.
+export function isKnownPersonality(id: string): boolean {
+  return Object.prototype.hasOwnProperty.call(PERSONALITIES, id);
+}
+
+export function getPersonalityDisplayName(id: string): string | null {
+  return PERSONALITIES[id]?.defaultName ?? null;
+}
+
 export { Personality } from './base';

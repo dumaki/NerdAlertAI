@@ -28,6 +28,7 @@ import { listCredentials }                       from '../security/credential-st
 import { getServerAuthToken }                    from './auth';
 import { getBootId }                            from './boot-id';
 import { getPersonality }                        from '../personalities';
+import { getActivePersonality, setActivePersonality } from '../personalities/active';
 import { getAvailableTools, getModelVisibleTools, toAnthropicFormat, toOpenAIFormat, findEnabledTool } from '../tools/registry';
 import { buildActiveProjectContext }              from '../projects/active';
 import {
@@ -1069,9 +1070,18 @@ export function mountUIRoutes(app: Express): void {
     }
 
     try {
-      const agentId     = (req.body as any).agentId   ?? cfg.agent?.personality ?? 'sherman';
-      const agentName   = (req.body as any).agentName  ?? cfg.agent?.name        ?? 'Sherman';
+      const active      = getActivePersonality();
+      const agentId     = (req.body as any).agentId   ?? active?.agentId   ?? cfg.agent?.personality ?? 'sherman';
+      const agentName   = (req.body as any).agentName  ?? active?.agentName ?? cfg.agent?.name        ?? 'Sherman';
       const personality = getPersonality(agentId);
+
+      // Remember the last-used personality across restarts (write-through,
+      // on-change only — see personalities/active.ts). Fire-and-forget: the
+      // cache updates synchronously, the disk write is best-effort, and an
+      // unknown agentId is ignored (never persisted). Pass the RAW client
+      // agentName, not the resolved one, so an id-only request derives the
+      // canonical name rather than carrying a stale display name forward.
+      void setActivePersonality(agentId, (req.body as any).agentName);
 
       // Active-project injection (v0.6.0). Same shape as agent.ts:
       // when the project module is enabled AND an active project is

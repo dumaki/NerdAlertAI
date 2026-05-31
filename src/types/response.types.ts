@@ -206,8 +206,14 @@ export interface ToolGroupConfig {
 
 export interface AgentConfig {
   agent: {
+    // name + personality are the SEED default only: the boot fallback and the
+    // initial banner value. The LIVE personality is the per-request topbar
+    // pick, and the last-used pick now persists across restarts via
+    // personalities/active.ts (~/.nerdalert/.active-agent.json). trust_level,
+    // by contrast, is live and global. config.yaml is operator-owned; these
+    // remain the first-run seed.
     name: string;
-    personality: string;   // which personality file to load
+    personality: string;   // which personality file to load (seed default)
     trust_level: number;
     // v0.8.x Slice 3a — opt-in one-off trust elevation. Absent/false => feature
     // off, byte-identical to today (a below-reach dangerous action is refused,

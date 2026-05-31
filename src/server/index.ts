@@ -40,6 +40,7 @@ import { initGmailCredential } from '../gmail/config';
 import { initGithubCredential } from '../github/config';
 import { initCalendarCredential } from '../gmail/calendar';
 import { initActiveProject } from '../projects/active';
+import { initActivePersonality, getActivePersonality } from '../personalities/active';
 import { initOpenRouterKey, initAnthropicKey, initProviderKey } from '../core/llm-client';
 import { listModels } from '../config/models';
 import { initOpenclawCredential } from '../tools/builtin/soc-client';
@@ -118,7 +119,7 @@ app.use((req, res, next) => {
 app.get('/health', (_req: Request, res: Response) => {
   res.json({
     status:        'ok',
-    agent:         config.agent.name,
+    agent:         getActivePersonality()?.agentName ?? config.agent.name,
     trust_level:   config.agent.trust_level,
     auth_strategy: (config as any).auth?.strategy ?? 'token',
     timestamp:     new Date().toISOString()
@@ -238,6 +239,12 @@ app.listen(SERVER_PORT, () => {
   const authStrategy = (config as any).auth?.strategy ?? 'token';
   const tokenLoaded  = Boolean(getServerAuthToken());
 
+  // Load the last-used personality (sync) BEFORE the banner so the Agent
+  // line reflects whoever the user last talked to. Absent/invalid state
+  // falls back to config.agent.name (the seed default) below — byte-
+  // identical to prior behavior on a fresh install.
+  initActivePersonality();
+
   console.log('');
   console.log('  ███╗   ██╗███████╗██████╗ ██████╗  █████╗ ██╗     ███████╗██████╗ ████████╗');
   console.log('  ████╗  ██║██╔════╝██╔══██╗██╔══██╗██╔══██╗██║     ██╔════╝██╔══██╗╚══██╔══╝');
@@ -246,7 +253,7 @@ app.listen(SERVER_PORT, () => {
   console.log('  ██║ ╚████║███████╗██║  ██║██████╔╝██║  ██║███████╗███████╗██║  ██║   ██║   ');
   console.log('  ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝   ╚═╝   ');
   console.log('');
-  console.log(`  Agent  : ${config.agent.name}`);
+  console.log(`  Agent  : ${getActivePersonality()?.agentName ?? config.agent.name}`);
   console.log(`  Trust  : Level ${config.agent.trust_level}`);
   console.log(`  Port   : ${SERVER_PORT}`);
   console.log(`  Auth   : ${authStrategy}${authStrategy === 'token' && !tokenLoaded ? ' (warning: no token loaded)' : ''}`);
