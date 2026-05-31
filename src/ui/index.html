@@ -1436,6 +1436,10 @@
       background: var(--bg-elevated);
       border: 1px solid var(--border-mid);
       color: var(--text);
+      /* Preserve newlines typed via Shift+Enter (escapeHTML keeps \n literal;
+         without pre-wrap, HTML collapses them to a single space). User bubble
+         only — the agent bubble renders markdown and must NOT get pre-wrap. */
+      white-space: pre-wrap;
     }
 
     .message.agent .message-bubble {
@@ -1548,9 +1552,16 @@
       outline: none;
       font-family: var(--font-mono);
       font-size: 12px;
+      line-height: 1.5;
       color: var(--text-bright);
       caret-color: var(--cyan);
       min-width: 0;
+      /* textarea: start at one row, grow via JS up to max-height, then scroll */
+      resize: none;
+      max-height: 120px;
+      overflow-y: auto;
+      padding: 0;
+      display: block;
     }
 
     .chat-input::placeholder { color: var(--text-muted); }
@@ -3814,14 +3825,14 @@
 
     <div class="chat-input-bar" id="chat-input-bar">
       <span class="input-prompt-char">›</span>
-      <input
+      <textarea
         class="chat-input"
         id="chat-input"
-        type="text"
+        rows="1"
         placeholder="Send a message... or drop a file"
         autocomplete="off"
         spellcheck="false"
-      />
+      ></textarea>
       <input type="file" id="upload-file-input" style="display:none" />
       <button class="upload-button" id="upload-button" title="Attach a file (or drag-and-drop onto this bar)" onclick="document.getElementById('upload-file-input').click()">📎</button>
       <button class="mic-button idle" id="mic-button" title="Speak (click to record)" onclick="toggleMicRecording()">🎤</button>
@@ -4496,6 +4507,16 @@
         e.preventDefault();
         sendMessage();
       }
+    });
+
+    // Auto-grow the chat textarea as the user types (warm-up, v0.8.x).
+    // Plain Enter still sends (keydown above); Shift+Enter inserts a newline,
+    // and this grows the box to fit, capped by the CSS max-height (then scrolls).
+    // Programmatic .value clears don't fire 'input', so send resets height directly.
+    document.getElementById('chat-input').addEventListener('input', e => {
+      const ta = e.target;
+      ta.style.height = 'auto';
+      ta.style.height = ta.scrollHeight + 'px';
     });
   });
 
@@ -8005,6 +8026,7 @@
     }
 
     input.value  = '';
+    input.style.height = 'auto';   // reset textarea back to one row after send
     isStreaming   = true;
     input.disabled = true;
     btn.textContent = 'STOP';
