@@ -8344,17 +8344,15 @@
     : '';
   if (approvalTriggers.some(t => lastUserMessage.includes(t))) return;
 
-  if (!approvalShownThisSession.has('coupons') &&
-      (lower.includes('want me to') || lower.includes('shall i') || lower.includes('just say the word')) &&
-      (lower.includes('promo') || lower.includes('coupon') || lower.includes('cleanup'))) {
-    approvalShownThisSession.add('coupons');
-    addApprovalCard(
-      'Move to Coupons',
-      'Move promotional emails to the Coupons folder and mark as read.',
-      'go ahead and run the cleanup',
-      'skip the cleanup for now'
-    );
-  }
+  // NOTE: the cleanup/coupons heuristic card was REMOVED here. gmail_cleanup is
+  // now a real broker-carded tool (requiresApproval -> executeOrPropose -> the
+  // approval_request SSE branch -> addServerApprovalCard). The old keyword
+  // heuristic fired on the read-only `triage` narration (which mentions
+  // "coupon"/"cleanup"), raising a SECOND, action-less card that raced the real
+  // broker card and could re-trigger the cleanup via its sendMessage path
+  // (bypassing the broker's in-voice closure). The broker card is now the sole
+  // cleanup approval surface. The draft/send branches below stay until those
+  // flows are likewise broker-carded.
 
   if (!approvalShownThisSession.has('draft') &&
       lower.includes('draft') && lower.includes('reply')) {
