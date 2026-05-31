@@ -49,6 +49,16 @@ function ok(content: string): NerdAlertResponse {
   return { type: 'text', content, metadata: {} };
 }
 
+// Side-effect-free PREVIEW response that ALSO signals the broker's structural
+// approval card. Like ok() but stamps metadata.approvalReady so executeOrPropose
+// parks the approved variant and raises a real Approve/Deny card on a card-
+// capable transport. Only the !approved branch returns through this; the post-
+// delete success stays on ok() and every err() stays on err(), so a not-found /
+// missing-id / cron-context result relays to the model normally (no card).
+function preview(content: string, approvalTitle: string): NerdAlertResponse {
+  return { type: 'text', content, metadata: { approvalReady: true, approvalTitle } };
+}
+
 function err(content: string): NerdAlertResponse {
   return { type: 'text', content, metadata: {} };
 }
@@ -58,6 +68,14 @@ const cronDeleteTool: NerdAlertTool = {
   description: `Permanently delete a scheduled job AND its entire run history. This is irreversible — the job stops firing and the history is gone. Use this ONLY when the user explicitly asks to permanently remove a scheduled job; for pausing (reversible) use cron_manager with action "pause" instead. Requires approved:true, which you set only after the user has explicitly confirmed the deletion in chat. The first call without approved:true returns a summary of what would be deleted and changes nothing; the second call with approved:true actually deletes. Requires: job_id. Use cron_manager action "list" first if you don't know the job_id.`,
 
   trustLevel: 3,
+
+  // Route through the broker's structural approval card (executeOrPropose) on
+  // card-capable transports. The existing !approved branch is already a side-
+  // effect-free preview; it now returns via preview() (above), which stamps
+  // metadata.approvalReady so the broker parks the approved variant and the
+  // human Approve click applies the delete. The in-tool approved:true two-step
+  // stays as the Telegram/CLI fallback.
+  requiresApproval: true,
 
   parameters: {
     type: 'object',
@@ -131,8 +149,9 @@ const cronDeleteTool: NerdAlertTool = {
     // First call (no approved): summarize, change nothing.
     // Second call (approved:true): apply.
     if (params.approved !== true) {
-      return ok(
-        `${summary}\n\nNothing has been deleted yet. Re-call cron_delete with approved:true to permanently remove this job and its history.`
+      return preview(
+        `${summary}\n\nNothing has been deleted yet. Re-call cron_delete with approved:true to permanently remove this job and its history.`,
+        `Delete scheduled job "${job.name}"`,
       );
     }
 
