@@ -139,7 +139,7 @@ const githubWriteTool: NerdAlertTool = {
 
 USE THIS TOOL when the user explicitly asks to MUTATE something on GitHub: 'create an issue', 'comment on PR #42', 'close that issue', 'add the bug label', 'assign me to it'. For read queries (list issues, view an issue, search repos, read a file), use the 'github' tool instead — never use github_write to read.
 
-Every action follows a TWO-STEP approval. The FIRST call (without approved:true) returns a preview of WHAT WOULD HAPPEN and changes nothing. The user must then explicitly confirm in chat ('yes', 'go ahead', 'do it'). Only then do you call again with approved:true, which actually hits the GitHub API. NEVER set approved:true on the first call. NEVER set approved:true without an explicit user confirmation.
+To perform a write, call this tool directly with the action and its fields. Calling it is what surfaces the approval preview to the user — so just make the call rather than describing the change and asking first. The change is applied only after the user approves. Set approved:true only after the user has explicitly confirmed in chat; otherwise leave approved unset (the unapproved call previews and changes nothing).
 
 Actions:
 'create_issue'   create a new issue. Requires owner, repo, title. Optional: body, labels, assignees.
