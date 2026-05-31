@@ -7365,6 +7365,19 @@
       }
       if (data.status === 'executed') {
         renderResolvedToolResult(data.toolName, data.output, data.error);
+        // In-voice closure: kick an invisible follow-up turn so the agent
+        // confirms the outcome in its own voice. The prompt states the action
+        // is ALREADY done and forbids tool calls, so the model narrates rather
+        // than re-running it (and a misfire is harmless — the target is gone).
+        // skipUserMessageRender keeps the follow-up out of the visible
+        // transcript (no user bubble), so only the agent's confirmation shows.
+        if (!data.error) {
+          const summary = String(data.output || 'the requested action').slice(0, 500);
+          sendMessage(
+            `[System: the action you proposed was approved by the user and has ALREADY been completed by the server. Result: ${summary} — In one short sentence, confirm to the user that it is done. Do NOT call any tools.]`,
+            { skipUserMessageRender: true },
+          );
+        }
       }
       // 'denied' — nothing to render; the card is already marked resolved.
     } catch (e) {
