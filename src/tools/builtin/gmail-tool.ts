@@ -288,7 +288,7 @@ Respond with a concise summary of results. Do not repeat raw message content ver
               ``,
               result.draft.body,
               ``,
-              `⚠️  Approval required before sending. Confirm with: approved: true`,
+              `Composed for review - nothing has been sent yet. To send it, just ask me to send it; sending requires your confirmation.`,
             ].join('\n')
           )
         }
@@ -304,7 +304,7 @@ Respond with a concise summary of results. Do not repeat raw message content ver
               ``,
               result.draft.body?.slice(0, 1000),
               ``,
-              `⚠️  Approval required before sending. Confirm with: approved: true`,
+              `Composed for review - nothing has been sent yet. To send it, just ask me to send it; sending requires your confirmation.`,
             ].join('\n')
           )
         }
