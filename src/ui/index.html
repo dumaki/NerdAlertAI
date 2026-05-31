@@ -7378,8 +7378,15 @@
             { skipUserMessageRender: true },
           );
         }
+      } else if (data.status === 'denied') {
+        // Transparency on deny: kick an invisible follow-up turn so the agent
+        // acknowledges in its own voice that it will NOT proceed. Nothing ran,
+        // so there's no receipt block — just the spoken acknowledgement.
+        sendMessage(
+          `[System: the action you proposed was declined by the user and was NOT performed. In one short sentence, acknowledge that you will not proceed. Do NOT call any tools.]`,
+          { skipUserMessageRender: true },
+        );
       }
-      // 'denied' — nothing to render; the card is already marked resolved.
     } catch (e) {
       appendErrorMessage('Approval request failed — the server may be down.');
     }
