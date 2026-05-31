@@ -8046,7 +8046,7 @@
                 <span>&#9654; ${escapeHTML(data.name.toUpperCase())}</span>
                 <span class="tool-result-toggle">&#9660;</span>
               </div>
-              <div class="tool-result-body">${escapeHTML(data.output ?? '')}</div>
+              <div class="tool-result-body">${linkifyText(data.output ?? '')}</div>
             `;
 
             if (thinking) {
@@ -8643,7 +8643,7 @@ async function cronCardClick(jobId) {
       div.className = 'message agent';
       div.innerHTML = `
         <div class="message-label">${activeAgentName.toUpperCase()} // ${timestamp()}</div>
-        <div class="message-bubble">${escapeHTML(data.output)}</div>
+        <div class="message-bubble">${linkifyText(data.output)}</div>
       `;
       container.appendChild(div);
       scrollToBottom();
