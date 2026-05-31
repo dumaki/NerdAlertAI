@@ -61,7 +61,7 @@ const CATEGORY_RULES: CategoryRule[] = [
   // Email
   { match: 'gmail',           prefix: true, category: 'Email' },      // gmail, -setup, _send, _cleanup
   // Calendar
-  { match: 'google_calendar', category: 'Calendar' },
+  { match: 'google_calendar', prefix: true, category: 'Calendar' },   // google_calendar, _delete
   { match: 'calendar-setup',  category: 'Calendar' },
   // Dev
   { match: 'github',          prefix: true, category: 'Dev' },       // github, -setup, _write
@@ -121,6 +121,7 @@ const TOOL_SUMMARIES: Record<string, string> = {
   gmail_cleanup:           'Move promotional mail out of the inbox.',
   // Calendar
   google_calendar:         'Read upcoming calendar events.',
+  google_calendar_delete:  'Permanently delete an upcoming event.',
   'calendar-setup':        'Connect Google Calendar (guided OAuth).',
   // Dev
   github:                  'Read repos, issues, and pull requests.',
