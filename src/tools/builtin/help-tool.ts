@@ -90,6 +90,27 @@ function categoryOf(name: string): string {
   return 'Other'
 }
 
+// The prefix family a tool belongs to, or null if it isn't in one. Reuses
+// CATEGORY_RULES with the same first-match-wins walk as categoryOf, so the
+// family grouping can never drift from the category grouping. Only PREFIX
+// rules form a family -- exact-match tools (memory, documents, ...) have no
+// siblings to list and return null.
+function familyPrefixOf(name: string): string | null {
+  for (const rule of CATEGORY_RULES) {
+    if (rule.prefix ? name.startsWith(rule.match) : name === rule.match) {
+      return rule.prefix ? rule.match : null
+    }
+  }
+  return null
+}
+
+// One-line summary for a tool: the curated TOOL_SUMMARIES entry, falling back
+// to the first line of the tool's own description. Shared by the list view and
+// the detail family footer so the two can never diverge.
+function summaryOf(tool: NerdAlertTool): string {
+  return TOOL_SUMMARIES[tool.name] ?? tool.description.split('\n')[0]
+}
+
 // ── One-liner summaries ───────────────────────────────────────
 // Short descriptions shown in the list view. Kept separate from
 // the full tool description so the list stays scannable. Keyed by the
@@ -229,8 +250,7 @@ function formatList(tools: NerdAlertTool[], connections: ConnList): string {
     if (!groups[cat]) continue
     lines.push(`[ ${cat.toUpperCase()} ]`)
     for (const tool of groups[cat]) {
-      const summary = TOOL_SUMMARIES[tool.name] ?? tool.description.split('\n')[0]
-      lines.push(`  ${tool.name.padEnd(16)} ${summary}`)
+      lines.push(`  ${tool.name.padEnd(16)} ${summaryOf(tool)}`)
     }
     lines.push('')
   }
@@ -258,7 +278,7 @@ function formatList(tools: NerdAlertTool[], connections: ConnList): string {
 }
 
 // ── Format: detail view ───────────────────────────────────────
-function formatDetail(tool: NerdAlertTool): string {
+function formatDetail(tool: NerdAlertTool, available: NerdAlertTool[]): string {
   const params  = tool.parameters as any
   const props   = params?.properties ?? {}
 
@@ -286,6 +306,21 @@ function formatDetail(tool: NerdAlertTool): string {
   }
 
   lines.push(`Trust level required: L${tool.trustLevel}`)
+
+  // Family footer: other AVAILABLE tools sharing this tool's prefix family
+  // (gmail*, github*, project*, ...). Detail lookup is exact-match by design --
+  // separate tools stay separate -- so this footer is the discoverability
+  // bridge: /help github surfaces github_write without merging them. Listing
+  // only available siblings means it never reveals a higher-trust dormant tool.
+  const fam = familyPrefixOf(tool.name)
+  if (fam) {
+    const siblings = available.filter(t => t.name !== tool.name && t.name.startsWith(fam))
+    if (siblings.length > 0) {
+      lines.push('')
+      lines.push('Related tools (try /help <name>):')
+      for (const s of siblings) lines.push(`  ${s.name.padEnd(16)} ${summaryOf(s)}`)
+    }
+  }
   lines.push('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 
   return lines.join('\n')
@@ -371,7 +406,7 @@ Triggered by /help (list) or /help <toolname> (detail).`,
 
       return {
         type:    'text',
-        content: formatDetail(tool),
+        content: formatDetail(tool, getAvailableTools()),
         metadata: { title: `Help: ${toolName}`, sources: [] },
       }
     }
