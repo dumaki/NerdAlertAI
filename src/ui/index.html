@@ -7355,7 +7355,7 @@
     try {
       const r = await fetch('/api/approvals/resolve', {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${CFG.token}` },
         body:    JSON.stringify({ id: serverId, approved }),
       });
       const data = await r.json();
