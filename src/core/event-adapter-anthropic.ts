@@ -44,7 +44,9 @@ import {
 } from './agent-events';
 import {
   type BrokerContext,
+  type BrokerResult,
   executeTool,
+  executeOrPropose,
 } from './permission-broker';
 import { WebSuppressionTracker } from './web-suppression';
 import type { Source } from '../types/response.types';
@@ -276,7 +278,7 @@ export async function runAnthropicAdapter(
         // tool_result steering the model to the existing answer.
         // This is the mechanical layer that prompt-layer
         // guidance couldn't deliver against Mistral.
-        let result: { output: string; error: boolean; sources: Source[] };
+        let result: BrokerResult;
         if (suppressionTracker.shouldSuppress(pending.name)) {
           const triggeredBy = suppressionTracker.succeededList();
           console.log(
@@ -288,14 +290,22 @@ export async function runAnthropicAdapter(
             triggered_by: triggeredBy,
           }));
           result = {
+            id:      pending.id,
+            name:    pending.name,
             output:  suppressionTracker.buildSuppressedResult(pending.name),
             error:   false,
             sources: [],
           };
         } else {
-          result = await executeTool(
+          // Approval-aware front door. For a requiresApproval tool on this
+          // (card-capable) SSE transport, executeOrPropose runs the side-
+          // effect-free preview and PARKS the approved variant — returning
+          // result.approval instead of executing. Every other tool is a
+          // straight passthrough to executeTool, byte-identical to before.
+          result = await executeOrPropose(
             { id: pending.id, name: pending.name, args: parsedArgs },
             brokerContext,
+            { canApprovalCard: true },
           );
         }
 
@@ -307,13 +317,28 @@ export async function runAnthropicAdapter(
         // Aggregate sources for the eventual `done` event.
         if (result.sources.length) sourceSink.push(...result.sources);
 
-        emit(toolResult(
-          pending.id,
-          pending.name,
-          result.output,
-          result.error,
-          result.sources.length ? result.sources : undefined,
-        ));
+        if (result.approval) {
+          // Parked for human sign-off: surface the card, and resolve the
+          // spinner with a short note rather than dumping the model-facing
+          // "awaiting approval" instruction into a tool-result block. The
+          // real outcome renders when the user approves (see approval-routes).
+          emit({
+            kind:        'approval_request',
+            id:          result.approval.id,
+            title:       result.approval.title,
+            description: result.approval.description,
+            toolName:    result.approval.toolName,
+          });
+          emit(toolResult(pending.id, pending.name, 'Awaiting your approval — see the card.', false));
+        } else {
+          emit(toolResult(
+            pending.id,
+            pending.name,
+            result.output,
+            result.error,
+            result.sources.length ? result.sources : undefined,
+          ));
+        }
 
         toolResultBlocks.push({
           type: 'tool_result',
