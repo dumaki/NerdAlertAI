@@ -4036,7 +4036,6 @@
   let isStreaming         = false;
   let currentView        = 'chat';
   let pendingApprovals   = [];
-  let approvalShownThisSession = new Set();
   let activeAgentName    = CFG.agentName ?? 'Sherman';
   let currentModel       = CFG.model     ?? 'nvidia/nemotron-3-super-120b-a12b:free';
 
@@ -5087,7 +5086,6 @@
       // Reset in-flight chat state. Approval cards and pending
       // images don't carry across session boundaries.
       conversationHistory = session.messages || [];
-      approvalShownThisSession.clear();
       clearPendingImages();
 
       setActiveSession(session.id);
@@ -5123,7 +5121,6 @@
 
       // Reset chat state and the UI to empty.
       conversationHistory = [];
-      approvalShownThisSession.clear();
       clearPendingImages();
 
       setActiveSession(data.session.id);
@@ -5156,7 +5153,6 @@
       await loadPastChat(mine[0].id);
     } else {
       conversationHistory = [];
-      approvalShownThisSession.clear();
       clearPendingImages();
       setActiveSession(null);
       renderRestoredHistory([], null);
@@ -5713,7 +5709,6 @@
 
   function clearConversation() {
   conversationHistory = [];
-  approvalShownThisSession.clear();
   clearPendingImages();
   // v0.5.16 Phase 2c: drop the active-session pointer so the
   // next message-send creates a fresh session rather than
@@ -7295,12 +7290,6 @@
     document.getElementById('approval-tray').classList.remove('open');
   }
 
-  function addApprovalCard(action, description, onApprove, onDeny) {
-    pendingApprovals.push({ action, description, onApprove, onDeny });
-    renderTray();
-    openTray();
-  }
-
   function renderTray() {
   const cards   = document.getElementById('tray-cards');
   const countEl = document.getElementById('tray-count');
@@ -8152,9 +8141,10 @@
     scrollToBottom();
   }
 
-  // NOTE: approval card for email cleanup is handled solely by parseForApprovals()
-  // on the 'done' event. Removed from here to prevent duplicate cards firing
-  // when both tool_prefetch and the triage response text contain coupon keywords.
+  // NOTE: no cleanup approval card is rendered here. gmail_cleanup is a real
+  // broker-carded tool (requiresApproval -> executeOrPropose -> the
+  // approval_request SSE branch -> addServerApprovalCard) and is the sole
+  // cleanup approval surface; rendering one here would duplicate it.
 }
           else if (eventType === 'tool_result') {
             const data     = parsed;
@@ -8210,7 +8200,6 @@
             // models without re-attaching.
             clearPendingImages();
 
-            parseForApprovals(parsed.text || fullText);
             checkLatestArtifact();   // Option 3: light the render badge if a new artifact landed
           }
 
@@ -8342,64 +8331,6 @@
       sendMessage(originalText, { skipUserMessageRender: true });
     });
   }
-
-
-  // ============================================================
-  // APPROVAL PARSER
-  // ============================================================
-
-  function parseForApprovals(text) {
-  if (!text) return;
-  const lower = text.toLowerCase();
-
-  const approvalTriggers = [
-    'triage my mailbox',
-    'go ahead and run the cleanup',
-    'skip the cleanup for now',
-    'yes go ahead and draft that reply',
-    'skip the draft for now',
-    'yes send it',
-    'hold off on sending',
-  ];
-  const lastUserMessage = conversationHistory.length >= 2
-    ? conversationHistory[conversationHistory.length - 2]?.content?.toLowerCase() ?? ''
-    : '';
-  if (approvalTriggers.some(t => lastUserMessage.includes(t))) return;
-
-  // NOTE: the cleanup/coupons heuristic card was REMOVED here. gmail_cleanup is
-  // now a real broker-carded tool (requiresApproval -> executeOrPropose -> the
-  // approval_request SSE branch -> addServerApprovalCard). The old keyword
-  // heuristic fired on the read-only `triage` narration (which mentions
-  // "coupon"/"cleanup"), raising a SECOND, action-less card that raced the real
-  // broker card and could re-trigger the cleanup via its sendMessage path
-  // (bypassing the broker's in-voice closure). The broker card is now the sole
-  // cleanup approval surface. The draft/send branches below stay until those
-  // flows are likewise broker-carded.
-
-  if (!approvalShownThisSession.has('draft') &&
-      lower.includes('draft') && lower.includes('reply')) {
-    approvalShownThisSession.add('draft');
-    addApprovalCard(
-      'Draft Reply',
-      'Draft a reply to the flagged email for your review.',
-      'yes go ahead and draft that reply',
-      'skip the draft for now'
-    );
-  }
-
-  if (!approvalShownThisSession.has('send') &&
-    (lower.includes('send the email') || lower.includes('send this email') || 
-     lower.includes('ready to send') || lower.includes('shall i send'))) {
-    approvalShownThisSession.add('send');
-    addApprovalCard(
-      'Send Email',
-      '${activeAgentName} is ready to send a drafted email on your behalf.',
-      'yes send it',
-      'hold off on sending'
-    );
-  }
-}
-
 
   // ============================================================
   // UTILITIES
