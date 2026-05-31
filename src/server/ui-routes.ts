@@ -387,13 +387,8 @@ async function handleAnthropicStream(
     console.log(`[vision-debug] Anthropic call messages:`, JSON.stringify(summary, null, 2));
   }
 
-  const sourceSink: Source[] = [];
-
   const emit = buildSSEBridge(res, {
     onEvent: (event: AgentEvent) => {
-      if (event.kind === 'tool_result' && event.sources?.length) {
-        sourceSink.push(...event.sources);
-      }
       telemetry?.(event);
     },
   });
@@ -423,8 +418,6 @@ async function handleAnthropicStream(
   } finally {
     res.end();
   }
-
-  void sourceSink;
 }
 
 // ── Ollama OpenAI-native streaming handler — NEW in v0.5.13 ───
@@ -472,13 +465,8 @@ async function handleOllamaStream(
   // its own loop state.
   const orMessages: ORMessage[] = convertHistoryForOpenAI(initialMessages);
 
-  const sourceSink: Source[] = [...prefetchSources];
-
   const emit = buildSSEBridge(res, {
     onEvent: (event: AgentEvent) => {
-      if (event.kind === 'tool_result' && event.sources?.length) {
-        sourceSink.push(...event.sources);
-      }
       telemetry?.(event);
     },
   });
@@ -538,8 +526,6 @@ async function handleOllamaStream(
   } finally {
     res.end();
   }
-
-  void dedupSources(sourceSink);
 }
 
 // ── OpenRouter pseudo-tool streaming handler — for free-tier ──
@@ -572,13 +558,8 @@ async function handlePseudoToolStream(
           .join(''),
   }));
 
-  const sourceSink: Source[] = [...prefetchSources];
-
   const emit = buildSSEBridge(res, {
     onEvent: (event: AgentEvent) => {
-      if (event.kind === 'tool_result' && event.sources?.length) {
-        sourceSink.push(...event.sources);
-      }
       telemetry?.(event);
     },
   });
@@ -610,8 +591,6 @@ async function handlePseudoToolStream(
   } finally {
     res.end();
   }
-
-  void dedupSources(sourceSink);
 }
 
 // ── Hosted native streaming handler ─ v0.7 Slice 5 ───────────
@@ -664,13 +643,8 @@ async function handleHostedToolStream(
 
   const orMessages: ORMessage[] = convertHistoryForOpenAI(initialMessages);
 
-  const sourceSink: Source[] = [];
-
   const emit = buildSSEBridge(res, {
     onEvent: (event: AgentEvent) => {
-      if (event.kind === 'tool_result' && event.sources?.length) {
-        sourceSink.push(...event.sources);
-      }
       telemetry?.(event);
     },
   });
@@ -728,8 +702,6 @@ async function handleHostedToolStream(
   } finally {
     res.end();
   }
-
-  void dedupSources(sourceSink);
 }
 
 // ── NarrationOutcome (v0.5.28) ─────────────────────────
