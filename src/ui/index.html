@@ -7313,17 +7313,80 @@
 }
 
   function resolveCard(idx, approved) {
-    const item = pendingApprovals[idx];
+    // renderTray() indexes the FILTERED active list, so resolve against that
+    // same filtered view (not the raw pendingApprovals array) to stay aligned
+    // once any earlier card has been resolved.
+    const active = pendingApprovals.filter(a => !a.resolved);
+    const item = active[idx];
     if (!item) return;
     item.resolved = true;
 
-    if (approved && item.onApprove) {
+    if (item.serverId) {
+      // Broker-driven card: resolve through the approval route so the broker
+      // executes (or drops) the parked action server-side.
+      resolveServerApproval(item.serverId, approved);
+    } else if (approved && item.onApprove) {
       sendMessage(item.onApprove);
     } else if (!approved && item.onDeny) {
       sendMessage(item.onDeny);
     }
 
     renderTray();
+  }
+
+  // ── Broker-driven approval cards (executeOrPropose) ────────────
+  // The server parks a dangerous action and emits an approval_request SSE
+  // event; we render it in the same tray as the heuristic cards but carry the
+  // broker's stored-action id so resolve goes through /api/approvals/resolve.
+
+  function addServerApprovalCard(serverId, title, description, toolName) {
+    if (!serverId) return;
+    pendingApprovals.push({
+      serverId,
+      action:      title || toolName || 'Pending action',
+      description: description || '',
+      resolved:    false,
+    });
+    renderTray();
+    openTray();
+  }
+
+  async function resolveServerApproval(serverId, approved) {
+    try {
+      const r = await fetch('/api/approvals/resolve', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ id: serverId, approved }),
+      });
+      const data = await r.json();
+      if (!data.ok) {
+        appendErrorMessage(data.error || 'This approval is no longer available.');
+        return;
+      }
+      if (data.status === 'executed') {
+        renderResolvedToolResult(data.toolName, data.output, data.error);
+      }
+      // 'denied' — nothing to render; the card is already marked resolved.
+    } catch (e) {
+      appendErrorMessage('Approval request failed — the server may be down.');
+    }
+  }
+
+  // Render the outcome of an approved action as a tool-result block in chat,
+  // mirroring the streaming tool_result card so the user sees what ran.
+  function renderResolvedToolResult(toolName, output, isError) {
+    const container = document.getElementById('chat-messages');
+    if (!container) return;
+    const block = document.createElement('div');
+    block.className = `tool-result-block${isError ? ' error' : ''}`;
+    block.innerHTML = `
+      <div class="tool-result-header" onclick="this.parentElement.classList.toggle('open')">
+        <span>&#9654; ${escapeHTML((toolName || 'ACTION').toUpperCase())}</span>
+        <span class="tool-result-toggle">&#9660;</span>
+      </div>
+      <div class="tool-result-body">${linkifyText(output || '')}</div>`;
+    container.appendChild(block);
+    scrollToBottom();
   }
 
 
@@ -8056,6 +8119,13 @@
               if (streamDiv) streamDiv.appendChild(block);
             }
             scrollToBottom();
+          }
+
+          else if (eventType === 'approval_request') {
+            // Broker parked a dangerous action for human sign-off
+            // (executeOrPropose). Render a card in the approval tray; Approve
+            // POSTs to /api/approvals/resolve and the broker executes it.
+            addServerApprovalCard(parsed.id, parsed.title, parsed.description, parsed.toolName);
           }
 
           else if (eventType === 'tool_call') {
