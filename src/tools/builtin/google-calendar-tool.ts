@@ -102,6 +102,23 @@ const googleCalendarTool: NerdAlertTool = {
         return err('add_event requires both a summary (title) and a start time.')
       }
 
+      // Past-date guard. Models sometimes stamp the wrong year on an event (a
+      // strong pull toward a prior year), which silently creates it in the past
+      // where it never surfaces in upcoming views. Reject any start whose date
+      // is before today and hand back today's date so the model can self-
+      // correct. ISO YYYY-MM-DD sorts lexically, so a string compare on the
+      // date prefix works for both the date and dateTime shapes.
+      const datePart = start.slice(0, 10)
+      const now = new Date()
+      const pad = (n: number) => String(n).padStart(2, '0')
+      const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+      if (/^\d{4}-\d{2}-\d{2}$/.test(datePart) && datePart < today) {
+        return err(
+          `That start date (${datePart}) is in the past - today is ${today}. ` +
+          'Double-check the year and try again with a today-or-later date.',
+        )
+      }
+
       const input: CreateEventInput = { summary, start }
       if (typeof params.end         === 'string' && params.end.trim())         input.end         = params.end.trim()
       if (typeof params.location    === 'string' && params.location.trim())    input.location    = params.location.trim()
