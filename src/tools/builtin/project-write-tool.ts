@@ -140,8 +140,19 @@ async function doMerge(project: string, params: Record<string, unknown>, exec?: 
     st.recent.map(r => `  ${r}`).join('\n')
 
   // Gate 2 — confirmation. No approved:true ⇒ summarize only, base untouched.
+  // On a card-capable transport the broker runs THIS branch as its side-effect-
+  // free preview; approvalReady promotes it from a relayed message to a real
+  // Approve/Deny card (approvalTitle = card heading). The body still names the
+  // approved:true re-call for the Telegram/CLI in-tool two-step (no card there).
   if (params.approved !== true) {
-    return text(`${summary}\n\nNothing has changed on ${st.base} yet. Re-call merge with approved:true to apply these commits to ${st.base}.`)
+    return {
+      type: 'text',
+      content: `${summary}\n\nNothing has changed on ${st.base} yet. Re-call merge with approved:true to apply these commits to ${st.base}.`,
+      metadata: {
+        approvalReady: true,
+        approvalTitle: `Merge ${st.commitsAhead} commit${st.commitsAhead === 1 ? '' : 's'} into ${st.base} (project ${project})`,
+      },
+    }
   }
 
   // Approved — apply. mergeEditBranch is fast-forward-only: it either advances
@@ -167,6 +178,12 @@ Actions:
 
 Use write when the user asks you to create, edit, update, or save a file in a project; use merge when they ask to apply or finalize those edits onto the project. Writes are isolated on a branch (trust level 2); applying them to the base branch is a separate, deliberate, approval-gated step (trust level 3).`,
   trustLevel: 2,
+  // Per-action approval (v0.8.x Slice 2): only `merge` is the dangerous, base-
+  // moving action, so only it raises an approval card. `write`/`status` return
+  // false here and route straight through executeTool, byte-identical to before.
+  // The broker evaluates this per call; `merge` previews (approved:false) and
+  // parks the approved variant for human sign-off.
+  requiresApproval: (args) => args.action === 'merge',
   parameters: {
     type: 'object',
     properties: {
