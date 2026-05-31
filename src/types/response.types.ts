@@ -84,6 +84,16 @@ export interface ResponseMeta {
   fileUrl?: string;     // Local server URL for audio/video/download
   streamable?: boolean; // true for large video — use chunked streaming player
   panelWidth?: number;  // Side panel width as percentage, default 40
+
+  // --- APPROVAL SIGNALS (v0.8.x structural approval card) ---
+  // Set by a requiresApproval tool's side-effect-free PREVIEW branch to tell
+  // the broker the preview resolved to a single, concrete target that is ready
+  // for human sign-off. Only a preview carrying approvalReady becomes an
+  // approval card; a disambiguation prompt or a not-found message leaves it
+  // unset and is relayed to the model normally. approvalTitle is an optional
+  // human-readable card heading; the broker falls back to a generic one.
+  approvalReady?: boolean;
+  approvalTitle?: string;
 }
 
 
@@ -130,6 +140,15 @@ export interface NerdAlertTool {
   description: string;    // Plain English — the AI reads this to pick the right tool
   trustLevel: number;     // Minimum trust level required (0–5)
   parameters: object;     // JSON Schema defining what inputs this tool accepts
+  // When true, the broker routes this tool through the approval-card flow on
+  // card-capable transports (see executeOrPropose): it runs the tool's
+  // side-effect-free PREVIEW (the unapproved branch), and if that preview
+  // signals readiness (metadata.approvalReady) it parks the approved variant
+  // for human sign-off and returns a BrokerResult carrying `approval` instead
+  // of executing. REQUIRES the tool implement the two-step contract: a first
+  // call without approved:true changes nothing and previews; approved:true
+  // applies. Absent/false => executed directly, byte-identical to before.
+  requiresApproval?: boolean;
   execute: (params: Record<string, unknown>, exec?: ToolExecContext) => Promise<NerdAlertResponse>;
 }
 

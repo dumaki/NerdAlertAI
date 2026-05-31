@@ -91,6 +91,16 @@ export interface BrokerResult {
   error: boolean;
   /** Sources reported via metadata.sources, dedup at stream level. */
   sources: Source[];
+  /**
+   * Present ONLY when executeOrPropose parked this call for human approval
+   * instead of executing it (a requiresApproval tool on a card-capable
+   * transport whose preview signalled readiness). The adapter should emit an
+   * `approval_request` AgentEvent carrying these fields so the UI renders a
+   * card; `output` already holds a model-facing "awaiting approval" note to
+   * push back as the tool_result. Nothing has executed. Absent on every
+   * normal result, so existing adapters that ignore it are unchanged.
+   */
+  approval?: { id: string; title: string; description: string; toolName: string };
 }
 
 /** A proposed action that requires human sign-off before running. */
@@ -246,6 +256,107 @@ export async function executeTool(
       sources: [],
     };
   }
+}
+
+// ── Public: executeOrPropose ─────────────────────────────────
+//
+// The approval-aware front door adapters call instead of executeTool.
+//
+// For a tool WITHOUT requiresApproval, or on a transport that can't render a
+// card (canApprovalCard:false — e.g. Telegram/CLI, where the tool's own
+// in-tool two-step is the gate), this is a passthrough to executeTool —
+// byte-identical behaviour.
+//
+// For a requiresApproval tool on a card-capable transport, it implements the
+// STRUCTURAL gate (v0.8.x Slice 1, permitted-level only — no elevation):
+//   1. Trust/ceiling gate exactly as executeTool would (cards only at the
+//      PERMITTED level; a denied call returns the denial, never a card).
+//   2. Run the tool's side-effect-free PREVIEW (force approved:false, ignoring
+//      any model-supplied approved:true — a confabulated flag cannot skip the
+//      card).
+//   3. If the preview signals readiness (metadata.approvalReady — i.e. a single
+//      resolved target), park the APPROVED variant via proposeAction and return
+//      a BrokerResult carrying `approval`. The human click (resolveApproval)
+//      executes it later at the same captured context.
+//   4. Otherwise (disambiguation prompt, not-found, etc.) return the preview
+//      output normally so the model can relay it.
+//
+// Note: this re-derives the effective ceiling and output-stringify that
+// executeTool also does, rather than calling executeTool, because it needs the
+// tool's full NerdAlertResponse (the metadata.approvalReady signal), which the
+// BrokerResult deliberately drops. executeTool itself stays untouched.
+
+export interface GateOptions {
+  /** True when the caller can render an approval card (SSE/web transports). */
+  canApprovalCard: boolean;
+}
+
+export async function executeOrPropose(
+  call: BrokerToolCall,
+  ctx: BrokerContext,
+  opts: GateOptions,
+): Promise<BrokerResult> {
+  const tool = findTool(call.name);
+
+  // Passthrough: non-approval tool, or no card surface on this transport.
+  if (!opts.canApprovalCard || tool?.requiresApproval !== true) {
+    return executeTool(call, ctx);
+  }
+
+  // Permitted-level gate: same denial executeTool would produce. No elevation —
+  // a below-reach call is denied, not carded.
+  const denialReason = checkTrust(call, ctx);
+  if (denialReason) {
+    return { id: call.id, name: call.name, output: `Error: ${denialReason}`, error: true, sources: [] };
+  }
+
+  const effectiveTrustCeiling = Math.min(
+    ctx.userTrustLevel,
+    ctx.maxModelTrustLevel ?? Number.POSITIVE_INFINITY,
+  );
+
+  // Side-effect-free preview. Force approved:false so the tool takes its
+  // preview branch regardless of what the model sent.
+  let response: NerdAlertResponse;
+  try {
+    response = await tool!.execute({ ...call.args, approved: false }, { effectiveTrustCeiling });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { id: call.id, name: call.name, output: `Error running "${call.name}": ${message}`, error: true, sources: [] };
+  }
+
+  const output = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
+  const meta = response.metadata ?? {};
+
+  // Preview not ready for sign-off (disambiguation / not-found / etc.) — relay
+  // it to the model as an ordinary result. Nothing parked.
+  if (meta.approvalReady !== true) {
+    return { id: call.id, name: call.name, output, error: false, sources: meta.sources ?? [] };
+  }
+
+  // Ready: park the APPROVED variant for human sign-off.
+  const action = proposeAction(
+    { ...call, args: { ...call.args, approved: true } },
+    ctx,
+    { title: meta.approvalTitle ?? `Confirmation required - ${call.name}`, description: output },
+  );
+
+  return {
+    id: call.id,
+    name: call.name,
+    output:
+      'A preview was shown to the user as an approval card. The action is ' +
+      'awaiting their decision and has NOT run. Do not retry or call the tool ' +
+      'again; stop here and let the user approve or deny.',
+    error: false,
+    sources: [],
+    approval: {
+      id: action.id,
+      title: action.title,
+      description: action.description,
+      toolName: action.call.name,
+    },
+  };
 }
 
 // ── Public: proposeAction ────────────────────────────────────
