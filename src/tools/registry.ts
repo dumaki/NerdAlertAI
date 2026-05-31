@@ -371,6 +371,19 @@ export function effectiveTrustLevelOf(name: string): number | undefined {
   return resolveToolPolicy(tool).effectiveMinTrustLevel;
 }
 
+// isToolEnabled — the config-resolved ENABLED bit for ONE tool, independent of
+// the user's trust level (v0.8.x Slice 3b). The permission-broker's elevation-
+// aware gate needs "is this tool enabled?" WITHOUT re-applying the user-trust
+// filter that getAvailableTools() bakes in — otherwise an elevated above-trust
+// tool would be wrongly reported disabled on the approved re-run. Returns false
+// for an unknown name (findTool miss), so the broker's not-found branch stays
+// distinct. resolveToolPolicy stays private; this is the sanctioned enabled read.
+export function isToolEnabled(name: string): boolean {
+  const tool = findTool(name);
+  if (!tool) return false;
+  return resolveToolPolicy(tool).enabled;
+}
+
 // getModelVisibleTools — the model-facing tool set, narrowed by the active
 // model's per-model trust ceiling (v0.7 Slice 4, item 4b).
 //
@@ -391,7 +404,33 @@ export function effectiveTrustLevelOf(name: string): number | undefined {
 // tool list shown to a model; user-facing surfaces (help) and diagnostics keep
 // calling getAvailableTools() so their output reflects user trust, not whichever
 // model happens to be active.
-export function getModelVisibleTools(ceiling?: number): NerdAlertTool[] {
+export interface ModelVisibleOpts {
+  /**
+   * v0.8.x Slice 3b — elevation surfacing. When true, include tools ABOVE the
+   * user's standing trust (drop ONLY the user-trust filter) so a card-capable
+   * model can attempt an above-reach action and the broker raises a one-off
+   * elevation card. The enabled bit and the per-model ceiling are STILL
+   * enforced — a capped model never sees a tool above its ceiling, and a
+   * disabled tool stays hidden. Absent/false => byte-identical to the trust-
+   * filtered set. Only the Anthropic card path passes this (gated on
+   * agent.allow_elevation); every other path leaves it off.
+   */
+  includeElevatable?: boolean;
+}
+
+export function getModelVisibleTools(ceiling?: number, opts?: ModelVisibleOpts): NerdAlertTool[] {
+  if (opts?.includeElevatable) {
+    // Elevation surfacing: enabled tools within the model ceiling, regardless of
+    // the user's standing trust. The user-trust filter is intentionally dropped
+    // here; the broker still gates every call (elevation needs allow_elevation
+    // AND a human approval), so a surfaced above-reach tool can only raise a card.
+    return ALL_TOOLS.filter(tool => {
+      const policy = resolveToolPolicy(tool);
+      if (!policy.enabled) return false;
+      if (typeof ceiling === 'number' && policy.effectiveMinTrustLevel > ceiling) return false;
+      return true;
+    });
+  }
   const available = getAvailableTools();
   if (typeof ceiling !== 'number') return available;
   return available.filter(

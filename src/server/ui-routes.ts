@@ -1312,7 +1312,7 @@ export function mountUIRoutes(app: Express): void {
         : undefined;
 
       if (llm.provider === 'anthropic') {
-        const tools = toAnthropicFormat(getModelVisibleTools(getModelTrustCeiling(getActiveModel()))) as Anthropic.Tool[];
+        const tools = toAnthropicFormat(getModelVisibleTools(getModelTrustCeiling(getActiveModel()), { includeElevatable: config.agent?.allow_elevation === true })) as Anthropic.Tool[];
         await handleAnthropicStream(res, systemPromptWithSkills, messages, tools, trustLevel, agentName, telemetry);
       } else if (llm.provider === 'hosted') {
         // v0.7 Slice 5: hosted openai-compatible providers (Groq, OpenAI,

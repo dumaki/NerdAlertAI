@@ -39,7 +39,8 @@
 
 import { randomUUID } from 'crypto';
 
-import { findTool, getAvailableTools, effectiveTrustLevelOf } from '../tools/registry';
+import { findTool, effectiveTrustLevelOf, isToolEnabled } from '../tools/registry';
+import { config } from '../config/loader';
 import type { NerdAlertResponse, Source } from '../types/response.types';
 
 // ── Types ────────────────────────────────────────────────────
@@ -156,56 +157,61 @@ function reap(): void {
 // Returns null when the call is allowed; returns a string error
 // when it should be rejected. Pure function — easy to test.
 
-function checkTrust(call: BrokerToolCall, ctx: BrokerContext): string | null {
-  const tool = findTool(call.name);
+interface TrustEval {
+  found: boolean;
+  enabled: boolean;
+  required: number;
+  overUserGate: boolean;
+  overModelCeiling: boolean;
+}
 
+// evaluateTrust is the structured gate (v0.8.x Slice 3b): it reports which
+// individual gates pass or block for ONE call, so a caller can distinguish a
+// USER-gate-only block (elevatable) from a hard one. elevatedCeiling (set only
+// on a parked, human-approved ELEVATION action) clears the USER gate for that
+// one re-run; the model ceiling is independent of it and stays a hard cap.
+// `enabled` is read via isToolEnabled (NOT getAvailableTools) so it does not
+// re-apply the user-trust filter — otherwise an elevated above-trust tool would
+// be wrongly reported disabled on the approved re-run.
+function evaluateTrust(call: BrokerToolCall, ctx: BrokerContext): TrustEval {
+  const tool = findTool(call.name);
   if (!tool) {
+    return { found: false, enabled: false, required: 0, overUserGate: false, overModelCeiling: false };
+  }
+  const required = effectiveTrustLevelOf(call.name) ?? (tool.trustLevel ?? 0);
+  const elevationClears = ctx.elevatedCeiling !== undefined && ctx.elevatedCeiling >= required;
+  const overUserGate = required > ctx.userTrustLevel && !elevationClears;
+  const overModelCeiling =
+    typeof ctx.maxModelTrustLevel === 'number' && required > ctx.maxModelTrustLevel;
+  return { found: true, enabled: isToolEnabled(call.name), required, overUserGate, overModelCeiling };
+}
+
+// checkTrust — the thin string wrapper executeTool uses. Returns null when the
+// call is allowed, or a denial string. Same messages and the same priority
+// order (not-found -> user gate -> model ceiling -> disabled) as before, so
+// existing behaviour is byte-identical; the elevation-awareness rides in via
+// evaluateTrust honoring elevatedCeiling on the user gate.
+function checkTrust(call: BrokerToolCall, ctx: BrokerContext): string | null {
+  const e = evaluateTrust(call, ctx);
+  if (!e.found) {
     return `Tool "${call.name}" not found in registry`;
   }
-
-  // The EFFECTIVE minimum trust for this tool: the config-resolved level
-  // from resolveToolPolicy (per-tool override -> group -> compiled floor,
-  // Math.max), NOT the raw compiled tool.trustLevel. v0.7 Slice 4 (item 4a)
-  // unifies both gates below on this value so a config floor-raise is
-  // honored by the user gate AND the per-model ceiling. effective is always
-  // >= the compiled floor, so switching to it can only ever deny MORE than
-  // the old compiled comparison, never less — outcome-neutral for any tool
-  // with no config raise, and the extra denials it produces are exactly the
-  // ones the `visible` check already caught. Falls back to the compiled
-  // floor if the lookup somehow misses (it can't: findTool returned a tool).
-  const required = effectiveTrustLevelOf(call.name) ?? (tool.trustLevel ?? 0);
-  if (required > ctx.userTrustLevel) {
+  if (e.overUserGate) {
     return (
-      `Tool "${call.name}" requires trust level ${required}; ` +
+      `Tool "${call.name}" requires trust level ${e.required}; ` +
       `current level is ${ctx.userTrustLevel}`
     );
   }
-
-  // Honor the per-model ceiling (v0.7 BYOK). Undefined = no cap. Compared
-  // against the EFFECTIVE level too, so a config-raised tool above the
-  // model's ceiling is denied even when its compiled floor sits under it.
-  if (
-    typeof ctx.maxModelTrustLevel === 'number' &&
-    required > ctx.maxModelTrustLevel
-  ) {
+  if (e.overModelCeiling) {
     const who = ctx.modelLabel ?? 'this model';
     return (
       `${who} cannot call "${call.name}": its trust ceiling is ` +
-      `${ctx.maxModelTrustLevel}, tool requires ${required}`
+      `${ctx.maxModelTrustLevel}, tool requires ${e.required}`
     );
   }
-
-  // Also check that the tool is enabled at the user's current level
-  // (config.yaml may disable individual tools even if trust permits).
-  // getAvailableTools() already applies both checks; using it here
-  // keeps the broker's view consistent with the registry's view. With
-  // the effective-level unification above, this now primarily carries
-  // the ENABLED bit — the trust-floor aspect is already enforced.
-  const visible = getAvailableTools().some((t) => t.name === call.name);
-  if (!visible) {
+  if (!e.enabled) {
     return `Tool "${call.name}" is disabled in config.yaml`;
   }
-
   return null;
 }
 
@@ -323,17 +329,31 @@ export async function executeOrPropose(
     return executeTool(call, ctx);
   }
 
-  // Permitted-level gate: same denial executeTool would produce. No elevation —
-  // a below-reach call is denied, not carded.
-  const denialReason = checkTrust(call, ctx);
-  if (denialReason) {
-    return { id: call.id, name: call.name, output: `Error: ${denialReason}`, error: true, sources: [] };
+  // Trust gate (v0.8.x Slice 3b — elevation-aware). Evaluate the individual
+  // gates so a USER-gate-only block (elevatable) is distinguishable from a hard
+  // one. Hard denials — unknown tool, disabled, or above the per-model ceiling
+  // (a hard cap even under human approval) — are returned exactly as before,
+  // never carded.
+  const evalT = evaluateTrust(call, ctx);
+  if (!evalT.found || !evalT.enabled || evalT.overModelCeiling) {
+    return { id: call.id, name: call.name, output: `Error: ${checkTrust(call, ctx)}`, error: true, sources: [] };
+  }
+  // A USER-gate block is elevatable ONLY when the operator opted in
+  // (agent.allow_elevation). Off => deny exactly as before — byte-identical
+  // no-elevation behaviour for a below-reach call.
+  const allowElevation = config.agent?.allow_elevation === true;
+  const userGateElevation = evalT.overUserGate && allowElevation;
+  if (evalT.overUserGate && !userGateElevation) {
+    return { id: call.id, name: call.name, output: `Error: ${checkTrust(call, ctx)}`, error: true, sources: [] };
   }
 
-  const effectiveTrustCeiling = Math.min(
-    ctx.userTrustLevel,
-    ctx.maxModelTrustLevel ?? Number.POSITIVE_INFINITY,
-  );
+  // Preview ceiling: for a user-gate elevation, run the side-effect-free preview
+  // at the REQUIRED level so a self-gating tool also yields its ready preview
+  // (the flat L3 writes don't self-gate, so this is forward-compatibility).
+  // Otherwise the standing ceiling, exactly as before.
+  const effectiveTrustCeiling = userGateElevation
+    ? evalT.required
+    : Math.min(ctx.userTrustLevel, ctx.maxModelTrustLevel ?? Number.POSITIVE_INFINITY);
 
   // Side-effect-free preview. Force approved:false so the tool takes its
   // preview branch regardless of what the model sent. previewForApproval:true
@@ -364,7 +384,7 @@ export async function executeOrPropose(
   // card (never crossed, even with human approval). Otherwise park a one-off
   // ELEVATION card whose context carries elevatedCeiling, and prepend a visible
   // notice so the human knows they're approving above standing trust.
-  const elevationRequired = meta.elevationRequired;
+  const elevationRequired = userGateElevation ? evalT.required : meta.elevationRequired;
   let parkCtx = ctx;
   let description = output;
   if (typeof elevationRequired === 'number') {
