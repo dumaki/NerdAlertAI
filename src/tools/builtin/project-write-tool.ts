@@ -103,10 +103,24 @@ async function doStatus(project: string): Promise<NerdAlertResponse> {
 //      (no approved) only SUMMARIZES what would merge and leaves base untouched;
 //      the merge runs only on a second call carrying approved:true.
 async function doMerge(project: string, params: Record<string, unknown>, exec?: ToolExecContext): Promise<NerdAlertResponse> {
-  // Gate 1 — L3 effective-ceiling gate (1a). Refuse before summarizing or
-  // merging, so nothing about a merge happens below L3.
+  // Gate 1 — L3 effective-ceiling gate (1a). APPLYING edits to base needs L3;
+  // below that we refuse before summarizing or merging — EXCEPT for the one-off
+  // elevation preview path (v0.8.x Slice 3a).
   const trust = exec?.effectiveTrustCeiling ?? config.agent?.trust_level ?? 0
-  if (trust < MERGE_MIN_TRUST) {
+  const belowFloor = trust < MERGE_MIN_TRUST
+  // Elevation preview: only when the broker is running its side-effect-free
+  // preview (previewForApproval) for an unapproved call AND the operator opted
+  // in (agent.allow_elevation). In that one case we fall through to build the
+  // summary and tag it with elevationRequired so the broker raises a one-off
+  // ELEVATION card. Every other below-L3 path — a real apply (approved:true), a
+  // direct/non-card call, or elevation disabled — keeps the hard refusal, so
+  // nothing applies to base below L3 and the off-state is byte-identical.
+  const elevating =
+    belowFloor &&
+    params.approved !== true &&
+    exec?.previewForApproval === true &&
+    config.agent?.allow_elevation === true
+  if (belowFloor && !elevating) {
     return text(
       `Applying edits to the base branch requires trust level ${MERGE_MIN_TRUST}; the current level is ${trust}. ` +
       `Creating and editing files (level 2) is allowed and stays isolated on an edit branch — applying those edits to the base branch is a higher-trust action.`
@@ -151,6 +165,10 @@ async function doMerge(project: string, params: Record<string, unknown>, exec?: 
       metadata: {
         approvalReady: true,
         approvalTitle: `Merge ${st.commitsAhead} commit${st.commitsAhead === 1 ? '' : 's'} into ${st.base} (project ${project})`,
+        // Below the L3 floor we only reach this branch via the elevation
+        // preview path (Gate 1), so tag it: the broker raises a one-off
+        // ELEVATION card (apply once at L3) instead of a permitted-level card.
+        ...(belowFloor ? { elevationRequired: MERGE_MIN_TRUST } : {}),
       },
     }
   }

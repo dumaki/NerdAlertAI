@@ -69,6 +69,16 @@ export interface BrokerContext {
    * When set, the effective ceiling is min(userTrustLevel, maxModelTrustLevel).
    */
   maxModelTrustLevel?: number;
+  /**
+   * v0.8.x Slice 3a — one-off elevated ceiling carried on a parked ELEVATION
+   * action. When set (only by executeOrPropose when it parks a human-approved
+   * elevation), executeTool's effective ceiling becomes
+   * min(elevatedCeiling, maxModelTrustLevel ?? Infinity) instead of
+   * min(userTrustLevel, ...), so the approved re-run clears the USER gate for
+   * that single action. The model ceiling is still min'd in, so it stays a hard
+   * cap. Absent on every ordinary call => byte-identical.
+   */
+  elevatedCeiling?: number;
   /** Friendly model identifier for error messages. Optional. */
   modelLabel?: string;
   /**
@@ -228,8 +238,12 @@ export async function executeTool(
 
   // Effective ceiling forwarded into execute() so a tool's per-action gate can
   // honor the per-model cap, not just global trust (v0.8 1a). undefined cap => Infinity.
+  // A parked ELEVATION action (v0.8.x Slice 3a) carries elevatedCeiling: when
+  // present it replaces userTrustLevel here, so the human-approved re-run clears
+  // the user gate for that one action. It is still min'd with the model ceiling,
+  // which therefore stays a hard cap. Absent => byte-identical.
   const effectiveTrustCeiling = Math.min(
-    ctx.userTrustLevel,
+    ctx.elevatedCeiling ?? ctx.userTrustLevel,
     ctx.maxModelTrustLevel ?? Number.POSITIVE_INFINITY,
   );
 
@@ -322,10 +336,12 @@ export async function executeOrPropose(
   );
 
   // Side-effect-free preview. Force approved:false so the tool takes its
-  // preview branch regardless of what the model sent.
+  // preview branch regardless of what the model sent. previewForApproval:true
+  // tells an elevation-aware tool a card can be offered, so it may surface an
+  // elevation preview instead of a hard below-floor refusal (v0.8.x Slice 3a).
   let response: NerdAlertResponse;
   try {
-    response = await tool!.execute({ ...call.args, approved: false }, { effectiveTrustCeiling });
+    response = await tool!.execute({ ...call.args, approved: false }, { effectiveTrustCeiling, previewForApproval: true });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     return { id: call.id, name: call.name, output: `Error running "${call.name}": ${message}`, error: true, sources: [] };
@@ -341,10 +357,44 @@ export async function executeOrPropose(
   }
 
   // Ready: park the APPROVED variant for human sign-off.
+  //
+  // Elevation (v0.8.x Slice 3a): a preview may signal elevationRequired — the
+  // trust level needed to APPLY, above the user's standing reach. The per-model
+  // ceiling stays a HARD cap: if the elevation would exceed it, deny rather than
+  // card (never crossed, even with human approval). Otherwise park a one-off
+  // ELEVATION card whose context carries elevatedCeiling, and prepend a visible
+  // notice so the human knows they're approving above standing trust.
+  const elevationRequired = meta.elevationRequired;
+  let parkCtx = ctx;
+  let description = output;
+  if (typeof elevationRequired === 'number') {
+    const modelCeil = ctx.maxModelTrustLevel ?? Number.POSITIVE_INFINITY;
+    if (elevationRequired > modelCeil) {
+      const who = ctx.modelLabel ?? 'this model';
+      return {
+        id: call.id,
+        name: call.name,
+        output:
+          `Error: ${who} cannot apply this action: it requires trust level ` +
+          `${elevationRequired}, above this model's ceiling ${modelCeil}. ` +
+          `The per-model ceiling is a hard cap and cannot be elevated.`,
+        error: true,
+        sources: [],
+      };
+    }
+    parkCtx = { ...ctx, elevatedCeiling: elevationRequired };
+    description =
+      `[ELEVATION] This action is above your current trust level ` +
+      `${ctx.userTrustLevel} — approving runs it ONCE at level ${elevationRequired}; ` +
+      `your standing trust is unchanged.\n\n${output}`;
+    const via = ctx.agentName ? ` (via ${ctx.agentName})` : '';
+    console.log(`[NerdAlert] Elevation requested: ${call.name} needs L${elevationRequired}, standing L${ctx.userTrustLevel}${via} — awaiting approval`);
+  }
+
   const action = proposeAction(
     { ...call, args: { ...call.args, approved: true } },
-    ctx,
-    { title: meta.approvalTitle ?? `Confirmation required - ${call.name}`, description: output },
+    parkCtx,
+    { title: meta.approvalTitle ?? `Confirmation required - ${call.name}`, description },
   );
 
   return {
@@ -419,9 +469,15 @@ export async function resolveApproval(
     return { status: 'denied', action };
   }
 
-  // Re-validate trust at resolution time; user's level may have
-  // changed (especially relevant for the elevation flow on the
-  // roadmap).
+  // Re-validate trust at resolution time via executeTool's gate; the user's
+  // level may have changed since the action was parked. A parked ELEVATION
+  // action (v0.8.x Slice 3a) carries elevatedCeiling, so this approved re-run
+  // clears the user gate for that one action — log it as the audit trail for a
+  // temporary elevation.
+  if (action.context.elevatedCeiling !== undefined) {
+    const via = action.context.agentName ? ` (via ${action.context.agentName})` : '';
+    console.log(`[NerdAlert] Elevation APPLIED: ${action.call.name} running once at L${action.context.elevatedCeiling} (standing L${action.context.userTrustLevel})${via}`);
+  }
   const result = await executeTool(action.call, action.context);
   return { status: 'executed', result };
 }

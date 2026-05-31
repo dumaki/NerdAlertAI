@@ -94,6 +94,14 @@ export interface ResponseMeta {
   // human-readable card heading; the broker falls back to a generic one.
   approvalReady?: boolean;
   approvalTitle?: string;
+
+  // --- ELEVATION SIGNAL (v0.8.x Slice 3a) ---
+  // Set by a side-effect-free PREVIEW (alongside approvalReady) to tell the
+  // broker this action is ready but APPLYING it needs trust level N, above the
+  // user's standing reach. The broker turns it into a one-off ELEVATION card
+  // (human Approve runs it once at N; standing trust is unchanged) and never
+  // crosses the per-model ceiling. Absent => ordinary permitted-level approval.
+  elevationRequired?: number;
 }
 
 
@@ -133,6 +141,14 @@ export interface NerdAlertResponse {
 export interface ToolExecContext {
   /** min(userTrustLevel, maxModelTrustLevel ?? Infinity), computed by the broker. */
   effectiveTrustCeiling: number;
+  /**
+   * True ONLY when the broker is running a tool's side-effect-free preview for
+   * a potential approval card (v0.8.x Slice 3a). Lets a tool surface an
+   * elevation preview (metadata.elevationRequired) in place of a hard refusal,
+   * knowing a card can be offered. Absent on every direct/non-card call, so the
+   * refusal path stays byte-identical there.
+   */
+  previewForApproval?: boolean;
 }
 
 export interface NerdAlertTool {
@@ -193,6 +209,13 @@ export interface AgentConfig {
     name: string;
     personality: string;   // which personality file to load
     trust_level: number;
+    // v0.8.x Slice 3a — opt-in one-off trust elevation. Absent/false => feature
+    // off, byte-identical to today (a below-reach dangerous action is refused,
+    // never carded for elevation). When true, a card-capable transport may raise
+    // an ELEVATION card for an action above standing trust; the human Approve
+    // runs it ONCE without raising standing trust, and the per-model ceiling
+    // stays a hard cap.
+    allow_elevation?: boolean;
   };
   server: {
     port: number;
