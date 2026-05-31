@@ -258,6 +258,138 @@ export async function getCalendarContext(secretPath?: string): Promise<CalendarE
   return fetchUpcomingEvents(cfg, accessToken)
 }
 
+// ── Create an event (Calendar Slice C) ────────────────────────────────────────
+// Write path: load config -> mint access token -> POST to the events endpoint.
+// Reuses the same loadCalendarConfig / refreshAccessToken / httpsRequest chain
+// the read path uses; the only new surface is the POST body builder below.
+// Returns null when calendar is not configured (same contract as the read).
+
+export interface CreateEventInput {
+  summary:      string   // event title (required)
+  start:        string   // ISO datetime (timed) OR YYYY-MM-DD (all-day) -- required
+  end?:         string   // same shapes; defaulted when omitted
+  location?:    string
+  description?: string
+  timeZone?:    string   // IANA zone for naive datetimes; defaults to server local
+}
+
+export interface CreateEventResult {
+  id:       string
+  htmlLink: string       // Google's web link to the created event
+  summary:  string
+  start:    string       // echoed start (dateTime or date)
+}
+
+const isDateOnly  = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(s)
+const hasTzOffset = (s: string): boolean => /([zZ]|[+-]\d{2}:?\d{2})$/.test(s)
+
+// Add whole days to a YYYY-MM-DD string (all-day end defaulting). All-day end
+// dates in the Calendar API are EXCLUSIVE, so a one-day event spans start..start+1.
+function addDaysDateOnly(dateOnly: string, days: number): string {
+  const [y, m, d] = dateOnly.split('-').map(Number)
+  const dt = new Date(y, m - 1, d + days)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${dt.getFullYear()}-${p(dt.getMonth() + 1)}-${p(dt.getDate())}`
+}
+
+// Add hours to a naive "YYYY-MM-DDTHH:MM(:SS)" datetime, interpreting and
+// reformatting in LOCAL time (no UTC conversion) so the result pairs correctly
+// with an IANA timeZone field. Returns the input unchanged if it doesn't match
+// the naive shape (e.g. it already carries an offset, in which case the caller
+// does not use this).
+function addHoursNaive(naive: string, hours: number): string {
+  const m = naive.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/)
+  if (!m) return naive
+  const [, Y, Mo, D, H, Mi, S] = m
+  const dt = new Date(Number(Y), Number(Mo) - 1, Number(D), Number(H), Number(Mi), Number(S ?? '0'))
+  dt.setHours(dt.getHours() + hours)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${dt.getFullYear()}-${p(dt.getMonth() + 1)}-${p(dt.getDate())}T${p(dt.getHours())}:${p(dt.getMinutes())}:${p(dt.getSeconds())}`
+}
+
+// Normalize a naive datetime to include seconds: 'YYYY-MM-DDTHH:MM' becomes
+// 'YYYY-MM-DDTHH:MM:00'. Google's dateTime wants full RFC3339, so a model that
+// emits HH:MM without seconds would otherwise be rejected. Leaves anything else
+// (already has seconds, or carries an offset) untouched.
+function normalizeNaiveSeconds(s: string): string {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s) ? `${s}:00` : s
+}
+
+// Build the Calendar API event resource from the tool input, handling the
+// all-day (date) vs timed (dateTime + timeZone) split and sensible end defaults.
+function buildEventBody(input: CreateEventInput): Record<string, unknown> {
+  const body: Record<string, unknown> = { summary: input.summary }
+  if (input.location)    body.location    = input.location
+  if (input.description) body.description  = input.description
+
+  if (isDateOnly(input.start)) {
+    // All-day event. End date is exclusive; default to a single day.
+    const end = input.end && isDateOnly(input.end) ? input.end : addDaysDateOnly(input.start, 1)
+    body.start = { date: input.start }
+    body.end   = { date: end }
+    return body
+  }
+
+  // Timed event.
+  const tz = input.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+
+  if (hasTzOffset(input.start)) {
+    // Start is an absolute instant (carries an offset / Z). Keep it as-is and,
+    // when no end is given, default to one hour later as a UTC instant -- both
+    // are valid absolute RFC3339 times, so no timeZone field is needed.
+    const end = input.end ?? new Date(Date.parse(input.start) + 3_600_000).toISOString()
+    body.start = { dateTime: input.start }
+    body.end   = hasTzOffset(end) ? { dateTime: end } : { dateTime: normalizeNaiveSeconds(end), timeZone: tz }
+    return body
+  }
+
+  // Naive local datetime: normalize to full seconds and pair with the IANA zone
+  // so Google interprets it in the intended zone rather than UTC. End defaults
+  // to one hour after start, computed in local time.
+  const start = normalizeNaiveSeconds(input.start)
+  const end   = input.end
+    ? (hasTzOffset(input.end) ? input.end : normalizeNaiveSeconds(input.end))
+    : addHoursNaive(start, 1)
+  body.start = { dateTime: start, timeZone: tz }
+  body.end   = hasTzOffset(end) ? { dateTime: end } : { dateTime: end, timeZone: tz }
+  return body
+}
+
+// Create a calendar event. Returns null if calendar is not configured.
+export async function createCalendarEvent(
+  input:       CreateEventInput,
+  secretPath?: string,
+): Promise<CreateEventResult | null> {
+  const cfg = loadCalendarConfig(secretPath)
+  if (!cfg) return null
+
+  const accessToken = await refreshAccessToken(cfg)
+  const calendarId  = encodeURIComponent(cfg.calendarId ?? 'primary')
+  const payload     = JSON.stringify(buildEventBody(input))
+
+  const result = await httpsRequest({
+    hostname: 'www.googleapis.com',
+    path:     `/calendar/v3/calendars/${calendarId}/events`,
+    method:   'POST',
+    headers: {
+      Authorization:    `Bearer ${accessToken}`,
+      'Content-Type':   'application/json',
+      'Content-Length': Buffer.byteLength(payload),
+    },
+  }, payload)
+
+  if (result.error) {
+    throw new Error(`Calendar API error: ${result.error.message ?? JSON.stringify(result.error)}`)
+  }
+
+  return {
+    id:       result.id,
+    htmlLink: result.htmlLink ?? '',
+    summary:  result.summary ?? input.summary,
+    start:    result.start?.dateTime ?? result.start?.date ?? input.start,
+  }
+}
+
 // Match a list of events against a list of messages.
 // Returns a map of message UID → CalendarMatch for matched messages only.
 export function matchCalendarContext(
