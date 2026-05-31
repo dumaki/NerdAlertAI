@@ -7351,6 +7351,24 @@
     openTray();
   }
 
+  // The approval card renders on the approval_request event, which arrives
+  // WHILE the preview turn is still streaming (before its `done`). sendMessage
+  // refuses to start a turn while one is in flight (isStreaming), so a follow-up
+  // fired on a quick click would be silently dropped. Defer it until the current
+  // turn finishes. Caps the wait so a stuck stream can't poll forever.
+  function sendWhenIdle(text) {
+    if (!isStreaming) { sendMessage(text, { skipUserMessageRender: true }); return; }
+    let tries = 0;
+    const poll = setInterval(() => {
+      if (!isStreaming) {
+        clearInterval(poll);
+        sendMessage(text, { skipUserMessageRender: true });
+      } else if (++tries > 80) {
+        clearInterval(poll);   // ~12s safety cap — give up rather than poll forever
+      }
+    }, 150);
+  }
+
   async function resolveServerApproval(serverId, approved) {
     try {
       const r = await fetch('/api/approvals/resolve', {
@@ -7373,18 +7391,16 @@
         // transcript (no user bubble), so only the agent's confirmation shows.
         if (!data.error) {
           const summary = String(data.output || 'the requested action').slice(0, 500);
-          sendMessage(
+          sendWhenIdle(
             `[System: the action you proposed was approved by the user and has ALREADY been completed by the server. Result: ${summary} — In one short sentence, confirm to the user that it is done. Do NOT call any tools.]`,
-            { skipUserMessageRender: true },
           );
         }
       } else if (data.status === 'denied') {
         // Transparency on deny: kick an invisible follow-up turn so the agent
         // acknowledges in its own voice that it will NOT proceed. Nothing ran,
         // so there's no receipt block — just the spoken acknowledgement.
-        sendMessage(
+        sendWhenIdle(
           `[System: the action you proposed was declined by the user and was NOT performed. In one short sentence, acknowledge that you will not proceed. Do NOT call any tools.]`,
-          { skipUserMessageRender: true },
         );
       }
     } catch (e) {
