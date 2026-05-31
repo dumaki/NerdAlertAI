@@ -103,6 +103,13 @@ const googleCalendarDeleteTool: NerdAlertTool = {
 
   trustLevel: 3,
 
+  // Route through the broker's structural approval card (executeOrPropose) on
+  // card-capable transports: the side-effect-free preview below (the
+  // approved!==true branch) signals readiness via metadata.approvalReady, the
+  // broker parks the approved variant, and the human Approve click executes it.
+  // The in-tool two-step still stands as the Telegram/CLI fallback.
+  requiresApproval: true,
+
   parameters: {
     type: 'object',
     properties: {
@@ -177,11 +184,18 @@ const googleCalendarDeleteTool: NerdAlertTool = {
     // Second call (approved:true): re-resolved above to exactly one,
     // now apply.
     if (params.approved !== true) {
-      return ok(
-        `About to permanently delete:\n` +
-        `  "${target.title}" — ${when}${loc}\n\n` +
-        `This cannot be undone. Re-call google_calendar_delete with the same query and approved:true to delete it.`
-      )
+      return {
+        type: 'text',
+        content:
+          `About to permanently delete:\n` +
+          `  "${target.title}" — ${when}${loc}\n\n` +
+          `This cannot be undone. Re-call google_calendar_delete with the same query and approved:true to delete it.`,
+        // Signals to the broker that this preview resolved to a SINGLE concrete
+        // target and is ready for human sign-off -> becomes an approval card.
+        // Disambiguation and not-found returns above do NOT set this, so they
+        // are relayed to the model normally instead of carded.
+        metadata: { approvalReady: true, approvalTitle: `Delete event: ${target.title}` },
+      }
     }
 
     // ── Apply ───────────────────────────────────────────────────
