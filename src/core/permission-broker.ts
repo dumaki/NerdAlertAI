@@ -298,8 +298,14 @@ export async function executeOrPropose(
 ): Promise<BrokerResult> {
   const tool = findTool(call.name);
 
-  // Passthrough: non-approval tool, or no card surface on this transport.
-  if (!opts.canApprovalCard || tool?.requiresApproval !== true) {
+  // Evaluate the approval requirement. A plain boolean behaves as before; a
+  // predicate is called with the parsed args so a multi-action tool can card
+  // only its dangerous action(s) (project_write: merge yes, write/status no).
+  const ra = tool?.requiresApproval;
+  const needsApproval = typeof ra === 'function' ? ra(call.args) === true : ra === true;
+
+  // Passthrough: non-approval call, or no card surface on this transport.
+  if (!opts.canApprovalCard || !needsApproval) {
     return executeTool(call, ctx);
   }
 

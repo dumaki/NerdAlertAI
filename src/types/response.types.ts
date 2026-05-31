@@ -148,7 +148,13 @@ export interface NerdAlertTool {
   // of executing. REQUIRES the tool implement the two-step contract: a first
   // call without approved:true changes nothing and previews; approved:true
   // applies. Absent/false => executed directly, byte-identical to before.
-  requiresApproval?: boolean;
+  //
+  // May also be a PREDICATE over the call args -- `(args) => boolean` -- for a
+  // multi-action tool where only SOME actions are dangerous (e.g. project_write
+  // cards `merge` but not `write`/`status`). The broker evaluates it per call;
+  // a plain `true` behaves exactly as before (strict superset), and an absent/
+  // false/predicate-returns-false result routes straight to executeTool.
+  requiresApproval?: boolean | ((args: Record<string, unknown>) => boolean);
   execute: (params: Record<string, unknown>, exec?: ToolExecContext) => Promise<NerdAlertResponse>;
 }
 
