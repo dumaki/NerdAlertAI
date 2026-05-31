@@ -78,6 +78,21 @@ function err(message: string): NerdAlertResponse {
   };
 }
 
+// Side-effect-free PREVIEW response that ALSO signals the broker's structural
+// approval card. Mirrors ok() but stamps metadata.approvalReady so
+// executeOrPropose parks the approved variant and raises a real Approve/Deny
+// card on a card-capable transport. The seven !approved branches below return
+// through this instead of ok(); the approved execution paths and every err()
+// (validation/not-found) stay on ok()/err() so only a genuine single-target
+// preview becomes a card — a malformed request relays to the model normally.
+function preview(title: string, content: string, approvalTitle: string): NerdAlertResponse {
+  return {
+    type:    'text',
+    content,
+    metadata: { title, approvalReady: true, approvalTitle, sources: [] },
+  };
+}
+
 function errFromGithub(e: GithubError): NerdAlertResponse {
   return {
     type:    'text',
@@ -140,6 +155,14 @@ Repo references use "owner/repo" format. You may pass them separately as owner +
 If GitHub isn't configured this tool returns 'not_configured' — offer to run 'github setup'.`,
 
   trustLevel: 3,
+
+  // Route through the broker's structural approval card (executeOrPropose) on
+  // card-capable transports. The existing per-action !approved branches are
+  // already side-effect-free previews; they now return via preview() (above),
+  // which stamps metadata.approvalReady so the broker parks the approved
+  // variant and the human Approve click applies it. The in-tool approved:true
+  // two-step stays as the Telegram/CLI fallback.
+  requiresApproval: true,
 
   parameters: {
     type: 'object',
@@ -246,7 +269,7 @@ If GitHub isn't configured this tool returns 'not_configured' — offer to run '
               '',
               'Nothing has been created yet. Re-call github_write with approved:true to file the issue.',
             ];
-            return ok('Preview: create_issue', lines.join('\n'));
+            return preview('Preview: create_issue', lines.join('\n'), `Create issue on ${ownerRepo.owner}/${ownerRepo.repo}: ${title}`);
           }
 
           const r = await createIssue(ownerRepo.owner, ownerRepo.repo, { title, body, labels, assignees });
@@ -277,7 +300,7 @@ If GitHub isn't configured this tool returns 'not_configured' — offer to run '
               '',
               'Nothing has been posted yet. Re-call github_write with approved:true to post the comment.',
             ];
-            return ok('Preview: comment_issue', lines.join('\n'));
+            return preview('Preview: comment_issue', lines.join('\n'), `Comment on ${ownerRepo.owner}/${ownerRepo.repo}#${number}`);
           }
 
           const r = await commentIssue(ownerRepo.owner, ownerRepo.repo, number, body);
@@ -305,7 +328,7 @@ If GitHub isn't configured this tool returns 'not_configured' — offer to run '
                 (stateReason ? ` (reason: ${stateReason})` : '') + '.',
               'Nothing has changed yet. Re-call github_write with approved:true to close the issue.',
             ];
-            return ok('Preview: close_issue', lines.join('\n'));
+            return preview('Preview: close_issue', lines.join('\n'), `Close ${ownerRepo.owner}/${ownerRepo.repo}#${number}`);
           }
 
           const r = await closeIssue(ownerRepo.owner, ownerRepo.repo, number, stateReason);
@@ -327,12 +350,13 @@ If GitHub isn't configured this tool returns 'not_configured' — offer to run '
           if (!number) return err('reopen_issue requires number.');
 
           if (!approved) {
-            return ok(
+            return preview(
               'Preview: reopen_issue',
               [
                 `About to REOPEN ${ownerRepo.owner}/${ownerRepo.repo}#${number}.`,
                 'Nothing has changed yet. Re-call github_write with approved:true to reopen the issue.',
               ].join('\n'),
+              `Reopen ${ownerRepo.owner}/${ownerRepo.repo}#${number}`,
             );
           }
 
@@ -359,12 +383,13 @@ If GitHub isn't configured this tool returns 'not_configured' — offer to run '
           }
 
           if (!approved) {
-            return ok(
+            return preview(
               'Preview: add_labels',
               [
                 `About to ADD labels [${labels.join(', ')}] to ${ownerRepo.owner}/${ownerRepo.repo}#${number}.`,
                 'Nothing has changed yet. Re-call github_write with approved:true to add the labels.',
               ].join('\n'),
+              `Add labels [${labels.join(', ')}] to ${ownerRepo.owner}/${ownerRepo.repo}#${number}`,
             );
           }
 
@@ -388,12 +413,13 @@ If GitHub isn't configured this tool returns 'not_configured' — offer to run '
           if (!label) return err('remove_label requires label.');
 
           if (!approved) {
-            return ok(
+            return preview(
               'Preview: remove_label',
               [
                 `About to REMOVE label "${label}" from ${ownerRepo.owner}/${ownerRepo.repo}#${number}.`,
                 'Nothing has changed yet. Re-call github_write with approved:true to remove the label.',
               ].join('\n'),
+              `Remove label "${label}" from ${ownerRepo.owner}/${ownerRepo.repo}#${number}`,
             );
           }
 
@@ -428,12 +454,13 @@ If GitHub isn't configured this tool returns 'not_configured' — offer to run '
           }
 
           if (!approved) {
-            return ok(
+            return preview(
               'Preview: assign_issue',
               [
                 `About to ASSIGN [${assignees.map(a => '@' + a).join(', ')}] to ${ownerRepo.owner}/${ownerRepo.repo}#${number}.`,
                 'Nothing has changed yet. Re-call github_write with approved:true to apply the assignment.',
               ].join('\n'),
+              `Assign [${assignees.map(a => '@' + a).join(', ')}] to ${ownerRepo.owner}/${ownerRepo.repo}#${number}`,
             );
           }
 
