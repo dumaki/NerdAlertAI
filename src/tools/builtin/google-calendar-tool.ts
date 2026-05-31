@@ -34,7 +34,7 @@ import { config } from '../../config/loader'
 const googleCalendarTool: NerdAlertTool = {
   name: 'google_calendar',
 
-  description: `Read your Google Calendar and create new events. Use the 'list' or 'upcoming' action to answer what's on your calendar, what meetings or events are coming up, or whether you're free on a given day — returns upcoming events with their titles, start times, locations, and attendee counts. Use the 'add_event' action to create a new event (provide summary and start; optionally end, location, description). Creating events requires trust level 2. This tool cannot move or delete events. Respond with a concise summary; do not repeat raw details verbatim.`,
+  description: `Read your Google Calendar and create new events. Use the 'list' or 'upcoming' action to answer what's on your calendar, what meetings or events are coming up, or whether you're free on a given day — returns upcoming events with their titles, start times, locations, and attendee counts. Use the 'add_event' action to create a new event (provide summary and start; optionally end, location, description). Creating events requires trust level 2. This tool cannot move events; to delete an event use the google_calendar_delete tool. Respond with a concise summary; do not repeat raw details verbatim.`,
 
   trustLevel: 1,
 

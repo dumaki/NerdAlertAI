@@ -28,6 +28,7 @@ import gmailSetupTool   from './builtin/gmail-setup';
 import gmailSendTool    from './builtin/gmail-send-tool';
 import gmailCleanupTool from './builtin/gmail-cleanup-tool';
 import googleCalendarTool from './builtin/google-calendar-tool';
+import googleCalendarDeleteTool from './builtin/google-calendar-delete-tool';
 import calendarSetupTool   from './builtin/calendar-setup';
 import githubTool       from './builtin/github-tool';
 import githubWriteTool  from './builtin/github-write-tool';
@@ -114,9 +115,17 @@ const ALL_TOOLS: NerdAlertTool[] = [
   gmailTool,
   gmailSetupTool,
 
-  // Google Calendar (read-only, L1) — the calendar half of the email/calendar
-  // module. Wraps the existing src/gmail/calendar.ts read path. Sits with the
-  // gmail cluster; web-tool's description already routes calendar intents here.
+  // Calendar's L3 dangerous-write (delete) sits BEFORE the broad google_calendar
+  // read/create tool — same positional-bias mitigation as the gmail send/cleanup
+  // and cron_delete clusters: a small model scoring tools top-to-bottom should
+  // match "delete this event" against google_calendar_delete before it reaches
+  // google_calendar. google_calendar_delete is filtered out of the model-visible
+  // set below L3, so this ordering only bites once global trust is raised to 3.
+  googleCalendarDeleteTool,
+
+  // Google Calendar (list/upcoming reads + add_event create, tool floor L1) — the
+  // calendar half of the email/calendar module. Wraps src/gmail/calendar.ts. Sits
+  // with the gmail cluster; web-tool's description already routes calendar intents here.
   googleCalendarTool,
 
   // Calendar setup wizard (read-only side effects, L1) — loopback OAuth flow.

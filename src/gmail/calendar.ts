@@ -390,6 +390,58 @@ export async function createCalendarEvent(
   }
 }
 
+// ── Delete an event (Calendar Slice — L3 delete) ──────────────────────────────
+// Write path: load config -> mint access token -> DELETE the event by id.
+// Reuses loadCalendarConfig / refreshAccessToken, but NOT httpsRequest: a
+// successful Calendar delete returns 204 No Content with an EMPTY body, and
+// httpsRequest JSON.parses the body (it would throw on ''). So this issues the
+// request directly and resolves on the status code instead of a parsed body.
+// Returns null when calendar is not configured (same contract as read/create).
+
+export interface DeleteEventResult {
+  deleted: boolean
+}
+
+export async function deleteCalendarEvent(
+  eventId:     string,
+  secretPath?: string,
+): Promise<DeleteEventResult | null> {
+  const cfg = loadCalendarConfig(secretPath)
+  if (!cfg) return null
+
+  const accessToken = await refreshAccessToken(cfg)
+  const calendarId  = encodeURIComponent(cfg.calendarId ?? 'primary')
+
+  const { statusCode, body } = await new Promise<{ statusCode: number; body: string }>((resolve, reject) => {
+    const req = https.request({
+      hostname: 'www.googleapis.com',
+      path:     `/calendar/v3/calendars/${calendarId}/events/${encodeURIComponent(eventId)}`,
+      method:   'DELETE',
+      headers:  { Authorization: `Bearer ${accessToken}` },
+    }, res => {
+      let data = ''
+      res.on('data', chunk => { data += chunk })
+      res.on('end', () => resolve({ statusCode: res.statusCode ?? 0, body: data }))
+    })
+    req.on('error', reject)
+    req.end()
+  })
+
+  // 204 (No Content) / 200 = deleted. 410 (Gone) = already deleted upstream;
+  // treat as success so the operation is idempotent.
+  if (statusCode === 204 || statusCode === 200 || statusCode === 410) {
+    return { deleted: true }
+  }
+
+  // Anything else: surface the API error message if the body is JSON.
+  let message = `HTTP ${statusCode}`
+  try {
+    const parsed = JSON.parse(body)
+    message = parsed?.error?.message ?? message
+  } catch { /* non-JSON / empty body — keep the status-code message */ }
+  throw new Error(`Calendar API error: ${message}`)
+}
+
 // Match a list of events against a list of messages.
 // Returns a map of message UID → CalendarMatch for matched messages only.
 export function matchCalendarContext(
