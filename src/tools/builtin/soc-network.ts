@@ -12,6 +12,12 @@ import {
   listInfluxdbHosts,
   getInfluxdbHostOverview,
 } from '../../server/soc-clients/influxdb';
+import {
+  searchLokiIp,
+  getLokiServiceLogs,
+  getLokiHostLogs,
+  type LokiQueryResult,
+} from '../../server/soc-clients/loki';
 
 // ── Envelope helpers for the OpenClaw-decoupled tools (v0.9.x) ──
 // Same never-throw contract as soc-pihole.ts: the direct client throws
@@ -26,6 +32,35 @@ function textResponse(content: string): NerdAlertResponse {
 function describeInfluxError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
   return `Error: could not reach InfluxDB — ${msg}. Check INFLUXDB_URL in .env and that influxdb-api-token is set via /setup.`;
+}
+
+function describeLokiError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  return `Error: could not reach Loki — ${msg}. Check LOKI_URL in .env (Loki must be reachable on port 3100).`;
+}
+
+// Render parsed Loki lines newest-first as "[ISO UTC] [labels] line", with
+// an omitted-count note when the match set exceeded the cap. Mirrors the
+// reference MCP's _format_streams display.
+const LOKI_DISPLAY_LABELS = ['host', 'service_name', 'unit', 'container', 'job'];
+
+function formatLokiLines(result: LokiQueryResult, header: string): string {
+  if (result.lines.length === 0) {
+    return `${header}: no matching log entries.`;
+  }
+  const body = result.lines.map((l) => {
+    const ts = new Date(l.timestampMs).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
+    const labelStr = LOKI_DISPLAY_LABELS
+      .filter((k) => l.labels[k])
+      .map((k) => `${k}=${l.labels[k]}`)
+      .join(', ');
+    return labelStr ? `[${ts}] [${labelStr}] ${l.line}` : `[${ts}] ${l.line}`;
+  }).join('\n');
+  const omitted = result.totalMatched - result.lines.length;
+  const note = omitted > 0
+    ? `\n... (${omitted} older line${omitted === 1 ? '' : 's'} omitted; narrow the time range or filter)`
+    : '';
+  return `${header}:\n${body}${note}`;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -381,12 +416,17 @@ const lokiSearchIp: NerdAlertTool = {
     required: ['ip'],
   },
   execute: async (params): Promise<NerdAlertResponse> => {
-    const ip    = params.ip as string;
+    const ip    = ((params.ip as string | undefined) ?? '').trim();
     const hours = (params.hours as number | undefined) ?? 24;
-    const result = await queryOpenClaw(
-      `Use the Loki loki_search_ip tool to search all log streams for IP address ${ip} in the past ${hours} hours. Return log lines with timestamps and source services.`
-    );
-    return { type: 'text', content: result, metadata: {} };
+    if (!ip) {
+      return textResponse('Error: no IP address provided to search for.');
+    }
+    try {
+      const r = await searchLokiIp(ip, hours);
+      return textResponse(formatLokiLines(r, `Logs mentioning ${ip} (last ${hours}h)`));
+    } catch (err) {
+      return textResponse(describeLokiError(err));
+    }
   },
 };
 
@@ -413,14 +453,19 @@ const lokiServiceLogs: NerdAlertTool = {
     required: ['service'],
   },
   execute: async (params): Promise<NerdAlertResponse> => {
-    const service = params.service as string;
-    const hours   = (params.hours  as number | undefined) ?? 1;
-    const filter  = params.filter  as string | undefined;
-    const filterStr = filter ? ` filtered to lines containing "${filter}"` : '';
-    const result = await queryOpenClaw(
-      `Use the Loki loki_service_logs tool to return logs for service "${service}" from the past ${hours} hours${filterStr}. Include timestamps and log content.`
-    );
-    return { type: 'text', content: result, metadata: {} };
+    const service = ((params.service as string | undefined) ?? '').trim();
+    const hours   = (params.hours as number | undefined) ?? 1;
+    const filter  = (params.filter as string | undefined)?.trim() || undefined;
+    if (!service) {
+      return textResponse('Error: no service name provided to query logs for.');
+    }
+    try {
+      const r = await getLokiServiceLogs(service, hours, filter);
+      const suffix = filter ? ` [filter: "${filter}"]` : '';
+      return textResponse(formatLokiLines(r, `Logs for service ${service} (last ${hours}h)${suffix}`));
+    } catch (err) {
+      return textResponse(describeLokiError(err));
+    }
   },
 };
 
@@ -447,14 +492,19 @@ const lokiHostLogs: NerdAlertTool = {
     required: ['host'],
   },
   execute: async (params): Promise<NerdAlertResponse> => {
-    const host   = params.host   as string;
+    const host   = ((params.host as string | undefined) ?? '').trim();
     const hours  = (params.hours as number | undefined) ?? 1;
-    const filter = params.filter as string | undefined;
-    const filterStr = filter ? ` filtered to lines containing "${filter}"` : '';
-    const result = await queryOpenClaw(
-      `Use the Loki loki_host_logs tool to return system logs for host "${host}" from the past ${hours} hours${filterStr}. Include timestamps and log content.`
-    );
-    return { type: 'text', content: result, metadata: {} };
+    const filter = (params.filter as string | undefined)?.trim() || undefined;
+    if (!host) {
+      return textResponse('Error: no host provided to query logs for.');
+    }
+    try {
+      const r = await getLokiHostLogs(host, hours, filter);
+      const suffix = filter ? ` [filter: "${filter}"]` : '';
+      return textResponse(formatLokiLines(r, `Logs from host ${host} (last ${hours}h)${suffix}`));
+    } catch (err) {
+      return textResponse(describeLokiError(err));
+    }
   },
 };
 

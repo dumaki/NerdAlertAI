@@ -262,3 +262,192 @@ export async function getLokiWallState(): Promise<DirectClientResult | null> {
     status,
   };
 }
+
+// ════════════════════════════════════════════════════════════
+// AGENT-FACING READ FUNCTIONS (v0.9.x — OpenClaw decouple)
+// ════════════════════════════════════════════════════════════
+//
+// These power the loki_* agent tools in
+// src/tools/builtin/soc-network.ts. Same two contract differences from
+// getLokiWallState above as the InfluxDB decouple:
+//
+//   1. They THROW on transport / HTTP failure (the wall path returns
+//      null for a dark tile); the agent tools CATCH and narrate the
+//      error in their text envelope — the soc-pihole.ts contract.
+//   2. They hit /loki/api/v1/query_range (the wall only used the instant
+//      /query + /labels), returning parsed log lines rather than counts.
+//
+// No new credential, env var, or wall change — strictly additive.
+// buildHeaders() (basic auth + X-Scope-OrgID + UA) is reused as-is.
+
+// ── LogQL injection guards ──────────────────────────
+// ip/host/service/filter can originate from the model and are
+// interpolated into LogQL. Label values (host/service) get a charset
+// allowlist; free-text (the ip used as a |= filter, and the filter arg)
+// gets Go-style string-literal escaping. The reference Python MCP
+// interpolated all of these raw — this closes that surface.
+const LOKI_LABEL_RE = /^[A-Za-z0-9._-]{1,253}$/;
+const LOKI_IP_RE    = /^[0-9A-Fa-f.:]{1,45}$/;
+
+function assertSafeLokiLabel(kind: string, value: string): void {
+  if (!LOKI_LABEL_RE.test(value)) {
+    throw new Error(`invalid ${kind}: ${JSON.stringify(value)}`);
+  }
+}
+
+function assertSafeLokiIp(ip: string): void {
+  if (!LOKI_IP_RE.test(ip)) {
+    throw new Error(`invalid IP address: ${JSON.stringify(ip)}`);
+  }
+}
+
+// Escape a free-text value for a LogQL double-quoted string literal (the
+// |= "..." line filter). Backslash first, then double-quote.
+function escapeLogql(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+// ── Parsed line shapes ────────────────────────────
+
+export interface LokiLogLine {
+  timestampMs: number;
+  labels:      Record<string, string>;
+  line:        string;
+}
+
+export interface LokiQueryResult {
+  lines:        LokiLogLine[];  // newest-first, capped at the limit
+  totalMatched: number;         // total parsed before the cap
+}
+
+// Lazy-init the optional basic-auth caches (a no-op for the common
+// unauthenticated LAN case), then return request headers. Mirrors the
+// opening of getLokiWallState so the agent path and the wall path
+// authenticate identically.
+async function lokiHeaders(): Promise<Record<string, string>> {
+  if (cachedUser === null) await initLokiBasicUser();
+  if (cachedPass === null) await initLokiBasicPass();
+  return buildHeaders();
+}
+
+// Nanosecond unix-epoch as a STRING. Date.now() is ms; ns = ms * 1e6.
+// Doing that multiply as a JS Number overflows MAX_SAFE_INTEGER (~9e15)
+// and loses precision, so we append six zeros to the ms integer instead
+// — exact, no BigInt needed.
+function msToNs(ms: number): string {
+  return `${ms}000000`;
+}
+
+// ── query_range engine ───────────────────────────
+//
+// Runs a range query and flattens the streams into newest-first log
+// lines. hours is clamped to [1, 168] (the MCP's 7-day ceiling); limit
+// caps the returned lines. Throws on transport/HTTP failure.
+async function queryLokiRange(
+  logql: string,
+  hours: number,
+  limit: number,
+): Promise<LokiQueryResult> {
+  const clampedHours = Math.max(1, Math.min(168, Number.isFinite(hours) ? hours : 1));
+  const clampedLimit = Math.max(1, Math.min(500, Math.floor(Number.isFinite(limit) ? limit : 100)));
+  const endMs   = Date.now();
+  const startMs = endMs - clampedHours * 3600 * 1000;
+
+  const params = new URLSearchParams({
+    query:     logql,
+    start:     msToNs(startMs),
+    end:       msToNs(endMs),
+    limit:     String(clampedLimit),
+    direction: 'backward',
+  });
+
+  const headers = await lokiHeaders();
+  const ctrl    = new AbortController();
+  const timer   = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(`${LOKI_URL}/loki/api/v1/query_range?${params.toString()}`, {
+      headers,
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Loki query_range HTTP ${res.status} ${body.slice(0, 120)}`);
+    }
+    const json = (await res.json()) as {
+      status?: string;
+      data?: { result?: Array<{ stream?: Record<string, string>; values?: Array<[string, string]> }> };
+    };
+    if (json.status !== 'success') {
+      throw new Error('Loki query_range returned a non-success status');
+    }
+
+    const streams = json.data?.result ?? [];
+    const lines: LokiLogLine[] = [];
+    for (const s of streams) {
+      const labels = s.stream ?? {};
+      for (const [tsNs, line] of s.values ?? []) {
+        // tsNs is a nanosecond string. ms = drop the last 6 digits
+        // (exact); guard the unlikely sub-microsecond case.
+        const ms = tsNs.length > 6 ? Number(tsNs.slice(0, -6)) : Number(tsNs) / 1e6;
+        lines.push({ timestampMs: Number.isFinite(ms) ? ms : 0, labels, line });
+      }
+    }
+
+    lines.sort((a, b) => b.timestampMs - a.timestampMs);
+    const totalMatched = lines.length;
+    return { lines: lines.slice(0, clampedLimit), totalMatched };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('abort') || msg.includes('AbortError')) {
+      throw new Error(`Loki query timed out after ${TIMEOUT_MS} ms`);
+    }
+    throw err instanceof Error ? err : new Error(msg);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Search every log stream for a literal IP across the last `hours`.
+ * LogQL: {job=~".+"} |= "<ip>". IP charset-validated. Throws on failure.
+ */
+export async function searchLokiIp(
+  ip:    string,
+  hours: number,
+  limit  = 100,
+): Promise<LokiQueryResult> {
+  assertSafeLokiIp(ip);
+  return queryLokiRange(`{job=~".+"} |= "${escapeLogql(ip)}"`, hours, limit);
+}
+
+/**
+ * Logs for a named service/container over the last `hours`, optionally
+ * line-filtered. LogQL: {service_name="<service>"} [|= "<filter>"].
+ */
+export async function getLokiServiceLogs(
+  service: string,
+  hours:   number,
+  filter?: string,
+  limit    = 100,
+): Promise<LokiQueryResult> {
+  assertSafeLokiLabel('service', service);
+  let logql = `{service_name="${service}"}`;
+  if (filter && filter.trim()) logql += ` |= "${escapeLogql(filter.trim())}"`;
+  return queryLokiRange(logql, hours, limit);
+}
+
+/**
+ * System logs for a host over the last `hours`, optionally line-filtered.
+ * LogQL: {host="<host>"} [|= "<filter>"].
+ */
+export async function getLokiHostLogs(
+  host:    string,
+  hours:   number,
+  filter?: string,
+  limit    = 100,
+): Promise<LokiQueryResult> {
+  assertSafeLokiLabel('host', host);
+  let logql = `{host="${host}"}`;
+  if (filter && filter.trim()) logql += ` |= "${escapeLogql(filter.trim())}"`;
+  return queryLokiRange(logql, hours, limit);
+}
