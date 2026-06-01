@@ -57,6 +57,7 @@ import {
   lokiTools,
   influxdbTools,
 } from './builtin/soc-network';
+import { honeypotTools } from './builtin/soc-honeypot';
 
 // ── Master tool list ──────────────────────────────────────────
 //
@@ -167,6 +168,9 @@ const ALL_TOOLS: NerdAlertTool[] = [
 
   // SOC — InfluxDB metrics
   ...influxdbTools,
+
+  // SOC — Honeypots (Cowrie + OpenCanary, via Loki)
+  ...honeypotTools,
 ];
 
 // ── Anthropic tool format ─────────────────────────────────────

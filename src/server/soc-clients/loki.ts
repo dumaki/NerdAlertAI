@@ -451,3 +451,31 @@ export async function getLokiHostLogs(
   if (filter && filter.trim()) logql += ` |= "${escapeLogql(filter.trim())}"`;
   return queryLokiRange(logql, hours, limit);
 }
+
+// ── Honeypot streams ──────────────────────────────
+//
+// The Promtail `job` labels for the honeypot log streams on canary-pi.
+// Kept as a fixed const (NOT model-supplied) so the LogQL selector is
+// built at compile time and carries zero injection surface — unlike
+// searchLokiIp, no charset guard is needed because nothing the model
+// sends reaches the selector. Adding Zeek (or any future honeypot) is a
+// one-word edit here. We key on `job` — the label we set ourselves in
+// Promtail — rather than the `service_name` Loki auto-derives, because
+// the explicit one is ours to rely on.
+const HONEYPOT_JOBS = ['cowrie', 'opencanary'] as const;
+
+/**
+ * Every honeypot log line across the last `hours`, newest-first, flattened
+ * by the shared queryLokiRange engine. LogQL: {job=~"cowrie|opencanary"}.
+ * Throws on transport/HTTP failure — the soc-honeypot.ts tools catch and
+ * narrate, the same client-throws/tool-catches contract as the loki_* fns.
+ * Returns the raw LokiQueryResult unchanged; cross-honeypot schema
+ * normalisation lives in the tool layer, not here.
+ */
+export async function getHoneypotEvents(
+  hours: number,
+  limit  = 100,
+): Promise<LokiQueryResult> {
+  const selector = `{job=~"${HONEYPOT_JOBS.join('|')}"}`;
+  return queryLokiRange(selector, hours, limit);
+}
