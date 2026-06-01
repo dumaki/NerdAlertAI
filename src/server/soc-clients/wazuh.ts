@@ -170,7 +170,7 @@ interface WazuhSearchResponse {
 
 // ── HTTPS request via Node stdlib ───────────────────────────
 
-function requestIndexer(body: string): Promise<WazuhSearchResponse> {
+function indexerSearch<T>(body: string): Promise<T> {
   return new Promise((resolve, reject) => {
     if (!cachedPassword) {
       reject(new Error('No wazuh-indexer-password configured (run /setup)'));
@@ -207,7 +207,7 @@ function requestIndexer(body: string): Promise<WazuhSearchResponse> {
             return;
           }
           try {
-            resolve(JSON.parse(text) as WazuhSearchResponse);
+            resolve(JSON.parse(text) as T);
           } catch {
             reject(new Error('Invalid JSON from indexer'));
           }
@@ -251,7 +251,7 @@ export async function getWazuhWallState(): Promise<DirectClientResult | null> {
   }
 
   try {
-    const data = await requestIndexer(buildQueryBody());
+    const data = await indexerSearch<WazuhSearchResponse>(buildQueryBody());
 
     const total = typeof data.hits.total === 'number'
       ? data.hits.total
@@ -278,4 +278,143 @@ export async function getWazuhWallState(): Promise<DirectClientResult | null> {
     console.warn(`[wazuh-direct] query failed: ${msg}`);
     return null;
   }
+}
+
+// ── Agent-tool read API (decoupled from OpenClaw, v0.9.x) ───
+//
+// The wall only needed one aggregation (24h totals + critical count).
+// The agent tools need alert lists, per-level counts, IP search, and
+// top-rule rankings — all Indexer _search calls. These reuse the shared
+// indexerSearch<T> + the self-signed-TLS agent above. Each lazy-inits
+// the credential and throws on failure; the tool layer catches.
+//
+// NOTE: agent connection status is NOT here — that lives on the Wazuh
+// MANAGER API (port 55000), not the Indexer. wazuh_agent_status stays on
+// the gateway until a manager-API client lands.
+
+async function ensureWazuhCred(): Promise<void> {
+  if (cachedPassword === null) {
+    const ok = await initWazuhCredential();
+    if (!ok) throw new Error('No wazuh-indexer-password configured (run /setup)');
+  }
+}
+
+// ── Typed read shapes (only the fields the tools surface) ───
+export interface WazuhAlert {
+  timestamp:   string;
+  level:       number;
+  ruleId:      string;
+  description: string;
+  agent:       string;
+  srcip?:      string;
+}
+export interface WazuhLevelCount { level: number; count: number; }
+export interface WazuhTopRule { ruleId: string; description: string; count: number; }
+
+// Raw _source shape (only used fields). Wazuh nests rule/agent/data.
+interface RawHitSource {
+  '@timestamp'?: string;
+  rule?:  { level?: number; id?: string; description?: string };
+  agent?: { name?: string };
+  data?:  { srcip?: string };
+}
+interface RawSearchHits { hits?: { hits?: Array<{ _source?: RawHitSource }> }; }
+interface RawAgg<B> { aggregations?: B; }
+
+function normalizeAlertHit(src: RawHitSource): WazuhAlert {
+  return {
+    timestamp:   src['@timestamp'] ?? '',
+    level:       src.rule?.level ?? 0,
+    ruleId:      src.rule?.id ?? '',
+    description: src.rule?.description ?? '',
+    agent:       src.agent?.name ?? '',
+    srcip:       src.data?.srcip,
+  };
+}
+
+// Shared _source projection — the fields formatAlert renders.
+const ALERT_SOURCE_FIELDS = ['@timestamp', 'rule.level', 'rule.id', 'rule.description', 'agent.name', 'data.srcip'];
+
+// ── wazuh_get_alerts ── recent alerts, newest first, optional min level
+export async function getWazuhAlerts(
+  opts: { minLevel?: number; hours?: number; limit?: number } = {},
+): Promise<WazuhAlert[]> {
+  await ensureWazuhCred();
+  const hours = opts.hours ?? 24;
+  const limit = opts.limit ?? 20;
+  const filter: unknown[] = [{ range: { '@timestamp': { gte: `now-${hours}h` } } }];
+  if (opts.minLevel) filter.push({ range: { 'rule.level': { gte: opts.minLevel } } });
+  const body = JSON.stringify({
+    size:    limit,
+    sort:    [{ '@timestamp': { order: 'desc' } }],
+    _source: ALERT_SOURCE_FIELDS,
+    query:   { bool: { filter } },
+  });
+  const res = await indexerSearch<RawSearchHits>(body);
+  return (res.hits?.hits ?? []).map(h => normalizeAlertHit(h._source ?? {}));
+}
+
+// ── wazuh_alert_summary ── counts grouped by rule.level
+export async function getWazuhAlertSummary(hours = 24): Promise<WazuhLevelCount[]> {
+  await ensureWazuhCred();
+  const body = JSON.stringify({
+    size:  0,
+    query: { bool: { filter: [{ range: { '@timestamp': { gte: `now-${hours}h` } } }] } },
+    aggs:  { levels: { terms: { field: 'rule.level', size: 20 } } },
+  });
+  interface LevelAgg { levels?: { buckets?: Array<{ key?: number; doc_count?: number }> }; }
+  const res = await indexerSearch<RawAgg<LevelAgg>>(body);
+  return (res.aggregations?.levels?.buckets ?? [])
+    .map(b => ({ level: Number(b.key ?? 0), count: b.doc_count ?? 0 }))
+    .sort((a, b) => a.level - b.level);
+}
+
+// ── wazuh_search_ip ── alerts mentioning an IP across common fields
+export async function searchWazuhIp(ip: string, hours = 24, limit = 50): Promise<WazuhAlert[]> {
+  await ensureWazuhCred();
+  const body = JSON.stringify({
+    size:    limit,
+    sort:    [{ '@timestamp': { order: 'desc' } }],
+    _source: ALERT_SOURCE_FIELDS,
+    query: { bool: {
+      filter: [{ range: { '@timestamp': { gte: `now-${hours}h` } } }],
+      // Cast a wide net over the IP fields Wazuh decoders populate;
+      // lenient skips fields that don't exist / aren't string-typed.
+      must: [{ multi_match: {
+        query:   ip,
+        type:    'phrase',
+        lenient: true,
+        fields:  ['data.srcip', 'data.dstip', 'data.src_ip', 'data.dest_ip', 'agent.ip', 'data.win.eventdata.ipAddress'],
+      } }],
+    } },
+  });
+  const res = await indexerSearch<RawSearchHits>(body);
+  return (res.hits?.hits ?? []).map(h => normalizeAlertHit(h._source ?? {}));
+}
+
+// ── wazuh_top_rules ── most-triggered rule.ids with a description
+export async function getWazuhTopRules(hours = 24, limit = 10): Promise<WazuhTopRule[]> {
+  await ensureWazuhCred();
+  const body = JSON.stringify({
+    size:  0,
+    query: { bool: { filter: [{ range: { '@timestamp': { gte: `now-${hours}h` } } }] } },
+    // terms agg gives id+count; a 1-doc top_hits sub-agg grabs a
+    // human-readable description for each rule id.
+    aggs: { rules: {
+      terms: { field: 'rule.id', size: limit },
+      aggs:  { desc: { top_hits: { size: 1, _source: ['rule.description'] } } },
+    } },
+  });
+  interface RulesAgg {
+    rules?: { buckets?: Array<{
+      key?: string; doc_count?: number;
+      desc?: { hits?: { hits?: Array<{ _source?: { rule?: { description?: string } } }> } };
+    }> };
+  }
+  const res = await indexerSearch<RawAgg<RulesAgg>>(body);
+  return (res.aggregations?.rules?.buckets ?? []).map(b => ({
+    ruleId:      String(b.key ?? ''),
+    count:       b.doc_count ?? 0,
+    description: b.desc?.hits?.hits?.[0]?._source?.rule?.description ?? '',
+  }));
 }
