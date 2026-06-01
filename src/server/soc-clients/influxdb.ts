@@ -323,3 +323,244 @@ export async function getInfluxdbWallState(): Promise<DirectClientResult | null>
     status,
   };
 }
+
+// ════════════════════════════════════════════════════════════
+// AGENT-FACING READ FUNCTIONS (v0.9.x — OpenClaw decouple)
+// ════════════════════════════════════════════════════════════
+//
+// These power the influxdb_* agent tools in
+// src/tools/builtin/soc-network.ts. Two contract differences from
+// getInfluxdbWallState above:
+//
+//   1. They THROW on transport / credential / org-resolution failure.
+//      The wall fn returns null so the tile can show NO SIGNAL; the
+//      agent tools instead CATCH the throw and narrate the error in
+//      their text envelope — the same never-throw-at-the-tool contract
+//      the decoupled Pi-hole tools use (soc-pihole.ts).
+//   2. They resolve org via the existing fetchBucketsAndOrg() and POST
+//      Flux to /api/v2/query, mirroring fetchHostCount but returning
+//      richer shapes (a host list; a structured per-host overview).
+//
+// No new credential, env var, or wall change — strictly additive.
+
+// Telegraf host tags are hostnames. The host string can originate from
+// the model and is interpolated into a Flux filter, so we allowlist a
+// hostname charset before it ever reaches the query. (The reference
+// Python MCP interpolated host unchecked — this closes that injection
+// surface.)
+const INFLUX_HOST_RE = /^[A-Za-z0-9._-]{1,253}$/;
+
+function assertSafeInfluxHost(host: string): void {
+  if (!INFLUX_HOST_RE.test(host)) {
+    throw new Error(`invalid host name: ${JSON.stringify(host)}`);
+  }
+}
+
+// Resolve an orgID, loading the credential on demand. Throws (rather
+// than returning null like the wall path) so the tool can narrate the
+// failure instead of silently showing nothing.
+async function requireInfluxOrgId(): Promise<string> {
+  if (cachedToken === null) {
+    const ok = await initInfluxdbCredential();
+    if (!ok) {
+      throw new Error('influxdb-api-token not configured — add it via /setup');
+    }
+  }
+  const info = await fetchBucketsAndOrg();
+  if (!info) {
+    throw new Error('could not resolve InfluxDB org (check token scope and connectivity)');
+  }
+  return info.orgID;
+}
+
+// POST a Flux query and return its annotated CSV as rows of columns.
+// Comment (#) and blank lines are dropped; the first remaining line is
+// the header, the rest are data rows. Throws on HTTP error or timeout.
+async function runInfluxFlux(orgID: string, flux: string): Promise<string[][]> {
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    const url = `${INFLUXDB_URL}/api/v2/query?orgID=${encodeURIComponent(orgID)}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Token ${cachedToken}`,
+        'Content-Type':  'application/vnd.flux',
+        'Accept':        'application/csv',
+        'User-Agent':    USER_AGENT,
+      },
+      body:   flux,
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`InfluxDB query HTTP ${res.status} ${body.slice(0, 120)}`);
+    }
+    const csv = await res.text();
+    return csv
+      .split('\n')
+      .map((l) => l.replace(/\r$/, ''))
+      .filter((l) => l.length > 0 && !l.startsWith('#'))
+      .map((l) => l.split(','));
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('abort') || msg.includes('AbortError')) {
+      throw new Error(`InfluxDB query timed out after ${TIMEOUT_MS} ms`);
+    }
+    throw err instanceof Error ? err : new Error(msg);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Pull a single scalar from a Flux CSV result. mean()/last() queries
+// return one data row whose _value column holds the scalar. Returns
+// null when the query produced no data rows (header only) — the caller
+// treats that as "no metric for this host/field".
+function fluxScalar(rows: string[][]): number | null {
+  if (rows.length < 2) return null;
+  const header   = rows[0];
+  const valueIdx = header.indexOf('_value');
+  const dataRow  = rows[rows.length - 1];
+  if (valueIdx >= 0 && dataRow[valueIdx] !== undefined) {
+    const n = Number(dataRow[valueIdx]);
+    if (Number.isFinite(n)) return n;
+  }
+  // Fallback: scan from the right for the first numeric column.
+  for (let i = dataRow.length - 1; i >= 0; i--) {
+    const n = Number(dataRow[i]);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+const round2       = (n: number): number => Math.round(n * 100) / 100;
+const round2OrNull = (n: number | null): number | null => (n === null ? null : round2(n));
+const bytesToGb    = (b: number | null): number | null => (b === null ? null : round2(b / 1024 ** 3));
+
+/**
+ * List every host currently reporting to InfluxDB, sourced via
+ * schema.tagValues on the host tag (last 7 days), sorted ascending.
+ * Mirrors the reference MCP's list_hosts. Throws on access failure.
+ */
+export async function listInfluxdbHosts(): Promise<string[]> {
+  const orgID = await requireInfluxOrgId();
+  const flux = [
+    'import "influxdata/influxdb/schema"',
+    '',
+    'schema.tagValues(',
+    `  bucket: "${TELEMETRY_BUCKET}",`,
+    `  tag: "${HOST_TAG}",`,
+    '  predicate: (r) => true,',
+    '  start: -7d,',
+    ')',
+  ].join('\n');
+
+  const rows = await runInfluxFlux(orgID, flux);
+  if (rows.length < 2) return [];
+
+  const valueIdx = rows[0].indexOf('_value');
+  if (valueIdx < 0) return [];
+
+  const hosts = new Set<string>();
+  for (let i = 1; i < rows.length; i++) {
+    const v = rows[i][valueIdx]?.trim();
+    if (v) hosts.add(v);
+  }
+  return [...hosts].sort();
+}
+
+export interface InfluxHostOverview {
+  host:           string;
+  timeRangeHours: number;
+  cpu:    { usagePercent: number | null };
+  memory: { usedPercent: number | null; totalGb: number | null; availableGb: number | null };
+  disk:   { path: string; usedPercent: number | null; totalGb: number | null; freeGb: number | null };
+  load:   { load1: number | null; load5: number | null; load15: number | null };
+}
+
+/**
+ * Mean CPU / memory / disk / load for a host over the last `hours`
+ * (clamped to [1, 168]). Mirrors the reference MCP's get_host_overview:
+ * a handful of small mean()/last() Flux queries against Telegraf's
+ * standard cpu / mem / disk / system measurements. Throws on access
+ * failure; returns a struct of nulls when the host simply has no data
+ * in the window (the tool turns that into a friendly message).
+ */
+export async function getInfluxdbHostOverview(
+  host:  string,
+  hours: number,
+): Promise<InfluxHostOverview> {
+  assertSafeInfluxHost(host);
+  const clamped = Math.max(1, Math.min(168, Math.floor(Number.isFinite(hours) ? hours : 1)));
+  const range   = `-${clamped}h`;
+  const orgID   = await requireInfluxOrgId();
+  const bucket  = TELEMETRY_BUCKET;
+
+  // Build a single-field mean()/last() query. measurement, field, and
+  // `extra` are literals we control; host is charset-validated above.
+  const buildQuery = (
+    reducer:     'mean' | 'last',
+    measurement: string,
+    field:       string,
+    extra:       string,
+  ): string => [
+    `from(bucket: "${bucket}")`,
+    `  |> range(start: ${range})`,
+    `  |> filter(fn: (r) => r._measurement == "${measurement}"` +
+      ` and r.${HOST_TAG} == "${host}"` +
+      ` and r._field == "${field}"${extra})`,
+    `  |> ${reducer}()`,
+  ].join('\n');
+
+  const scalar = async (
+    reducer: 'mean' | 'last',
+    m: string,
+    f: string,
+    extra = '',
+  ): Promise<number | null> =>
+    fluxScalar(await runInfluxFlux(orgID, buildQuery(reducer, m, f, extra)));
+
+  // CPU usage = 100 - idle on the cpu-total aggregate.
+  const cpuIdle  = await scalar('mean', 'cpu', 'usage_idle', ' and r.cpu == "cpu-total"');
+  const cpuUsage = cpuIdle === null ? null : round2(100 - cpuIdle);
+
+  // Memory.
+  const memUsedPct = await scalar('mean', 'mem', 'used_percent');
+  const memTotalB  = await scalar('last', 'mem', 'total');
+  const memAvailB  = await scalar('mean', 'mem', 'available');
+
+  // Disk (root filesystem only).
+  const diskPath  = '/';
+  const diskExtra = ` and r.path == "${diskPath}"`;
+  const diskUsed  = await scalar('mean', 'disk', 'used_percent', diskExtra);
+  const diskTotal = await scalar('last', 'disk', 'total', diskExtra);
+  const diskFree  = await scalar('mean', 'disk', 'free', diskExtra);
+
+  // System load.
+  const load1  = await scalar('mean', 'system', 'load1');
+  const load5  = await scalar('mean', 'system', 'load5');
+  const load15 = await scalar('mean', 'system', 'load15');
+
+  return {
+    host,
+    timeRangeHours: clamped,
+    cpu:    { usagePercent: cpuUsage },
+    memory: {
+      usedPercent: round2OrNull(memUsedPct),
+      totalGb:     bytesToGb(memTotalB),
+      availableGb: bytesToGb(memAvailB),
+    },
+    disk: {
+      path:        diskPath,
+      usedPercent: round2OrNull(diskUsed),
+      totalGb:     bytesToGb(diskTotal),
+      freeGb:      bytesToGb(diskFree),
+    },
+    load: {
+      load1:  round2OrNull(load1),
+      load5:  round2OrNull(load5),
+      load15: round2OrNull(load15),
+    },
+  };
+}

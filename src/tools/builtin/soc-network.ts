@@ -8,6 +8,25 @@
 
 import { NerdAlertTool, NerdAlertResponse } from '../../types/response.types';
 import { queryOpenClaw } from './soc-client';
+import {
+  listInfluxdbHosts,
+  getInfluxdbHostOverview,
+} from '../../server/soc-clients/influxdb';
+
+// ── Envelope helpers for the OpenClaw-decoupled tools (v0.9.x) ──
+// Same never-throw contract as soc-pihole.ts: the direct client throws
+// on transport/credential failure, and each rewritten execute() catches
+// and returns the error as plain text in the standard envelope. The
+// tools still on queryOpenClaw below format their own inline envelope
+// exactly as before — untouched.
+function textResponse(content: string): NerdAlertResponse {
+  return { type: 'text', content, metadata: {} };
+}
+
+function describeInfluxError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  return `Error: could not reach InfluxDB — ${msg}. Check INFLUXDB_URL in .env and that influxdb-api-token is set via /setup.`;
+}
 
 // ════════════════════════════════════════════════════════════
 // PFSENSE — Firewall and network gateway
@@ -462,12 +481,39 @@ const influxdbHostOverview: NerdAlertTool = {
     required: ['host'],
   },
   execute: async (params): Promise<NerdAlertResponse> => {
-    const host  = params.host  as string;
+    const host  = ((params.host as string | undefined) ?? '').trim();
     const hours = (params.hours as number | undefined) ?? 1;
-    const result = await queryOpenClaw(
-      `Use the InfluxDB get_host_overview tool to return performance metrics for host "${host}" over the past ${hours} hours. Include CPU usage, memory usage, disk I/O, and network throughput.`
-    );
-    return { type: 'text', content: result, metadata: {} };
+    if (!host) {
+      return textResponse('Error: no host provided. Use influxdb_list_hosts to see which hosts are reporting.');
+    }
+    try {
+      const o = await getInfluxdbHostOverview(host, hours);
+      const allNull =
+        o.cpu.usagePercent === null &&
+        o.memory.usedPercent === null &&
+        o.disk.usedPercent === null &&
+        o.load.load1 === null;
+      if (allNull) {
+        return textResponse(
+          `No metrics for host "${o.host}" in the last ${o.timeRangeHours}h. ` +
+          `Use influxdb_list_hosts to see which hosts are reporting.`,
+        );
+      }
+      const pct = (v: number | null) => (v === null ? '—' : `${v}%`);
+      const gb  = (v: number | null) => (v === null ? '—' : `${v} GB`);
+      const num = (v: number | null) => (v === null ? '—' : String(v));
+      return textResponse(
+        `Host overview for ${o.host} (mean over last ${o.timeRangeHours}h):\n` +
+        `CPU usage: ${pct(o.cpu.usagePercent)}\n` +
+        `Memory: ${pct(o.memory.usedPercent)} used ` +
+          `(total ${gb(o.memory.totalGb)}, available ${gb(o.memory.availableGb)})\n` +
+        `Disk ${o.disk.path}: ${pct(o.disk.usedPercent)} used ` +
+          `(total ${gb(o.disk.totalGb)}, free ${gb(o.disk.freeGb)})\n` +
+        `Load (1m/5m/15m): ${num(o.load.load1)} / ${num(o.load.load5)} / ${num(o.load.load15)}`,
+      );
+    } catch (err) {
+      return textResponse(describeInfluxError(err));
+    }
   },
 };
 
@@ -477,10 +523,18 @@ const influxdbListHosts: NerdAlertTool = {
   trustLevel: 1,
   parameters: { type: 'object', properties: {}, required: [] },
   execute: async (): Promise<NerdAlertResponse> => {
-    const result = await queryOpenClaw(
-      'Use the InfluxDB list_hosts tool to return all hosts currently reporting metrics. Include hostname and last seen timestamp.'
-    );
-    return { type: 'text', content: result, metadata: {} };
+    try {
+      const hosts = await listInfluxdbHosts();
+      if (hosts.length === 0) {
+        return textResponse('No hosts are currently reporting metrics to InfluxDB.');
+      }
+      const lines = hosts.map((h, i) => `${i + 1}. ${h}`);
+      return textResponse(
+        `${hosts.length} host${hosts.length === 1 ? '' : 's'} reporting to InfluxDB:\n${lines.join('\n')}`,
+      );
+    } catch (err) {
+      return textResponse(describeInfluxError(err));
+    }
   },
 };
 
