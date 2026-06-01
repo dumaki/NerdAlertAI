@@ -102,6 +102,73 @@ export interface DirectClientResult {
   status: 'ok' | 'warn' | 'err';
 }
 
+// ── Typed read shapes (agent-tool decouple, v0.9.x) ─────────
+//
+// The wall only needed array LENGTHS, so the raw LAPI JSON was left
+// as unknown[]. The agent tools need actual fields, so we type the
+// few fields we read from each endpoint (same "type only what we
+// use" discipline as the wall query above) and expose normalized
+// public shapes the tools format into text.
+
+// Raw /v1/decisions row — only the fields the tools surface.
+interface RawDecision {
+  value?:    string;   // the banned IP / range
+  type?:     string;   // ban, captcha, ...
+  scenario?: string;   // what tripped it
+  duration?: string;   // e.g. "3h59m12s"
+  origin?:   string;   // crowdsec, cscli, lists, ...
+}
+
+// Raw /v1/alerts row. Source IP can arrive as source.ip or
+// source.value depending on scope; we read both.
+interface RawAlertSource {
+  ip?:    string;
+  value?: string;
+  scope?: string;
+}
+interface RawAlert {
+  scenario?:     string;
+  source?:       RawAlertSource;
+  created_at?:   string;
+  start_at?:     string;
+  events_count?: number;
+  message?:      string;
+  decisions?:    Array<{ type?: string }>;
+}
+
+// Normalized shapes the agent tools consume. Exported so the tool
+// module can type its formatters without re-deriving fields.
+export interface CrowdsecDecision {
+  value:    string;
+  type:     string;
+  scenario: string;
+  duration: string;
+  origin:   string;
+}
+export interface CrowdsecAlert {
+  scenario:      string;
+  sourceIp:      string;
+  createdAt:     string;
+  eventsCount:   number;
+  message:       string;
+  decisionTypes: string[];
+}
+// A derived summary — CrowdSec has no single LAPI JSON metrics
+// endpoint, so crowdsec_metrics is synthesized from the decisions
+// and alerts we already fetch directly.
+export interface CrowdsecMetrics {
+  totalActiveDecisions: number;
+  decisionsByType:      Record<string, number>;
+  alerts24h:            number;
+  topScenarios:         Array<{ scenario: string; count: number }>;
+}
+// Combined per-IP profile for crowdsec_search_ip.
+export interface CrowdsecIpProfile {
+  ip:        string;
+  decisions: CrowdsecDecision[];
+  alerts:    CrowdsecAlert[];
+}
+
 // ── Credential caches ────────────────────────────────────────
 
 let cachedPassword:   string | null = null;
@@ -191,7 +258,7 @@ async function login(): Promise<void> {
 
 // ── /v1/decisions — bouncer auth (X-Api-Key) ────────────────
 
-async function getDecisions(): Promise<unknown[]> {
+async function getDecisions(ip?: string): Promise<RawDecision[]> {
   if (!cachedBouncerKey) {
     throw new Error('No crowdsec-bouncer-api-key configured');
   }
@@ -199,8 +266,15 @@ async function getDecisions(): Promise<unknown[]> {
   const ctrl  = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
 
+  // Optional server-side IP filter — the LAPI supports ?ip= on
+  // /v1/decisions, so we scope at the source rather than pulling
+  // every active decision and filtering in JS.
+  const url = ip
+    ? `${LAPI_URL}/v1/decisions?ip=${encodeURIComponent(ip)}`
+    : `${LAPI_URL}/v1/decisions`;
+
   try {
-    const res = await fetch(`${LAPI_URL}/v1/decisions`, {
+    const res = await fetch(url, {
       headers: {
         'X-Api-Key':  cachedBouncerKey,
         'Accept':     'application/json',
@@ -217,7 +291,7 @@ async function getDecisions(): Promise<unknown[]> {
     // CrowdSec returns null when there are no active decisions
     // (rather than an empty array). Normalize to [].
     const data = await res.json();
-    return Array.isArray(data) ? data : [];
+    return Array.isArray(data) ? (data as RawDecision[]) : [];
   } finally {
     clearTimeout(timer);
   }
@@ -225,16 +299,24 @@ async function getDecisions(): Promise<unknown[]> {
 
 // ── /v1/alerts — machine JWT auth (Bearer) ──────────────────
 
-async function getAlerts(): Promise<unknown[]> {
+async function getAlerts(opts: { ip?: string; since?: string; limit?: number } = {}): Promise<RawAlert[]> {
   if (!tokenStillValid()) {
     await login();
   }
+
+  // Build the query string. The defaults (since=24h, limit=ALERT_LIMIT)
+  // reproduce the wall's original fixed call exactly when opts is empty;
+  // the agent tools pass ip / limit to scope their reads.
+  const since = opts.since ?? '24h';
+  const limit = opts.limit ?? ALERT_LIMIT;
+  const qs = new URLSearchParams({ since, limit: String(limit) });
+  if (opts.ip) qs.set('ip', opts.ip);
 
   const doFetch = async (): Promise<Response> => {
     const ctrl  = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
     try {
-      return await fetch(`${LAPI_URL}/v1/alerts?since=24h&limit=${ALERT_LIMIT}`, {
+      return await fetch(`${LAPI_URL}/v1/alerts?${qs.toString()}`, {
         headers: {
           'Authorization': `Bearer ${cachedToken!.token}`,
           'Accept':        'application/json',
@@ -261,7 +343,123 @@ async function getAlerts(): Promise<unknown[]> {
   }
 
   const data = await res.json();
-  return Array.isArray(data) ? data : [];
+  return Array.isArray(data) ? (data as RawAlert[]) : [];
+}
+
+// ── Agent-tool read API (decoupled from OpenClaw, v0.9.x) ───
+//
+// Public functions the CrowdSec agent tools call instead of
+// queryOpenClaw. They lazy-init credentials (mirroring the wall's
+// entry point), call the private fetchers above, and normalize the
+// raw rows into the exported typed shapes. Each can throw on
+// transport/credential failure — the tool layer catches and narrates.
+
+async function ensureCreds(): Promise<void> {
+  if (cachedPassword   === null) await initCrowdsecCredential();
+  if (cachedBouncerKey === null) await initCrowdsecBouncerKey();
+}
+
+function normalizeDecision(d: RawDecision): CrowdsecDecision {
+  return {
+    value:    d.value    ?? '',
+    type:     d.type     ?? 'unknown',
+    scenario: d.scenario ?? '',
+    duration: d.duration ?? '',
+    origin:   d.origin   ?? '',
+  };
+}
+
+function normalizeAlert(a: RawAlert): CrowdsecAlert {
+  return {
+    scenario:      a.scenario ?? '',
+    sourceIp:      a.source?.ip ?? a.source?.value ?? '',
+    createdAt:     a.created_at ?? a.start_at ?? '',
+    eventsCount:   a.events_count ?? 0,
+    message:       a.message ?? '',
+    decisionTypes: Array.isArray(a.decisions)
+      ? a.decisions.map(x => x.type ?? '').filter(Boolean)
+      : [],
+  };
+}
+
+/** Active decisions, optionally scoped to one IP. Needs the bouncer key. */
+export async function getCrowdsecDecisions(ip?: string): Promise<CrowdsecDecision[]> {
+  await ensureCreds();
+  if (!cachedBouncerKey) {
+    throw new Error('No crowdsec-bouncer-api-key configured');
+  }
+  const raw = await getDecisions(ip);
+  return raw.map(normalizeDecision);
+}
+
+/** Recent alerts (24h window), optionally scoped to one IP. Needs the machine password. */
+export async function getCrowdsecAlerts(
+  opts: { ip?: string; limit?: number } = {},
+): Promise<CrowdsecAlert[]> {
+  await ensureCreds();
+  if (!cachedPassword) {
+    throw new Error('No crowdsec-machine-password configured');
+  }
+  const raw = await getAlerts(opts);
+  return raw.map(normalizeAlert);
+}
+
+/**
+ * Full per-IP threat profile: decisions + alerts for one IP. Best-
+ * effort on each half so a missing credential (or an IP that only
+ * appears in one of the two) still returns a useful partial profile
+ * instead of throwing.
+ */
+export async function searchCrowdsecIp(ip: string): Promise<CrowdsecIpProfile> {
+  await ensureCreds();
+  const [dRes, aRes] = await Promise.allSettled([
+    cachedBouncerKey ? getCrowdsecDecisions(ip)  : Promise.resolve([] as CrowdsecDecision[]),
+    cachedPassword   ? getCrowdsecAlerts({ ip }) : Promise.resolve([] as CrowdsecAlert[]),
+  ]);
+  return {
+    ip,
+    decisions: dRes.status === 'fulfilled' ? dRes.value : [],
+    alerts:    aRes.status === 'fulfilled' ? aRes.value : [],
+  };
+}
+
+/**
+ * Synthesized engine summary. CrowdSec exposes Prometheus-format
+ * metrics on a separate port and via `cscli metrics`, neither of
+ * which is a LAPI JSON call — so rather than add a new transport we
+ * derive the numbers operators actually ask for ("how many bans,
+ * what's being caught") from the decisions + alerts already on the
+ * LAPI. Honest framing: a derived summary, not the raw engine dump.
+ */
+export async function getCrowdsecMetrics(): Promise<CrowdsecMetrics> {
+  await ensureCreds();
+  const [dRes, aRes] = await Promise.allSettled([
+    cachedBouncerKey ? getCrowdsecDecisions() : Promise.resolve([] as CrowdsecDecision[]),
+    cachedPassword   ? getCrowdsecAlerts()    : Promise.resolve([] as CrowdsecAlert[]),
+  ]);
+  const decisions = dRes.status === 'fulfilled' ? dRes.value : [];
+  const alerts    = aRes.status === 'fulfilled' ? aRes.value : [];
+
+  const decisionsByType: Record<string, number> = {};
+  for (const d of decisions) {
+    decisionsByType[d.type] = (decisionsByType[d.type] ?? 0) + 1;
+  }
+
+  const scenarioCounts: Record<string, number> = {};
+  for (const a of alerts) {
+    if (a.scenario) scenarioCounts[a.scenario] = (scenarioCounts[a.scenario] ?? 0) + 1;
+  }
+  const topScenarios = Object.entries(scenarioCounts)
+    .sort((x, y) => y[1] - x[1])
+    .slice(0, 10)
+    .map(([scenario, count]) => ({ scenario, count }));
+
+  return {
+    totalActiveDecisions: decisions.length,
+    decisionsByType,
+    alerts24h: alerts.length,
+    topScenarios,
+  };
 }
 
 // ── Public entry point ──────────────────────────────────────
