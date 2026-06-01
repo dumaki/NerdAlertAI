@@ -109,6 +109,7 @@ const ALLOWED: Record<string, { description: string; minLen: number; maxLen: num
   'xai-key':                { description: 'xAI (Grok) API key (BYOK; validate with Test)',       minLen: 30, maxLen: 200, test: 'provider' },
   'server-auth-token':      { description: 'NerdAlert server bearer token (auto-generated on first boot; rotate by entering a new value)', minLen: 16, maxLen: 128 },
   'wazuh-indexer-password':    { description: 'Wazuh Indexer password (OpenSearch on port 9200)',  minLen: 8,  maxLen: 200 },
+  'wazuh-manager-password':    { description: 'Wazuh Manager API password (port 55000; paired with WAZUH_MANAGER_USER, readonly role)',  minLen: 8,  maxLen: 200 },
   'crowdsec-machine-password': { description: 'CrowdSec machine password (LAPI, used for /v1/alerts)',  minLen: 8,  maxLen: 200 },
   'crowdsec-bouncer-api-key':  { description: 'CrowdSec bouncer API key (used for /v1/decisions)',     minLen: 30, maxLen: 64  },
   'loki-basic-user':           { description: 'Loki basic-auth username (only if Loki is fronted by nginx/Authelia)', minLen: 1,  maxLen: 128 },
@@ -384,6 +385,20 @@ export function mountSecurityRoutes(app: Express): void {
           await initWazuhCredential();
         } catch (e: any) {
           console.warn('[security] wazuh cache refresh after credential write failed:', e?.message);
+        }
+      }
+
+      // Manager API password (port 55000, JWT auth) — separate credential
+      // and separate client from the Indexer above. Refresh its cache so the
+      // next wazuh_agent_status call uses the new value without a restart.
+      // Lazy init in the client covers a failure here, so worst case is one
+      // extra keychain read on the next call.
+      if (name === 'wazuh-manager-password') {
+        try {
+          const { initWazuhManagerCredential } = require('./soc-clients/wazuh-manager');
+          await initWazuhManagerCredential();
+        } catch (e: any) {
+          console.warn('[security] wazuh-manager cache refresh after credential write failed:', e?.message);
         }
       }
 

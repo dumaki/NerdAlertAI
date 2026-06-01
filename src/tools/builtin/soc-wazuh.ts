@@ -14,19 +14,20 @@
 //   wazuh_search_ip         — all alerts associated with an IP
 //   wazuh_top_rules         — most frequently triggered rules
 //
-// v0.9.x — DECOUPLED FROM OPENCLAW (Indexer reads)
+// v0.9.x — FULLY DECOUPLED FROM OPENCLAW
 // ─────────────────────────────────────────────────────────
-// get_alerts / alert_summary / search_ip / top_rules now query the Wazuh
+// get_alerts / alert_summary / search_ip / top_rules query the Wazuh
 // Indexer directly via src/server/soc-clients/wazuh.ts — the same client
-// the SOC wall uses — so no gateway model is in the path.
+// the SOC wall uses.
 //
-// wazuh_agent_status INTENTIONALLY stays on queryOpenClaw this slice:
-// agent connection state is a MANAGER-API fact (port 55000, separate JWT
-// auth), not an Indexer one. It decouples when a manager-API client lands.
+// wazuh_agent_status now queries the Wazuh MANAGER API directly via
+// src/server/soc-clients/wazuh-manager.ts (port 55000, JWT auth). Agent
+// connection state is a manager fact, not an Indexer one, so it needed its
+// own client. With this, no gateway model is in any Wazuh tool's path and
+// this file no longer imports queryOpenClaw.
 // ============================================================
 
 import { NerdAlertTool, NerdAlertResponse } from '../../types/response.types';
-import { queryOpenClaw } from './soc-client';
 import {
   getWazuhAlerts,
   getWazuhAlertSummary,
@@ -34,6 +35,7 @@ import {
   getWazuhTopRules,
   type WazuhAlert,
 } from '../../server/soc-clients/wazuh';
+import { getWazuhAgents, type WazuhAgentInfo } from '../../server/soc-clients/wazuh-manager';
 
 // ── Shared helpers ───────────────────────────────────────────
 // Same never-throw contract as the other decoupled SOC tools: the direct
@@ -50,6 +52,25 @@ function describeError(err: unknown): string {
     return 'Error: Wazuh indexer password not configured. Open /setup and add wazuh-indexer-password.';
   }
   return `Error: could not reach the Wazuh indexer — ${msg}`;
+}
+
+// Manager-API errors surface differently from the Indexer's: a missing
+// credential points at a different /setup field, and the rest are reached
+// over the manager port, so the wording is manager-specific.
+function describeManagerError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/no wazuh-manager-password/i.test(msg)) {
+    return 'Error: Wazuh manager password not configured. Open /setup and add wazuh-manager-password.';
+  }
+  return `Error: could not reach the Wazuh manager API — ${msg}`;
+}
+
+function formatAgent(a: WazuhAgentInfo): string {
+  // e.g. "web01 (id 003) — active | last keepalive 2026-... | v4.7.0"
+  const parts: string[] = [`${a.name || '(unnamed)'} (id ${a.id || '?'}) — ${a.status}`];
+  if (a.lastKeepAlive) parts.push(`last keepalive ${a.lastKeepAlive}`);
+  if (a.version)       parts.push(a.version);
+  return parts.join(' | ');
 }
 
 function formatAlert(a: WazuhAlert): string {
@@ -146,10 +167,15 @@ const wazuhAgentStatus: NerdAlertTool = {
     required:   [],
   },
   execute: async (): Promise<NerdAlertResponse> => {
-    const result = await queryOpenClaw(
-      'Use the Wazuh get_agent_status tool to list all agents. Show agent name, ID, status (active/disconnected), and last keepalive time.'
-    );
-    return { type: 'text', content: result, metadata: {} };
+    try {
+      const agents = await getWazuhAgents();
+      if (agents.length === 0) return textResponse('No Wazuh agents are registered.');
+      const active = agents.filter(a => a.status === 'active').length;
+      const header = `${agents.length} Wazuh agent(s), ${active} active:`;
+      return textResponse(`${header}\n${agents.map(formatAgent).join('\n')}`);
+    } catch (err) {
+      return textResponse(describeManagerError(err));
+    }
   },
 };
 
