@@ -13,10 +13,53 @@
 //   pihole_recent_blocked   — recently blocked queries
 //   pihole_search_domain    — check if a specific domain is blocked
 //   pihole_query_log        — filtered query log
+//
+// v0.9.x — DECOUPLED FROM OPENCLAW
+// ─────────────────────────────────────────────────────────
+// These tools previously prompted the OpenClaw gateway; they now call
+// the direct Pi-hole v6 client in src/server/soc-clients/pihole.ts — the
+// same client the SOC wall uses — so no gateway model is in the path.
+// Envelope, trustLevel, and descriptions are unchanged.
 // ============================================================
 
 import { NerdAlertTool, NerdAlertResponse } from '../../types/response.types';
-import { queryOpenClaw } from './soc-client';
+import {
+  getPiholeSummary,
+  getPiholeTopDomains,
+  getPiholeTopClients,
+  getPiholeQueries,
+  searchPiholeDomain,
+  type PiholeQuery,
+} from '../../server/soc-clients/pihole';
+
+// ── Shared helpers ───────────────────────────────────────────
+// Same never-throw contract as the other decoupled SOC tools: the
+// direct client throws on transport failure, so each execute() catches
+// and returns the error as plain text in the standard envelope.
+
+function textResponse(content: string): NerdAlertResponse {
+  return { type: 'text', content, metadata: {} };
+}
+
+function describeError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  return `Error: could not reach Pi-hole — ${msg}. Check that PIHOLE_HOST in .env points at the Pi-hole API (default port 80).`;
+}
+
+function fmtTime(unixSec: number): string {
+  if (!unixSec) return '';
+  try { return new Date(unixSec * 1000).toISOString(); } catch { return String(unixSec); }
+}
+
+function formatQuery(q: PiholeQuery): string {
+  // e.g. "ads.example.com — BLOCKED (GRAVITY), 192.168.0.50, 2026-05-31T..."
+  const parts: string[] = [`${q.domain} — ${q.blocked ? 'BLOCKED' : 'allowed'}`];
+  if (q.status) parts.push(`(${q.status})`);
+  if (q.client) parts.push(q.client);
+  const t = fmtTime(q.time);
+  if (t) parts.push(t);
+  return parts.join(', ');
+}
 
 const piholeSummary: NerdAlertTool = {
   name:       'pihole_summary',
@@ -24,10 +67,20 @@ const piholeSummary: NerdAlertTool = {
   trustLevel: 1,
   parameters: { type: 'object', properties: {}, required: [] },
   execute: async (): Promise<NerdAlertResponse> => {
-    const result = await queryOpenClaw(
-      'Use the Pi-hole get_summary tool to return overall DNS filtering stats: total queries, queries blocked, percentage blocked, domains on blocklist, and whether blocking is currently enabled.'
-    );
-    return { type: 'text', content: result, metadata: {} };
+    try {
+      const s = await getPiholeSummary();
+      const blocking = s.blockingEnabled === null ? 'unknown'
+                     : s.blockingEnabled ? 'enabled' : 'disabled';
+      return textResponse(
+        `Pi-hole summary:\n` +
+        `Total queries today: ${s.totalQueries.toLocaleString('en-US')}\n` +
+        `Blocked: ${s.blocked.toLocaleString('en-US')} (${s.percentBlocked}%)\n` +
+        `Domains on blocklists: ${s.domainsBlocked.toLocaleString('en-US')}\n` +
+        `Blocking: ${blocking}`,
+      );
+    } catch (err) {
+      return textResponse(describeError(err));
+    }
   },
 };
 
@@ -47,10 +100,14 @@ const piholeTopBlocked: NerdAlertTool = {
   },
   execute: async (params): Promise<NerdAlertResponse> => {
     const limit = (params.limit as number | undefined) ?? 10;
-    const result = await queryOpenClaw(
-      `Use the Pi-hole get_top_blocked tool to return the top ${limit} most frequently blocked domains. Include the domain name and block count for each.`
-    );
-    return { type: 'text', content: result, metadata: {} };
+    try {
+      const domains = await getPiholeTopDomains(limit, true);
+      if (domains.length === 0) return textResponse('No blocked domains recorded yet.');
+      const lines = domains.map((d, i) => `${i + 1}. ${d.domain} — ${d.count.toLocaleString('en-US')}`);
+      return textResponse(`Top ${domains.length} blocked domains:\n${lines.join('\n')}`);
+    } catch (err) {
+      return textResponse(describeError(err));
+    }
   },
 };
 
@@ -70,10 +127,17 @@ const piholeTopClients: NerdAlertTool = {
   },
   execute: async (params): Promise<NerdAlertResponse> => {
     const limit = (params.limit as number | undefined) ?? 10;
-    const result = await queryOpenClaw(
-      `Use the Pi-hole get_top_clients tool to return the top ${limit} clients by query count. Include client IP, hostname if available, and total query count.`
-    );
-    return { type: 'text', content: result, metadata: {} };
+    try {
+      const clients = await getPiholeTopClients(limit);
+      if (clients.length === 0) return textResponse('No client activity recorded yet.');
+      const lines = clients.map((c, i) => {
+        const who = c.name ? `${c.name} (${c.ip})` : c.ip;
+        return `${i + 1}. ${who} — ${c.count.toLocaleString('en-US')}`;
+      });
+      return textResponse(`Top ${clients.length} clients by query count:\n${lines.join('\n')}`);
+    } catch (err) {
+      return textResponse(describeError(err));
+    }
   },
 };
 
@@ -93,10 +157,15 @@ const piholeRecentBlocked: NerdAlertTool = {
   },
   execute: async (params): Promise<NerdAlertResponse> => {
     const limit = (params.limit as number | undefined) ?? 20;
-    const result = await queryOpenClaw(
-      `Use the Pi-hole get_recent_blocked tool to return the ${limit} most recently blocked DNS queries. Include domain, client IP, and timestamp.`
-    );
-    return { type: 'text', content: result, metadata: {} };
+    try {
+      // Pull a generous window, keep blocked rows, newest first.
+      const rows = await getPiholeQueries({ length: Math.max(limit * 5, 100), blockedOnly: true });
+      const shown = rows.sort((a, b) => b.time - a.time).slice(0, limit);
+      if (shown.length === 0) return textResponse('No recently blocked queries.');
+      return textResponse(`${shown.length} recently blocked queries:\n${shown.map(formatQuery).join('\n')}`);
+    } catch (err) {
+      return textResponse(describeError(err));
+    }
   },
 };
 
@@ -116,10 +185,19 @@ const piholeSearchDomain: NerdAlertTool = {
   },
   execute: async (params): Promise<NerdAlertResponse> => {
     const domain = params.domain as string;
-    const result = await queryOpenClaw(
-      `Use the Pi-hole search_domain tool to check if "${domain}" is on the blocklist and show its recent query history including status (blocked/allowed) and query count.`
-    );
-    return { type: 'text', content: result, metadata: {} };
+    if (!domain) return textResponse('Error: no domain provided to look up.');
+    try {
+      const p = await searchPiholeDomain(domain);
+      if (p.totalSeen === 0) {
+        return textResponse(`No recent queries seen for ${domain} (not in the recent query window).`);
+      }
+      const verdict = p.blockedCount > 0
+        ? `${p.blockedCount} of the last ${p.totalSeen} queries were blocked`
+        : `none of the last ${p.totalSeen} queries were blocked`;
+      return textResponse(`${domain}: ${verdict}.\nRecent:\n${p.recent.map(formatQuery).join('\n')}`);
+    } catch (err) {
+      return textResponse(describeError(err));
+    }
   },
 };
 
@@ -153,18 +231,23 @@ const piholeQueryLog: NerdAlertTool = {
     const limit  = (params.limit  as number | undefined) ?? 50;
     const client = params.client as string | undefined;
     const domain = params.domain as string | undefined;
-    const status = params.status as string | undefined;
-
-    const filters: string[] = [];
-    if (client) filters.push(`from client ${client}`);
-    if (domain) filters.push(`matching domain "${domain}"`);
-    if (status) filters.push(`with status "${status}"`);
-
-    const filterStr = filters.length ? ` filtered to ${filters.join(', ')}` : '';
-    const result = await queryOpenClaw(
-      `Use the Pi-hole get_query_log tool to return the last ${limit} DNS queries${filterStr}. Include domain, client, status, and timestamp.`
-    );
-    return { type: 'text', content: result, metadata: {} };
+    const status = (params.status as string | undefined)?.toLowerCase();
+    const blockedOnly = status === 'blocked';
+    try {
+      let rows = await getPiholeQueries({ length: limit, client, domain, blockedOnly });
+      // status=allowed has no clean server param; filter client-side.
+      if (status === 'allowed') rows = rows.filter(r => !r.blocked);
+      if (rows.length === 0) return textResponse('No matching queries in the log.');
+      const filters: string[] = [];
+      if (client) filters.push(`client ${client}`);
+      if (domain) filters.push(`domain ${domain}`);
+      if (status) filters.push(`status ${status}`);
+      const header = `${rows.length} quer${rows.length === 1 ? 'y' : 'ies'}` +
+                     (filters.length ? ` (${filters.join(', ')})` : '') + ':';
+      return textResponse(`${header}\n${rows.map(formatQuery).join('\n')}`);
+    } catch (err) {
+      return textResponse(describeError(err));
+    }
   },
 };
 

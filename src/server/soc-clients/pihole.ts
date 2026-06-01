@@ -137,3 +137,185 @@ export async function getPiholeWallState(): Promise<DirectClientResult | null> {
     clearTimeout(timer);
   }
 }
+
+// ── Agent-tool read API (decoupled from OpenClaw, v0.9.x) ───
+//
+// The wall only needed /api/stats/summary for aggregate counts. The
+// agent tools need richer detail (top lists, query log, per-domain
+// lookups), so we add focused read functions here that the pihole
+// agent tools call instead of queryOpenClaw.
+//
+// Same no-auth LAN assumption as getPiholeWallState above: Pi-hole's
+// v6 API on port 80 has no admin password on this network, so server-
+// to-server reads skip Authentik. If a password is ever set, ALL of
+// these (wall included) move to the session-auth path together — a
+// single future change, not a per-function one.
+
+// Generic GET against the Pi-hole API. Throws on transport/HTTP error
+// (the tool layer catches and narrates). Mirrors the wall's fetch +
+// AbortController timeout, factored out so the read functions share it.
+async function piholeGet<T>(path: string): Promise<T> {
+  const controller = new AbortController();
+  const timer      = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(`${HOST}${path}`, {
+      headers: { 'Accept': 'application/json' },
+      signal:  controller.signal,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Pi-hole HTTP ${res.status} ${body.slice(0, 120)}`);
+    }
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ── Typed read shapes (only the fields the tools surface) ───
+export interface PiholeSummary {
+  totalQueries:    number;
+  blocked:         number;
+  percentBlocked:  number;
+  domainsBlocked:  number;
+  blockingEnabled: boolean | null;  // null when the blocking-status call fails
+}
+export interface PiholeTopDomain { domain: string; count: number; }
+export interface PiholeTopClient { ip: string; name: string; count: number; }
+export interface PiholeQuery {
+  time:    number;   // unix seconds
+  type:    string;   // A, AAAA, HTTPS, ...
+  domain:  string;
+  client:  string;   // resolved name, else ip
+  status:  string;   // GRAVITY, FORWARDED, CACHE, DENYLIST, ...
+  blocked: boolean;  // derived from status
+  reply?:  string;
+}
+
+// Pi-hole v6 query statuses that mean "blocked". Matched by substring so
+// version drift (new *_CNAME / EXTERNAL_BLOCKED_* values) is tolerated
+// without a code change — the single source of truth for blocked-ness.
+function isBlockedStatus(status: string): boolean {
+  const s = (status || '').toUpperCase();
+  return s.includes('GRAVITY')   || s.includes('DENYLIST') ||
+         s.includes('BLACKLIST') || s.includes('REGEX')    ||
+         s.includes('BLOCK')     || s.includes('SPECIAL');
+}
+
+// ── /api/stats/summary + /api/dns/blocking ──────────────────
+interface RawSummary {
+  queries?: { total?: number; blocked?: number; percent_blocked?: number };
+  gravity?: { domains_being_blocked?: number };
+}
+interface RawBlocking { blocking?: string; }   // "enabled" | "disabled" | ...
+
+export async function getPiholeSummary(): Promise<PiholeSummary> {
+  // Counts come from /stats/summary; the on/off state is a separate
+  // endpoint (/dns/blocking). Best-effort on the status so a summary
+  // still returns counts if the blocking endpoint hiccups.
+  const summary = await piholeGet<RawSummary>('/api/stats/summary');
+  let blockingEnabled: boolean | null = null;
+  try {
+    const b = await piholeGet<RawBlocking>('/api/dns/blocking');
+    if (typeof b.blocking === 'string') blockingEnabled = b.blocking === 'enabled';
+  } catch {
+    blockingEnabled = null;
+  }
+  return {
+    totalQueries:    summary.queries?.total ?? 0,
+    blocked:         summary.queries?.blocked ?? 0,
+    percentBlocked:  Math.round((summary.queries?.percent_blocked ?? 0) * 10) / 10,
+    domainsBlocked:  summary.gravity?.domains_being_blocked ?? 0,
+    blockingEnabled,
+  };
+}
+
+// ── /api/stats/top_domains ────────────────────────────
+interface RawTopDomains { domains?: Array<{ domain?: string; count?: number }>; }
+export async function getPiholeTopDomains(count = 10, blocked = true): Promise<PiholeTopDomain[]> {
+  const data = await piholeGet<RawTopDomains>(
+    `/api/stats/top_domains?blocked=${blocked ? 'true' : 'false'}&count=${count}`,
+  );
+  return (data.domains ?? []).map(d => ({ domain: d.domain ?? '', count: d.count ?? 0 }));
+}
+
+// ── /api/stats/top_clients ────────────────────────────
+interface RawTopClients { clients?: Array<{ ip?: string; name?: string; count?: number }>; }
+export async function getPiholeTopClients(count = 10): Promise<PiholeTopClient[]> {
+  const data = await piholeGet<RawTopClients>(`/api/stats/top_clients?count=${count}`);
+  return (data.clients ?? []).map(c => ({ ip: c.ip ?? '', name: c.name ?? '', count: c.count ?? 0 }));
+}
+
+// ── /api/queries ───────────────────────────────────
+// v6 renamed the count param to `length` (FTL #2407). client/reply can
+// arrive as objects or strings depending on version/privacy level; we
+// normalize both. The blocked flag is derived via isBlockedStatus so
+// callers never re-implement the status enum.
+interface RawQuery {
+  time?:   number;
+  type?:   string;
+  domain?: string;
+  client?: { ip?: string; name?: string } | string;
+  status?: string;
+  reply?:  { type?: string } | string;
+}
+interface RawQueries { queries?: RawQuery[]; }
+
+function normalizeQuery(q: RawQuery): PiholeQuery {
+  const client = typeof q.client === 'string'
+    ? q.client
+    : (q.client?.name || q.client?.ip || '');
+  const reply  = typeof q.reply === 'string' ? q.reply : q.reply?.type;
+  const status = q.status ?? '';
+  return {
+    time:    q.time ?? 0,
+    type:    q.type ?? '',
+    domain:  q.domain ?? '',
+    client,
+    status,
+    blocked: isBlockedStatus(status),
+    reply,
+  };
+}
+
+export interface PiholeQueryFilter {
+  length?:      number;
+  domain?:      string;
+  client?:      string;
+  blockedOnly?: boolean;
+}
+
+export async function getPiholeQueries(filter: PiholeQueryFilter = {}): Promise<PiholeQuery[]> {
+  const qs = new URLSearchParams();
+  qs.set('length', String(filter.length ?? 50));
+  if (filter.domain) qs.set('domain', filter.domain);
+  if (filter.client) qs.set('client', filter.client);
+  const data = await piholeGet<RawQueries>(`/api/queries?${qs.toString()}`);
+  let rows = (data.queries ?? []).map(normalizeQuery);
+  // No single clean "blocked-only" server param across versions, so the
+  // blocked filter is applied here over the returned window.
+  if (filter.blockedOnly) rows = rows.filter(r => r.blocked);
+  return rows;
+}
+
+// ── Per-domain lookup (pihole_search_domain) ─────────────────
+// Reports OBSERVED behaviour for a domain (recent queries + how many were
+// blocked), not gravity-list membership — the query log is the endpoint we
+// can rely on without a separate list-search call. Good enough to answer
+// "is this domain being blocked"; a true gravity-membership check can be a
+// later follow-up if needed.
+export interface PiholeDomainProfile {
+  domain:       string;
+  totalSeen:    number;
+  blockedCount: number;
+  recent:       PiholeQuery[];
+}
+export async function searchPiholeDomain(domain: string, length = 50): Promise<PiholeDomainProfile> {
+  const rows = await getPiholeQueries({ domain, length });
+  return {
+    domain,
+    totalSeen:    rows.length,
+    blockedCount: rows.filter(r => r.blocked).length,
+    recent:       rows.slice(0, 10),
+  };
+}
