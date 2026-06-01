@@ -513,3 +513,129 @@ export async function getSynologyWallState(): Promise<DirectClientResult | null>
     await logout(sid);
   }
 }
+
+// ===========================================================================
+// AGENT-TOOL READ PATH (SOC decouple, Slice 3 Step 2)
+// ===========================================================================
+// Direct read functions for the soc-synology.ts agent tool. These follow the
+// SOC decouple contract used by the loki_* / ntopng_* tools:
+//   - THROW on transport / auth / DSM-error failure;
+//   - the agent tool's execute() catches and narrates.
+// This is the inverse of getSynologyWallState() above, which RETURNS NULL on
+// failure for the dark-tile contract. That wall path is left byte-identical;
+// everything below is strictly additive (new private helpers + new exports,
+// reusing the existing authenticate / dsmRequest / logout / dsmErrorMessage /
+// fetchLoadInfo primitives).
+//
+// PERMISSION: as documented at the top of this file, every endpoint here
+// requires the configured account to be in the administrators group (DSM 7 has
+// no granular read role). A non-admin account fails at LOGIN (code 402), so
+// these functions throw an auth error rather than returning partial data.
+// ---------------------------------------------------------------------------
+
+// Lazy-init guard for the read path. Mirrors getSynologyWallState's init check,
+// but THROWS (tool contract) instead of returning null (tile contract).
+async function ensureSynologyReady(): Promise<void> {
+  if (!initTried) {
+    await initSynologyCredential();
+  }
+  if (!parsedConfig || !cachedPassword) {
+    throw new Error(
+      'Synology is not configured. Set SYNOLOGY_URL and SYNOLOGY_USERNAME in ' +
+      '.env and store the synology-password via /setup.',
+    );
+  }
+}
+
+// Run reads inside a SINGLE DSM session: login once, hand the sid to fn,
+// best-effort logout in finally. Throws if auth fails. New helper used only by
+// getSynologyStatus — getSynologyWallState keeps its own inline login/logout.
+async function withSynologySession<T>(fn: (sid: string) => Promise<T>): Promise<T> {
+  await ensureSynologyReady();
+  const sid = await authenticate();
+  if (!sid) {
+    throw new Error(
+      'Synology authentication failed — check the stored password and that the ' +
+      'account is in the administrators group (DSM denies API login to non-admin ' +
+      'users).',
+    );
+  }
+  try {
+    return await fn(sid);
+  } finally {
+    await logout(sid);
+  }
+}
+
+// One authenticated GET against entry.cgi, returning json.data. Throws on HTTP
+// or DSM-error failure using the same dsmErrorMessage mapping the wall path uses.
+async function dsmGet(
+  sid: string, api: string, version: string, method: string,
+  extra: Record<string, string> = {},
+): Promise<any> {
+  const params = new URLSearchParams({ api, version, method, _sid: sid, ...extra });
+  const { status, body } = await dsmRequest(`/webapi/entry.cgi?${params.toString()}`);
+  if (status !== 200) {
+    throw new Error(`${api}/${method} http ${status}: ${body.slice(0, 120)}`);
+  }
+  const json = JSON.parse(body);
+  if (!json.success) {
+    throw new Error(`${dsmErrorMessage(json.error?.code, 'api')} (${api}/${method})`);
+  }
+  return json.data ?? {};
+}
+
+// Per-section result: either parsed data or a captured error string, so one
+// failing endpoint (e.g. a DSM version lacking an API) does not sink the whole
+// status report. Hard failures (auth, network) still throw out of
+// withSynologySession and are caught by the tool.
+export interface SynologySection<T> {
+  ok:     boolean;
+  data?:  T;
+  error?: string;
+}
+
+export interface SynologyStatus {
+  system:  SynologySection<Record<string, unknown>>;
+  storage: SynologySection<{ volumes: VolumeInfo[]; disks: DiskInfo[] }>;
+  update:  SynologySection<Record<string, unknown>>;
+  advisor: SynologySection<Record<string, unknown>>;
+}
+
+// Re-export the storage shapes so the tool layer can format them. VolumeInfo /
+// DiskInfo were already defined privately above for the wall path; this only
+// widens their visibility — no behavioural change.
+export type { VolumeInfo, DiskInfo };
+
+// Fetch the full NAS status in a SINGLE DSM session. Each section is captured
+// independently — a per-endpoint error is recorded in that section rather than
+// thrown — but an auth/connection failure throws (the tool narrates it).
+// Endpoints/methods confirmed by live probe against this DSM 7:
+//   system  : SYNO.Core.System / info
+//   storage : SYNO.Storage.CGI.Storage / load_info (via fetchLoadInfo)
+//   update  : SYNO.Core.Upgrade.Server / check
+//   advisor : SYNO.Core.SecurityScan.Status / system_get
+// Reads are issued sequentially on the one sid (deterministic; avoids any
+// concurrent-session edge cases on DSM — the latency cost is trivial for four
+// calls against a homelab box).
+export async function getSynologyStatus(): Promise<SynologyStatus> {
+  return withSynologySession(async (sid) => {
+    const section = async <T>(fn: () => Promise<T>): Promise<SynologySection<T>> => {
+      try {
+        return { ok: true, data: await fn() };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    };
+
+    const system  = await section<Record<string, unknown>>(
+      () => dsmGet(sid, 'SYNO.Core.System', '1', 'info'));
+    const storage = await section(() => fetchLoadInfo(sid));
+    const update  = await section<Record<string, unknown>>(
+      () => dsmGet(sid, 'SYNO.Core.Upgrade.Server', '1', 'check'));
+    const advisor = await section<Record<string, unknown>>(
+      () => dsmGet(sid, 'SYNO.Core.SecurityScan.Status', '1', 'system_get'));
+
+    return { system, storage, update, advisor };
+  });
+}

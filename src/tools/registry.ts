@@ -58,6 +58,7 @@ import {
   influxdbTools,
 } from './builtin/soc-network';
 import { honeypotTools } from './builtin/soc-honeypot';
+import { synologyTools } from './builtin/soc-synology';
 
 // ── Master tool list ──────────────────────────────────────────
 //
@@ -171,6 +172,9 @@ const ALL_TOOLS: NerdAlertTool[] = [
 
   // SOC — Honeypots (Cowrie + OpenCanary, via Loki)
   ...honeypotTools,
+
+  // SOC — Synology NAS (DSM, read-only)
+  ...synologyTools,
 ];
 
 // ── Anthropic tool format ─────────────────────────────────────
