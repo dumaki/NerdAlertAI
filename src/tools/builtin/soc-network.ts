@@ -18,6 +18,12 @@ import {
   getLokiHostLogs,
   type LokiQueryResult,
 } from '../../server/soc-clients/loki';
+import {
+  getNtopngInterfaces,
+  getNtopngTopHosts,
+  getNtopngAlerts,
+  searchNtopngHost,
+} from '../../server/soc-clients/ntopng';
 
 // ── Envelope helpers for the OpenClaw-decoupled tools (v0.9.x) ──
 // Same never-throw contract as soc-pihole.ts: the direct client throws
@@ -61,6 +67,21 @@ function formatLokiLines(result: LokiQueryResult, header: string): string {
     ? `\n... (${omitted} older line${omitted === 1 ? '' : 's'} omitted; narrow the time range or filter)`
     : '';
   return `${header}:\n${body}${note}`;
+}
+
+function describeNtopngError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  return `Error: could not reach ntopng — ${msg}. Check NTOPNG_URL in .env (and ntopng-password via /setup if login is enabled).`;
+}
+
+// Human-readable bytes for ntopng host/flow output.
+function fmtBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -239,10 +260,20 @@ const ntopngInterfaceStats: NerdAlertTool = {
   trustLevel: 1,
   parameters: { type: 'object', properties: {}, required: [] },
   execute: async (): Promise<NerdAlertResponse> => {
-    const result = await queryOpenClaw(
-      'Use the NTopNG ntopng_get_interface_stats tool to return traffic statistics for all monitored interfaces. Include interface name, packets per second, bytes per second, and total traffic.'
-    );
-    return { type: 'text', content: result, metadata: {} };
+    try {
+      const ifaces = await getNtopngInterfaces();
+      if (ifaces.length === 0) {
+        return textResponse('No active ntopng interfaces returned data.');
+      }
+      const lines = ifaces.map((i) =>
+        `${i.name} (ifid ${i.ifid}): ${Math.round(i.pps).toLocaleString('en-US')} pps, ` +
+        `${(i.bps / 1_000_000).toFixed(1)} Mbps, ${i.numHosts} hosts, ${i.numFlows} flows` +
+        (i.dropped > 0 ? `, ${i.dropped} dropped` : ''),
+      );
+      return textResponse(`ntopng interfaces (${ifaces.length}):\n${lines.join('\n')}`);
+    } catch (err) {
+      return textResponse(describeNtopngError(err));
+    }
   },
 };
 
@@ -262,10 +293,22 @@ const ntopngTopHosts: NerdAlertTool = {
   },
   execute: async (params): Promise<NerdAlertResponse> => {
     const limit = (params.limit as number | undefined) ?? 20;
-    const result = await queryOpenClaw(
-      `Use the NTopNG ntopng_get_host_traffic tool to return the top ${limit} hosts by traffic volume. Include IP, hostname, bytes sent, bytes received, and total traffic.`
-    );
-    return { type: 'text', content: result, metadata: {} };
+    try {
+      const hosts = await getNtopngTopHosts(limit);
+      if (hosts.length === 0) {
+        return textResponse('No active hosts returned by ntopng.');
+      }
+      const lines = hosts.map((h, idx) => {
+        const who = h.name ? `${h.name} (${h.ip})` : h.ip;
+        const loc = h.country ? ` [${h.country}]` : '';
+        return `${idx + 1}. ${who}${loc} — ${fmtBytes(h.totalBytes)} total ` +
+               `(${fmtBytes(h.bytesSent)} up / ${fmtBytes(h.bytesRcvd)} down), ${h.numFlows} flows` +
+               (h.score > 0 ? `, score ${h.score}` : '');
+      });
+      return textResponse(`Top ${hosts.length} ntopng hosts by traffic:\n${lines.join('\n')}`);
+    } catch (err) {
+      return textResponse(describeNtopngError(err));
+    }
   },
 };
 
@@ -285,10 +328,25 @@ const ntopngAlerts: NerdAlertTool = {
   },
   execute: async (params): Promise<NerdAlertResponse> => {
     const limit = (params.limit as number | undefined) ?? 20;
-    const result = await queryOpenClaw(
-      `Use the NTopNG ntopng_get_alerts tool to return the last ${limit} network alerts. Include alert type, description, source/destination, severity, and timestamp.`
-    );
-    return { type: 'text', content: result, metadata: {} };
+    try {
+      const res = await getNtopngAlerts(limit);
+      if (!res.available) {
+        return textResponse(
+          'The ntopng alert REST endpoint is not available on this build (ntopng 5.x Community). ' +
+          'Alerts can be viewed in the ntopng web UI under Alerts (Flow Alerts / Host Alerts).',
+        );
+      }
+      if (res.alerts.length === 0) {
+        return textResponse('No recent ntopng alerts.');
+      }
+      const lines = res.alerts.map((a) => {
+        const head = [a.timestamp, a.severity, a.type, a.entity].filter(Boolean).join(' | ');
+        return a.description ? `${head} — ${a.description}` : head;
+      });
+      return textResponse(`${res.alerts.length} recent ntopng alerts:\n${lines.join('\n')}`);
+    } catch (err) {
+      return textResponse(describeNtopngError(err));
+    }
   },
 };
 
@@ -307,11 +365,25 @@ const ntopngSearchHost: NerdAlertTool = {
     required: ['ip'],
   },
   execute: async (params): Promise<NerdAlertResponse> => {
-    const ip = params.ip as string;
-    const result = await queryOpenClaw(
-      `Use the NTopNG ntopng_search_host tool to return the traffic profile for IP ${ip}. Include active flows, protocols, bytes sent/received, and any associated alerts.`
-    );
-    return { type: 'text', content: result, metadata: {} };
+    const ip = ((params.ip as string | undefined) ?? '').trim();
+    if (!ip) {
+      return textResponse('Error: no IP address provided to look up.');
+    }
+    try {
+      const p = await searchNtopngHost(ip);
+      const head = p.tracked
+        ? `ntopng is tracking ${ip}.`
+        : `ntopng is not currently tracking ${ip} on the active interface.`;
+      const flowBlock = p.flows.length === 0
+        ? 'No active flows.'
+        : `Active flows (${p.flows.length}):\n` + p.flows.map((f) =>
+            `  ${f.src} -> ${f.dst} | ${f.application || f.protocol} | ${fmtBytes(f.bytes)}` +
+            (f.durationSec > 0 ? `, ${f.durationSec}s` : ''),
+          ).join('\n');
+      return textResponse(`${head}\n${flowBlock}\n(Host alerts are not available on ntopng 5.x Community.)`);
+    } catch (err) {
+      return textResponse(describeNtopngError(err));
+    }
   },
 };
 

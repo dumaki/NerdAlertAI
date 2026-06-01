@@ -376,3 +376,334 @@ export async function getNtopngWallState(): Promise<DirectClientResult | null> {
     if (cookieHeader) await logout(cookieHeader);
   }
 }
+
+// ════════════════════════════════════════════════════════════
+// AGENT-FACING READ FUNCTIONS (v0.9.x — OpenClaw decouple)
+// ════════════════════════════════════════════════════════════
+//
+// These power the ntopng_* agent tools in
+// src/tools/builtin/soc-network.ts. Same contract as the InfluxDB / Loki
+// decouples:
+//
+//   1. They THROW on transport/timeout failure (the wall path returns
+//      null for a dark tile); the agent tools CATCH and narrate it. The
+//      one exception is the ntopng 5.x Community alert endpoint, which
+//      genuinely does not exist — getNtopngAlerts reports that as
+//      unavailable DATA, not an error (mirrors the reference MCP).
+//   2. They reuse the existing authenticate()/logout() plumbing via
+//      withNtopngSession, then hit the host/flow/alert endpoints the
+//      wall never needed.
+//
+// No new credential, env var, or wall change — strictly additive.
+// authenticate(), logout(), and fetchInterface() are untouched.
+
+// ip is interpolated into a query param; restrict to IPv4/IPv6 chars
+// before it leaves the process (ported from the reference MCP).
+const NTOPNG_IP_RE = /^[0-9A-Fa-f.:]{1,45}$/;
+
+function assertSafeNtopngIp(ip: string): void {
+  if (!NTOPNG_IP_RE.test(ip)) {
+    throw new Error(`invalid IP address: ${JSON.stringify(ip)}`);
+  }
+}
+
+// One auth -> run fn -> logout, mirroring getNtopngWallState's lifecycle
+// (and the MCP's `with _session()`). cookie is null on the
+// --disable-login / no-credential path; GETs then run unauthenticated.
+async function withNtopngSession<T>(
+  fn: (cookie: string | null) => Promise<T>,
+): Promise<T> {
+  if (cachedPassword === null) await initNtopngCredential();
+  let cookie: string | null = null;
+  if (cachedPassword) cookie = await authenticate();
+  try {
+    return await fn(cookie);
+  } finally {
+    if (cookie) await logout(cookie);
+  }
+}
+
+// Generic authenticated GET. Returns the unwrapped `rsp` payload on a
+// 200 + rc:0 body; returns null on a 3xx redirect (ntopng's
+// "endpoint/host not available" signal) or any non-ok / rc!=0 body.
+// THROWS on transport/timeout so a real outage is distinguishable from
+// an absent endpoint.
+interface NtopngEnvelope { rc?: number; rsp?: unknown }
+
+async function ntopngGet(
+  cookie: string | null,
+  path:   string,
+  params: Record<string, string | number>,
+): Promise<unknown> {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
+
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    const headers: Record<string, string> = {
+      'Accept':     'application/json',
+      'User-Agent': USER_AGENT,
+    };
+    if (cookie) headers['Cookie'] = cookie;
+
+    const res = await fetch(`${NTOPNG_URL}${path}?${qs.toString()}`, {
+      headers,
+      redirect: 'manual',
+      signal:   ctrl.signal,
+    });
+
+    if ([301, 302, 303, 307, 308].includes(res.status)) return null;
+    if (!res.ok) return null;
+
+    const json = (await res.json()) as NtopngEnvelope;
+    if (json.rc !== 0 || json.rsp === undefined) return null;
+    return json.rsp;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('abort') || msg.includes('AbortError')) {
+      throw new Error(`ntopng request timed out after ${TIMEOUT_MS} ms`);
+    }
+    throw err instanceof Error ? err : new Error(msg);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ntopng v2 list endpoints return either a bare array or { data: [...] }.
+function extractRows(rsp: unknown): unknown[] {
+  if (Array.isArray(rsp)) return rsp;
+  if (rsp && typeof rsp === 'object' && Array.isArray((rsp as { data?: unknown }).data)) {
+    return (rsp as { data: unknown[] }).data;
+  }
+  return [];
+}
+
+// Pick the first interface (lowest ifid 1..15) that returns valid data,
+// so top_hosts / search_host work even when the active interface is not
+// ifid 1 (the MCP hardcodes 1). Parallel scan so a down ntopng bounds to
+// one timeout, not fifteen. Falls back to 1 if none respond.
+async function resolveActiveIfid(cookie: string | null): Promise<number> {
+  const settled = await Promise.allSettled(
+    SCAN_IFIDS.map(async (ifid) => {
+      const rsp = await ntopngGet(cookie, '/lua/rest/v2/get/interface/data.lua', { ifid });
+      return rsp ? ifid : null;
+    }),
+  );
+  const active = settled
+    .filter((r): r is PromiseFulfilledResult<number | null> => r.status === 'fulfilled')
+    .map((r) => r.value)
+    .filter((v): v is number => v !== null)
+    .sort((a, b) => a - b);
+  return active[0] ?? 1;
+}
+
+// ── Raw response shapes (defensive optional fields) ─────────
+interface IfaceData {
+  ifname?: string;
+  id?:     string | number;
+  stats?: {
+    packets?:   { rate?: number };
+    bytes?:     { rate?: number };
+    drops?:     number;
+    num_hosts?: number;
+    num_flows?: number;
+  };
+}
+interface ActiveHost {
+  ip?:        string;
+  name?:      string;
+  bytes?:     { sent?: number; recvd?: number; total?: number };
+  num_flows?: { total?: number };
+  country?:   string;
+  score?:     { total?: number };
+}
+interface ActiveFlow {
+  client?:   { ip?: string; name?: string };
+  server?:   { ip?: string; name?: string };
+  protocol?: { l4?: string; l7?: string };
+  bytes?:    number;
+  duration?: number;
+}
+interface RawAlert {
+  tstamp?:          number | string;
+  column_date?:     number | string;
+  severity?:        string;
+  column_severity?: string;
+  alert_type?:      string;
+  column_type?:     string;
+  entity_value?:    string;
+  column_entity?:   string;
+  msg?:             string;
+  column_msg?:      string;
+}
+
+// ── Public shapes ───────────────────────────────────────────
+export interface NtopngInterface {
+  ifid: number; name: string; pps: number; bps: number;
+  dropped: number; numHosts: number; numFlows: number;
+}
+export interface NtopngHost {
+  ip: string; name: string;
+  bytesSent: number; bytesRcvd: number; totalBytes: number;
+  numFlows: number; country: string; score: number;
+}
+export interface NtopngFlow {
+  src: string; dst: string;
+  protocol: string; application: string;
+  bytes: number; durationSec: number;
+}
+export interface NtopngAlert {
+  timestamp: string; severity: string; type: string;
+  entity: string; description: string;
+}
+export interface NtopngAlertsResult {
+  available: boolean;       // false on 5.x Community (REST alert endpoint absent)
+  alerts:    NtopngAlert[];
+}
+export interface NtopngHostProfile {
+  ip: string;
+  tracked: boolean;          // host/data.lua returned data
+  flows:   NtopngFlow[];
+  alertsAvailable: boolean;  // false on 5.x Community
+}
+
+/**
+ * Active interfaces with their traffic stats (scans ifid 1..15).
+ * Throws only when every probe fails at the transport level.
+ */
+export async function getNtopngInterfaces(): Promise<NtopngInterface[]> {
+  return withNtopngSession(async (cookie) => {
+    const settled = await Promise.allSettled(
+      SCAN_IFIDS.map(async (ifid) => {
+        const rsp = await ntopngGet(cookie, '/lua/rest/v2/get/interface/data.lua', { ifid });
+        return { ifid, rsp };
+      }),
+    );
+
+    const interfaces: NtopngInterface[] = [];
+    let transportErrors = 0;
+    for (const r of settled) {
+      if (r.status === 'rejected') { transportErrors++; continue; }
+      const { ifid, rsp } = r.value;
+      if (!rsp || typeof rsp !== 'object') continue;
+      const d = rsp as IfaceData;
+      const stats = d.stats ?? {};
+      interfaces.push({
+        ifid,
+        name:     String(d.ifname ?? d.id ?? ifid),
+        pps:      Number(stats.packets?.rate ?? 0),
+        bps:      Number(stats.bytes?.rate ?? 0),
+        dropped:  Number(stats.drops ?? 0),
+        numHosts: Number(stats.num_hosts ?? 0),
+        numFlows: Number(stats.num_flows ?? 0),
+      });
+    }
+
+    if (interfaces.length === 0 && transportErrors === SCAN_IFIDS.length) {
+      throw new Error('ntopng unreachable (all interface probes failed)');
+    }
+    return interfaces.sort((a, b) => a.ifid - b.ifid);
+  });
+}
+
+/**
+ * Top hosts by traffic on the active interface (desc). limit 1..100.
+ */
+export async function getNtopngTopHosts(limit: number): Promise<NtopngHost[]> {
+  const max = Math.max(1, Math.min(100, Math.floor(Number.isFinite(limit) ? limit : 20)));
+  return withNtopngSession(async (cookie) => {
+    const ifid = await resolveActiveIfid(cookie);
+    const rsp  = await ntopngGet(cookie, '/lua/rest/v2/get/host/active.lua', {
+      ifid,
+      sortColumn:  'column_traffic',
+      sortOrder:   'desc',
+      perPage:     max,
+      currentPage: 1,
+    });
+    return extractRows(rsp).slice(0, max).map((row) => {
+      const h = row as ActiveHost;
+      return {
+        ip:         String(h.ip ?? ''),
+        name:       String(h.name ?? ''),
+        bytesSent:  Number(h.bytes?.sent ?? 0),
+        bytesRcvd:  Number(h.bytes?.recvd ?? 0),
+        totalBytes: Number(h.bytes?.total ?? 0),
+        numFlows:   Number(h.num_flows?.total ?? 0),
+        country:    String(h.country ?? ''),
+        score:      Number(h.score?.total ?? 0),
+      };
+    });
+  });
+}
+
+/**
+ * Recent ntopng alerts. On ntopng 5.x Community the alert REST endpoint
+ * is absent (redirects to not-found) -> { available: false }. A real
+ * transport failure still throws.
+ */
+export async function getNtopngAlerts(limit: number): Promise<NtopngAlertsResult> {
+  const max = Math.max(1, Math.min(500, Math.floor(Number.isFinite(limit) ? limit : 20)));
+  return withNtopngSession(async (cookie) => {
+    const rsp = await ntopngGet(cookie, '/lua/rest/v2/get/alert/alerts.lua', {
+      perPage:     max,
+      currentPage: 1,
+      sortColumn:  'column_date',
+      sortOrder:   'desc',
+    });
+    if (rsp === null) return { available: false, alerts: [] };
+    const alerts = extractRows(rsp).slice(0, max).map((row) => {
+      const a = row as RawAlert;
+      return {
+        timestamp:   String(a.tstamp ?? a.column_date ?? ''),
+        severity:    String(a.severity ?? a.column_severity ?? ''),
+        type:        String(a.alert_type ?? a.column_type ?? ''),
+        entity:      String(a.entity_value ?? a.column_entity ?? ''),
+        description: String(a.msg ?? a.column_msg ?? ''),
+      };
+    });
+    return { available: true, alerts };
+  });
+}
+
+/**
+ * Traffic profile for a specific IP: tracked-or-not (host/data.lua) plus
+ * its active flows (flow/active.lua). Host alerts are not available on
+ * ntopng 5.x Community. IP charset-validated. Throws on transport failure.
+ */
+export async function searchNtopngHost(ip: string): Promise<NtopngHostProfile> {
+  assertSafeNtopngIp(ip);
+  return withNtopngSession(async (cookie) => {
+    const ifid = await resolveActiveIfid(cookie);
+
+    // host/data.lua: null = host not tracked on this interface. A
+    // transport failure throws and propagates to the tool's error path.
+    const hostRsp = await ntopngGet(cookie, '/lua/rest/v2/get/host/data.lua', { host: ip, ifid });
+    const tracked = hostRsp !== null;
+
+    // Active flows for this host — best-effort once ntopng is confirmed up.
+    let flows: NtopngFlow[] = [];
+    try {
+      const flowRsp = await ntopngGet(cookie, '/lua/rest/v2/get/flow/active.lua', {
+        ifid, host: ip, perPage: 50, currentPage: 1,
+      });
+      flows = extractRows(flowRsp).map((row) => {
+        const f   = row as ActiveFlow;
+        const src = f.client?.name ? `${f.client?.ip ?? ''} (${f.client.name})` : String(f.client?.ip ?? '');
+        const dst = f.server?.name ? `${f.server?.ip ?? ''} (${f.server.name})` : String(f.server?.ip ?? '');
+        return {
+          src,
+          dst,
+          protocol:    String(f.protocol?.l4 ?? ''),
+          application: String(f.protocol?.l7 ?? ''),
+          bytes:       Number(f.bytes ?? 0),
+          durationSec: Number(f.duration ?? 0),
+        };
+      });
+    } catch {
+      // Flows are best-effort; keep the tracked status we already have.
+    }
+
+    return { ip, tracked, flows, alertsAvailable: false };
+  });
+}
