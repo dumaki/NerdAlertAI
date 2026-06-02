@@ -119,6 +119,7 @@ const ALLOWED: Record<string, { description: string; minLen: number; maxLen: num
   'ntopng-password':           { description: 'ntopng login password (paired with NTOPNG_USERNAME env var)', minLen: 1,  maxLen: 200 },
   'synology-password':         { description: 'Synology DSM password (paired with SYNOLOGY_USERNAME env var; recommend a dedicated read-only DSM user)', minLen: 1,  maxLen: 200 },
   'fail2ban-shim-token':       { description: 'Bearer token for the read-only fail2ban shim on ids-pi (port 8021; paired with FAIL2BAN_SHIM_URL)', minLen: 32, maxLen: 128 },
+  'nmap-shim-token':           { description: 'Bearer token for the nmap shim on the openclaw PC (paired with NMAP_SHIM_URL)', minLen: 32, maxLen: 128 },
 };
 
 // ---------- Provider key probes ----------
@@ -508,6 +509,18 @@ export function mountSecurityRoutes(app: Express): void {
           await initFail2banCredential();
         } catch (e: any) {
           console.warn('[security] fail2ban-shim cache refresh after credential write failed:', e?.message);
+        }
+      }
+
+      // nmap shim bearer token — refresh the client cache so the next nmap_*
+      // tool call uses the new token without a restart. Lazy init in the client
+      // covers a failure here (one extra keychain read).
+      if (name === 'nmap-shim-token') {
+        try {
+          const { initNmapCredential } = require('./soc-clients/nmap');
+          await initNmapCredential();
+        } catch (e: any) {
+          console.warn('[security] nmap-shim cache refresh after credential write failed:', e?.message);
         }
       }
 

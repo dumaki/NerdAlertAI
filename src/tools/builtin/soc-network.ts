@@ -30,6 +30,12 @@ import {
   checkFail2banIp,
   getFail2banRecentBans,
 } from '../../server/soc-clients/fail2ban';
+import {
+  runNmapQuickScan,
+  runNmapPortScan,
+  runNmapPingSweep,
+  type NmapOpenPort,
+} from '../../server/soc-clients/nmap';
 
 // ── Envelope helpers for the OpenClaw-decoupled tools (v0.9.x) ──
 // Same never-throw contract as soc-pihole.ts: the direct client throws
@@ -86,6 +92,17 @@ function describeFail2banError(err: unknown): string {
     return 'Error: fail2ban shim token not configured. Open /setup and add fail2ban-shim-token.';
   }
   return `Error: could not reach the fail2ban shim — ${msg}. Check FAIL2BAN_SHIM_URL in .env and that the shim is running on ids-pi.`;
+}
+
+function describeNmapError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/no nmap-shim-token/i.test(msg)) {
+    return 'Error: nmap shim token not configured. Open /setup and add nmap-shim-token.';
+  }
+  if (/NMAP_SHIM_URL/i.test(msg)) {
+    return 'Error: nmap shim not configured. Set NMAP_SHIM_URL in .env to the openclaw PC tailnet address.';
+  }
+  return `Error: could not reach the nmap shim — ${msg}. Check NMAP_SHIM_URL in .env and that the shim is running on the openclaw PC.`;
 }
 
 // Human-readable bytes for ntopng host/flow output.
@@ -184,7 +201,7 @@ const pfsenseInterfaces: NerdAlertTool = {
 // (src/server/soc-clients/fail2ban.ts). fail2ban has no HTTP API, so a tiny
 // authenticated shim wraps `fail2ban-client`; the client throws and these
 // execute()s catch + narrate. Names/descriptions/params/trustLevel unchanged.
-// (nmap + pfSense below still use queryOpenClaw, so the import stays.)
+// (pfSense below still uses queryOpenClaw, so the import stays.)
 
 const fail2banStatus: NerdAlertTool = {
   name:       'fail2ban_status',
@@ -438,10 +455,88 @@ const ntopngSearchHost: NerdAlertTool = {
 // NMAP — Network scanner
 // ════════════════════════════════════════════════════════════
 
+// ── Target classification (internal vs external) ─────────────────────
+// Active scans are L2 recon, but scanning a PUBLIC target is the sensitive case
+// (noisy, potentially hostile). isExternalScan() drives BOTH the
+// requiresApproval predicate (so the broker raises a card) AND each tool's
+// preview branch — single source. Fail-safe: anything not PROVABLY inside
+// RFC1918 / loopback / link-local / IPv6 ULA (hostnames, public IPs,
+// unparseable input) is treated as external and carded.
+
+function ipv4ToInt(ip: string): number | null {
+  const m = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return null;
+  const o = m.slice(1).map(Number);
+  if (o.some((n) => n > 255)) return null;
+  return ((o[0] << 24) >>> 0) + (o[1] << 16) + (o[2] << 8) + o[3];
+}
+
+function isPrivateIpv4(ip: string): boolean {
+  const n = ipv4ToInt(ip);
+  if (n === null) return false;
+  const inRange = (base: string, bits: number): boolean => {
+    const b = ipv4ToInt(base);
+    if (b === null) return false;
+    const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
+    return (n & mask) === (b & mask);
+  };
+  return (
+    inRange('10.0.0.0', 8)     ||
+    inRange('172.16.0.0', 12)  ||
+    inRange('192.168.0.0', 16) ||
+    inRange('127.0.0.0', 8)    ||
+    inRange('169.254.0.0', 16)
+  );
+}
+
+function isInternalTarget(raw: string): boolean {
+  const s = (raw || '').trim().split('/')[0].toLowerCase(); // strip any CIDR suffix
+  if (!s) return false;
+  if (s.includes(':')) {
+    // IPv6 literal — only loopback / link-local / unique-local count as internal.
+    if (s === '::1') return true;
+    if (s.startsWith('fe80:') || s.startsWith('fc') || s.startsWith('fd')) return true;
+    return false;
+  }
+  return isPrivateIpv4(s); // IPv4 private ranges; hostnames / public IPs => false
+}
+
+function isExternalScan(args: Record<string, unknown>): boolean {
+  const t = (typeof args.target === 'string' ? args.target : '')
+         || (typeof args.subnet === 'string' ? args.subnet : '');
+  return !isInternalTarget(t);
+}
+
+// Side-effect-free approval preview shared by all three scans. Emitted only for
+// an EXTERNAL target; carries approvalReady so the broker parks the approved
+// variant and raises an Approve/Deny card showing the target.
+function nmapExternalPreview(label: string, target: string, detail: string): NerdAlertResponse {
+  return {
+    type: 'text',
+    content:
+      `About to run an Nmap ${label} against an EXTERNAL target:\n` +
+      `  Target: ${target}\n\n` +
+      `${detail}\n` +
+      `This sends active scan traffic to a host outside your local network. Confirm to proceed.`,
+    metadata: {
+      approvalReady: true,
+      approvalTitle: `Nmap ${label}: ${target}`,
+      sources:       [],
+    },
+  };
+}
+
+function formatNmapPorts(ports: NmapOpenPort[]): string {
+  return ports
+    .map((p) => `  ${p.port}/${p.proto} ${p.state}${p.service ? ' ' + p.service : ''}`)
+    .join('\n');
+}
+
 const nmapQuickScan: NerdAlertTool = {
   name:       'nmap_quick_scan',
-  description: 'Run a quick Nmap scan on a target host to check if it is up and what common ports are open.',
+  description: 'Run a quick Nmap scan on a target host to check if it is up and what common ports are open. Scanning a public/external target asks the user to confirm first.',
   trustLevel: 2,
+  requiresApproval: (args) => isExternalScan(args),
   parameters: {
     type: 'object',
     properties: {
@@ -449,22 +544,41 @@ const nmapQuickScan: NerdAlertTool = {
         type:        'string',
         description: 'IP address or hostname to scan.',
       },
+      approved: {
+        type:        'boolean',
+        description: 'Set true only after the user confirms scanning an external target. Internal targets need no approval.',
+      },
     },
     required: ['target'],
   },
   execute: async (params): Promise<NerdAlertResponse> => {
-    const target = params.target as string;
-    const result = await queryOpenClaw(
-      `Use the Nmap nmap_quick_scan tool to run a quick scan on ${target}. Return whether the host is up, open ports found, and estimated scan time.`
-    );
-    return { type: 'text', content: result, metadata: {} };
+    const target = typeof params.target === 'string' ? params.target.trim() : '';
+    if (!target) return textResponse('Error: no target provided to scan.');
+    if (isExternalScan(params) && params.approved !== true) {
+      return nmapExternalPreview('quick scan', target, `Quick scan of ${target}: host-up check plus common open ports.`);
+    }
+    try {
+      const r = await runNmapQuickScan(target);
+      if (!r.up) return textResponse(`${target} appears to be down or not responding to the quick scan.`);
+      const t = r.scanTimeSec !== null ? ` (scan ${r.scanTimeSec}s)` : '';
+      if (r.openPorts.length === 0) {
+        return textResponse(`${target} is up; no common open ports found${t}.`);
+      }
+      return textResponse(
+        `${target} is up — ${r.openPorts.length} open port${r.openPorts.length === 1 ? '' : 's'}${t}:\n` +
+        formatNmapPorts(r.openPorts),
+      );
+    } catch (err) {
+      return textResponse(describeNmapError(err));
+    }
   },
 };
 
 const nmapPortScan: NerdAlertTool = {
   name:       'nmap_port_scan',
-  description: 'Run an Nmap port scan on a target host. Specify a port range or use top100 for the most common ports.',
+  description: 'Run an Nmap port scan on a target host. Specify a port range or use top100 for the most common ports. Scanning a public/external target asks the user to confirm first.',
   trustLevel: 2,
+  requiresApproval: (args) => isExternalScan(args),
   parameters: {
     type: 'object',
     properties: {
@@ -476,23 +590,40 @@ const nmapPortScan: NerdAlertTool = {
         type:        'string',
         description: 'Port specification: "top100", "1-1024", "22,80,443", etc. Defaults to top100.',
       },
+      approved: {
+        type:        'boolean',
+        description: 'Set true only after the user confirms scanning an external target. Internal targets need no approval.',
+      },
     },
     required: ['target'],
   },
   execute: async (params): Promise<NerdAlertResponse> => {
-    const target = params.target as string;
-    const ports  = (params.ports as string | undefined) ?? 'top100';
-    const result = await queryOpenClaw(
-      `Use the Nmap nmap_port_scan tool to scan ${target} on ports ${ports}. Return all open ports with their state and protocol.`
-    );
-    return { type: 'text', content: result, metadata: {} };
+    const target = typeof params.target === 'string' ? params.target.trim() : '';
+    const ports  = (typeof params.ports === 'string' && params.ports.trim()) ? params.ports.trim() : 'top100';
+    if (!target) return textResponse('Error: no target provided to scan.');
+    if (isExternalScan(params) && params.approved !== true) {
+      return nmapExternalPreview('port scan', target, `Port scan of ${target} over ports ${ports}.`);
+    }
+    try {
+      const r = await runNmapPortScan(target, ports);
+      if (r.ports.length === 0) {
+        return textResponse(`No open ports found on ${target} in range ${ports}.`);
+      }
+      return textResponse(
+        `${r.ports.length} port${r.ports.length === 1 ? '' : 's'} on ${target} (range ${ports}):\n` +
+        formatNmapPorts(r.ports),
+      );
+    } catch (err) {
+      return textResponse(describeNmapError(err));
+    }
   },
 };
 
 const nmapPingSweep: NerdAlertTool = {
   name:       'nmap_ping_sweep',
-  description: 'Run an Nmap ping sweep across a subnet to discover which hosts are online.',
+  description: 'Run an Nmap ping sweep across a subnet to discover which hosts are online. Sweeping a public/external subnet asks the user to confirm first.',
   trustLevel: 2,
+  requiresApproval: (args) => isExternalScan(args),
   parameters: {
     type: 'object',
     properties: {
@@ -500,15 +631,29 @@ const nmapPingSweep: NerdAlertTool = {
         type:        'string',
         description: 'Subnet in CIDR notation (e.g. 192.168.1.0/24).',
       },
+      approved: {
+        type:        'boolean',
+        description: 'Set true only after the user confirms sweeping an external subnet. Internal subnets need no approval.',
+      },
     },
     required: ['subnet'],
   },
   execute: async (params): Promise<NerdAlertResponse> => {
-    const subnet = params.subnet as string;
-    const result = await queryOpenClaw(
-      `Use the Nmap nmap_ping_sweep tool to discover all online hosts in subnet ${subnet}. Return a list of responding IP addresses and hostnames where available.`
-    );
-    return { type: 'text', content: result, metadata: {} };
+    const subnet = typeof params.subnet === 'string' ? params.subnet.trim() : '';
+    if (!subnet) return textResponse('Error: no subnet provided to sweep.');
+    if (isExternalScan(params) && params.approved !== true) {
+      return nmapExternalPreview('ping sweep', subnet, `Ping sweep across ${subnet} to find responding hosts.`);
+    }
+    try {
+      const r = await runNmapPingSweep(subnet);
+      if (r.hosts.length === 0) return textResponse(`No hosts responded in ${subnet}.`);
+      const lines = r.hosts.map((h) => (h.hostname ? `  ${h.ip} (${h.hostname})` : `  ${h.ip}`));
+      return textResponse(
+        `${r.hosts.length} host${r.hosts.length === 1 ? '' : 's'} up in ${subnet}:\n${lines.join('\n')}`,
+      );
+    } catch (err) {
+      return textResponse(describeNmapError(err));
+    }
   },
 };
 
