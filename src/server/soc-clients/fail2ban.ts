@@ -52,6 +52,11 @@ import { getCredential } from '../../security/credential-store';
 
 const SHIM_URL   = (process.env.FAIL2BAN_SHIM_URL ?? 'http://100.115.252.53:8021').replace(/\/$/, '');
 const TIMEOUT_MS = 5000;
+// Writes (ban/unban) trigger a synchronous fail2ban action — normally ~1s but it
+// can spike on a cold start. Give the POST path far more headroom than the 5s
+// reads so a slow-but-successful ban is never aborted client-side (paired with
+// the shim's re-check-on-timeout, which returns the true state in that window).
+const WRITE_TIMEOUT_MS = 20000;
 const USER_AGENT = 'nerdalert/0.9.x';
 
 // ── Credential cache ─────────────────────────────────────────
@@ -201,7 +206,7 @@ async function shimGet<T>(pathAndQuery: string): Promise<T> {
 async function shimPost<T>(path: string, body: Record<string, unknown>): Promise<T> {
   const token = await ensureToken();
   const ctrl  = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), WRITE_TIMEOUT_MS);
   try {
     const res = await fetch(`${SHIM_URL}${path}`, {
       method: 'POST',
@@ -222,7 +227,7 @@ async function shimPost<T>(path: string, body: Record<string, unknown>): Promise
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes('abort') || msg.includes('AbortError')) {
-      throw new Error(`fail2ban shim timed out after ${TIMEOUT_MS} ms`);
+      throw new Error(`fail2ban shim timed out after ${WRITE_TIMEOUT_MS} ms`);
     }
     throw err instanceof Error ? err : new Error(msg);
   } finally {
