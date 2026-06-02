@@ -15,7 +15,8 @@ fail2ban reads -> ids-pi shim         feat   commit 70fa7e6
 fail2ban ban/unban L3 write tools     feat   commit 381418f
 nmap -> openclaw-PC shim + carding    feat   commit c115dd7
 nmap description reword (anti-double-confirm) fix commit d0e9f7f
-docs/NerdAlert_Spec_v0_9_2.md + 0.9.1->0.9.2  cap  commit [pending]
+docs/NerdAlert_Spec_v0_9_2.md + 0.9.1->0.9.2  cap  commit a65102c
+fail2ban write-path timeout (anti-false-abort) fix commit 6bbd4d4
 ```
 
 ---
@@ -64,8 +65,11 @@ This is the standing template for any future no-HTTP-API backend.
 - nmap — 3 tools via the openclaw-PC shim (new this session).
 
 **Dangerous writes (separate-tool pattern, L3, approval-carded):**
-- fail2ban `ban`/`unban` — code-complete (`381418f`); shim `/ban` `/unban`
-  endpoints + scoped sudoers + live test pending.
+- fail2ban `ban`/`unban` — LIVE. Tools (`381418f`) + write-path timeout
+  (`6bbd4d4`); shim v1.2 on ids-pi (idempotent pre-check + re-check-on-timeout,
+  scoped sudoers, rotated token). Validated end-to-end at L3 via one-off
+  `agent.allow_elevation` (standing trust L2): ban -> check -> unban, each
+  approval-carded.
 
 **Still on `queryOpenClaw`:**
 - pfSense — 5 tools. Box offline since ~2026-05-24. Deferred ~a few months. If
@@ -134,9 +138,6 @@ direct the model to call the tool and let the card gate.
 - **pfSense decouple (5 tools)** — the only remaining `queryOpenClaw` user; box
   offline, deferred ~a few months. After it lands, `soc-network.ts` drops the
   `queryOpenClaw` import entirely and the gateway is fully retired for SOC.
-- **fail2ban write shim** — deploy `/ban` `/unban` + sudoers on ids-pi and live
-  test; until then the L3 write tools are code-present but exercise an
-  undeployed endpoint.
 - **OpenClaw container cleanup** — once pfSense is decoupled: the in-container
   nmap install + `nmap-mcp` registration + the `APT_PACKAGES="nmap"` line in
   `run-nerdalert.sh` are dead weight to remove.
