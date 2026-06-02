@@ -24,6 +24,12 @@ import {
   getNtopngAlerts,
   searchNtopngHost,
 } from '../../server/soc-clients/ntopng';
+import {
+  getFail2banStatus,
+  getFail2banBannedIps,
+  checkFail2banIp,
+  getFail2banRecentBans,
+} from '../../server/soc-clients/fail2ban';
 
 // ── Envelope helpers for the OpenClaw-decoupled tools (v0.9.x) ──
 // Same never-throw contract as soc-pihole.ts: the direct client throws
@@ -72,6 +78,14 @@ function formatLokiLines(result: LokiQueryResult, header: string): string {
 function describeNtopngError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
   return `Error: could not reach ntopng — ${msg}. Check NTOPNG_URL in .env (and ntopng-password via /setup if login is enabled).`;
+}
+
+function describeFail2banError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/no fail2ban-shim-token/i.test(msg)) {
+    return 'Error: fail2ban shim token not configured. Open /setup and add fail2ban-shim-token.';
+  }
+  return `Error: could not reach the fail2ban shim — ${msg}. Check FAIL2BAN_SHIM_URL in .env and that the shim is running on ids-pi.`;
 }
 
 // Human-readable bytes for ntopng host/flow output.
@@ -166,6 +180,11 @@ const pfsenseInterfaces: NerdAlertTool = {
 // ════════════════════════════════════════════════════════════
 // FAIL2BAN — SSH and service brute-force protection
 // ════════════════════════════════════════════════════════════
+// v0.9.x — DECOUPLED FROM OPENCLAW via the read-only fail2ban-shim on ids-pi
+// (src/server/soc-clients/fail2ban.ts). fail2ban has no HTTP API, so a tiny
+// authenticated shim wraps `fail2ban-client`; the client throws and these
+// execute()s catch + narrate. Names/descriptions/params/trustLevel unchanged.
+// (nmap + pfSense below still use queryOpenClaw, so the import stays.)
 
 const fail2banStatus: NerdAlertTool = {
   name:       'fail2ban_status',
@@ -173,10 +192,17 @@ const fail2banStatus: NerdAlertTool = {
   trustLevel: 1,
   parameters: { type: 'object', properties: {}, required: [] },
   execute: async (): Promise<NerdAlertResponse> => {
-    const result = await queryOpenClaw(
-      'Use the Fail2ban get_fail2ban_status tool to return overall status including whether the service is running, number of active jails, and total bans.'
-    );
-    return { type: 'text', content: result, metadata: {} };
+    try {
+      const s = await getFail2banStatus();
+      const state    = s.running ? 'running' : 'not running';
+      const jailList = s.jails.length ? ` (${s.jails.join(', ')})` : '';
+      return textResponse(
+        `Fail2ban is ${state}: ${s.jailCount} active jail${s.jailCount === 1 ? '' : 's'}${jailList}, ` +
+        `${s.totalBanned} total ban${s.totalBanned === 1 ? '' : 's'}.`,
+      );
+    } catch (err) {
+      return textResponse(describeFail2banError(err));
+    }
   },
 };
 
@@ -196,10 +222,20 @@ const fail2banRecentBans: NerdAlertTool = {
   },
   execute: async (params): Promise<NerdAlertResponse> => {
     const limit = (params.limit as number | undefined) ?? 20;
-    const result = await queryOpenClaw(
-      `Use the Fail2ban get_recent_bans tool to return the ${limit} most recent bans. Include IP address, jail name, ban time, and number of failures that triggered the ban.`
-    );
-    return { type: 'text', content: result, metadata: {} };
+    try {
+      const bans = await getFail2banRecentBans(limit);
+      if (bans.length === 0) return textResponse('No recent Fail2ban bans found.');
+      const lines = bans.map((b) => {
+        const when  = b.time ? ` at ${b.time}` : '';
+        const fails = b.failures !== null ? ` (${b.failures} failures)` : '';
+        return `${b.ip} — ${b.jail}${when}${fails}`;
+      });
+      return textResponse(
+        `${bans.length} most recent Fail2ban ban${bans.length === 1 ? '' : 's'}:\n${lines.join('\n')}`,
+      );
+    } catch (err) {
+      return textResponse(describeFail2banError(err));
+    }
   },
 };
 
@@ -218,11 +254,15 @@ const fail2banCheckIp: NerdAlertTool = {
     required: ['ip'],
   },
   execute: async (params): Promise<NerdAlertResponse> => {
-    const ip = params.ip as string;
-    const result = await queryOpenClaw(
-      `Use the Fail2ban is_ip_banned tool to check whether IP ${ip} is currently banned. If banned, show which jail(s) and when the ban was applied.`
-    );
-    return { type: 'text', content: result, metadata: {} };
+    const ip = ((params.ip as string | undefined) ?? '').trim();
+    if (!ip) return textResponse('Error: no IP address provided to check.');
+    try {
+      const r = await checkFail2banIp(ip);
+      if (!r.banned) return textResponse(`${ip} is not currently banned in any Fail2ban jail.`);
+      return textResponse(`${ip} is currently banned in: ${r.jails.join(', ')}.`);
+    } catch (err) {
+      return textResponse(describeFail2banError(err));
+    }
   },
 };
 
@@ -241,12 +281,19 @@ const fail2banBannedIps: NerdAlertTool = {
     required: [],
   },
   execute: async (params): Promise<NerdAlertResponse> => {
-    const jail = params.jail as string | undefined;
-    const filter = jail ? ` in the ${jail} jail` : ' across all jails';
-    const result = await queryOpenClaw(
-      `Use the Fail2ban get_banned_ips tool to return all currently banned IP addresses${filter}.`
-    );
-    return { type: 'text', content: result, metadata: {} };
+    const jail = (params.jail as string | undefined)?.trim() || undefined;
+    try {
+      const r = await getFail2banBannedIps(jail);
+      const scope = r.jail ? `jail ${r.jail}` : 'all jails';
+      if (r.banned.length === 0) return textResponse(`No currently banned IPs in ${scope}.`);
+      // Per-jail query: just the IPs. All-jails: tag each IP with its jail.
+      const lines = r.banned.map((b) => (jail ? b.ip : `${b.ip} (${b.jail})`));
+      return textResponse(
+        `${r.banned.length} currently banned IP${r.banned.length === 1 ? '' : 's'} in ${scope}:\n${lines.join('\n')}`,
+      );
+    } catch (err) {
+      return textResponse(describeFail2banError(err));
+    }
   },
 };
 

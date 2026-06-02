@@ -118,6 +118,7 @@ const ALLOWED: Record<string, { description: string; minLen: number; maxLen: num
   'pfsense-api-key':           { description: 'pfSense REST API v2 key (Services → REST API → Keys)', minLen: 16, maxLen: 200 },
   'ntopng-password':           { description: 'ntopng login password (paired with NTOPNG_USERNAME env var)', minLen: 1,  maxLen: 200 },
   'synology-password':         { description: 'Synology DSM password (paired with SYNOLOGY_USERNAME env var; recommend a dedicated read-only DSM user)', minLen: 1,  maxLen: 200 },
+  'fail2ban-shim-token':       { description: 'Bearer token for the read-only fail2ban shim on ids-pi (port 8021; paired with FAIL2BAN_SHIM_URL)', minLen: 32, maxLen: 128 },
 };
 
 // ---------- Provider key probes ----------
@@ -495,6 +496,18 @@ export function mountSecurityRoutes(app: Express): void {
           await initSynologyCredential();
         } catch (e: any) {
           console.warn('[security] synology cache refresh after credential write failed:', e?.message);
+        }
+      }
+
+      // fail2ban shim bearer token — refresh the client cache so the next
+      // fail2ban_* tool call uses the new token without a restart. Lazy init
+      // in the client covers a failure here (one extra keychain read).
+      if (name === 'fail2ban-shim-token') {
+        try {
+          const { initFail2banCredential } = require('./soc-clients/fail2ban');
+          await initFail2banCredential();
+        } catch (e: any) {
+          console.warn('[security] fail2ban-shim cache refresh after credential write failed:', e?.message);
         }
       }
 
