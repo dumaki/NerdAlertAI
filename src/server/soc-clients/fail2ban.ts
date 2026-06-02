@@ -22,9 +22,13 @@
 //
 // SCOPE
 // ─────────────────────────────────────────────────────────
-// READ-ONLY. The shim exposes status/banned/check/recent and nothing that
-// mutates a jail; the token literally cannot ban or unban. ban/unban arrive
-// later as a separate, L3-carded write slice with its own shim endpoints.
+// READS (status/banned/check/recent) are L1, narrated by soc-network.ts.
+// WRITES (ban/unban) landed as the L3-carded write slice: banFail2banIp /
+// unbanFail2banIp POST to the shim's /ban + /unban endpoints, which are gated
+// by scoped sudoers (fail2ban-client set <jail> banip/unbanip) — the token can
+// mutate ONLY via those two jail-scoped commands, nothing else. The dangerous-
+// write TOOLS live in soc-fail2ban-write-tool.ts (separate-tool pattern,
+// broker-carded), not in soc-network.ts with the reads.
 //
 // SECURITY BOUNDARY
 // ─────────────────────────────────────────────────────────
@@ -89,11 +93,22 @@ async function ensureToken(): Promise<string> {
 const IP_RE   = /^[0-9A-Fa-f.:]{1,45}$/;
 const JAIL_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
+// Boolean predicates — the single source of truth for the charset rules. The
+// asserts below call these (throw-on-fail; used by the read path AND the mutate
+// fns). The L3 write TOOL imports the boolean form so its side-effect-free
+// preview can choose card-vs-relayed-error without try/catching an assert.
+export function isValidIp(ip: string): boolean {
+  return IP_RE.test(ip);
+}
+export function isValidJail(jail: string): boolean {
+  return JAIL_RE.test(jail);
+}
+
 function assertIp(ip: string): void {
-  if (!IP_RE.test(ip)) throw new Error(`invalid IP address: ${JSON.stringify(ip)}`);
+  if (!isValidIp(ip)) throw new Error(`invalid IP address: ${JSON.stringify(ip)}`);
 }
 function assertJail(jail: string): void {
-  if (!JAIL_RE.test(jail)) throw new Error(`invalid jail name: ${JSON.stringify(jail)}`);
+  if (!isValidJail(jail)) throw new Error(`invalid jail name: ${JSON.stringify(jail)}`);
 }
 
 // ── Response shapes (mirror the shim's JSON contract) ────────
@@ -128,6 +143,18 @@ export interface Fail2banRecentBan {
   failures: number | null;     // best-effort; shim returns null when not derivable
 }
 
+// Result of a /ban or /unban write. The shim sets `ok` on a successful command;
+// alreadyBanned / wasNotBanned are BEST-EFFORT no-op hints (fail2ban-client's
+// already-banned signalling is version-dependent) and may be absent.
+export interface Fail2banWriteResult {
+  ok:             boolean;
+  ip:             string;
+  jail:           string;
+  alreadyBanned?: boolean;   // /ban: IP was already in the jail
+  wasNotBanned?:  boolean;   // /unban: IP wasn't in the jail
+  message?:       string;    // shim's human note, if any
+}
+
 // ── Shared GET helper ────────────────────────────────────────
 //
 // One place for auth header, timeout, and error normalization. Throws on
@@ -150,6 +177,46 @@ async function shimGet<T>(pathAndQuery: string): Promise<T> {
     if (!res.ok) {
       const body = await res.text().catch(() => '');
       throw new Error(`fail2ban shim HTTP ${res.status} ${body.slice(0, 120)}`);
+    }
+    return (await res.json()) as T;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('abort') || msg.includes('AbortError')) {
+      throw new Error(`fail2ban shim timed out after ${TIMEOUT_MS} ms`);
+    }
+    throw err instanceof Error ? err : new Error(msg);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ── Shared POST helper (write path) ──────────────────────────
+//
+// The mutate twin of shimGet: same auth header, timeout, and error
+// normalization, but sends a JSON body via POST. The shim's /ban and /unban
+// are the only POST routes (status/banned/check/recent are all GET). Throws on
+// non-2xx and transport failure exactly like shimGet, so the write tools' catch
+// + narrate path is identical to the read tools'.
+
+async function shimPost<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  const token = await ensureToken();
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(`${SHIM_URL}${path}`, {
+      method: 'POST',
+      headers: {
+        'Accept':        'application/json',
+        'Content-Type':  'application/json',
+        'User-Agent':    USER_AGENT,
+        'Authorization': `Bearer ${token}`,
+      },
+      body:   JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(`fail2ban shim HTTP ${res.status} ${errBody.slice(0, 120)}`);
     }
     return (await res.json()) as T;
   } catch (err: unknown) {
@@ -222,4 +289,39 @@ export async function getFail2banRecentBans(limit: number): Promise<Fail2banRece
       time:     typeof b.time === 'string' ? b.time : '',
       failures: typeof b.failures === 'number' ? b.failures : null,
     }));
+}
+
+// ── Public write API (each powers one soc-fail2ban-write-tool.ts tool) ───────
+//
+// The mutate twins of the reads above. Same throw-on-failure decouple contract,
+// same client-side ip/jail guards (defense-in-depth — the shim validates too).
+// Both are jail-scoped because the shim sudoers only permits
+// `fail2ban-client set <jail> banip/unbanip`.
+
+/** POST /ban — ban an IP into a jail (L3 write). */
+export async function banFail2banIp(ip: string, jail: string): Promise<Fail2banWriteResult> {
+  assertIp(ip);
+  assertJail(jail);
+  const j = await shimPost<Partial<Fail2banWriteResult>>('/ban', { ip, jail });
+  return {
+    ok:            Boolean(j.ok),
+    ip,
+    jail,
+    alreadyBanned: typeof j.alreadyBanned === 'boolean' ? j.alreadyBanned : undefined,
+    message:       typeof j.message === 'string' ? j.message : undefined,
+  };
+}
+
+/** POST /unban — remove an IP's ban from a jail (L3 write). */
+export async function unbanFail2banIp(ip: string, jail: string): Promise<Fail2banWriteResult> {
+  assertIp(ip);
+  assertJail(jail);
+  const j = await shimPost<Partial<Fail2banWriteResult>>('/unban', { ip, jail });
+  return {
+    ok:           Boolean(j.ok),
+    ip,
+    jail,
+    wasNotBanned: typeof j.wasNotBanned === 'boolean' ? j.wasNotBanned : undefined,
+    message:      typeof j.message === 'string' ? j.message : undefined,
+  };
 }

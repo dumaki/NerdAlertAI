@@ -57,6 +57,7 @@ import {
   lokiTools,
   influxdbTools,
 } from './builtin/soc-network';
+import { fail2banWriteTools } from './builtin/soc-fail2ban-write-tool';
 import { honeypotTools } from './builtin/soc-honeypot';
 import { synologyTools } from './builtin/soc-synology';
 
@@ -155,7 +156,15 @@ const ALL_TOOLS: NerdAlertTool[] = [
   // SOC — pfSense firewall
   ...pfsenseTools,
 
-  // SOC — Fail2ban brute-force protection
+  // SOC — Fail2ban L3 dangerous-writes (ban / unban) sit BEFORE the read
+  // tools — same positional-bias mitigation as the gmail/github/cron write
+  // clusters: a small model scoring tools top-to-bottom should match "ban this
+  // IP" against fail2ban_ban_ip before it reaches the read tools. Both are
+  // filtered out of the model-visible set below L3, so this ordering only bites
+  // once global trust is raised to 3.
+  ...fail2banWriteTools,
+
+  // SOC — Fail2ban brute-force protection (reads)
   ...fail2banTools,
 
   // SOC — NTopNG network traffic
