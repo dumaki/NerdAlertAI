@@ -534,7 +534,7 @@ function formatNmapPorts(ports: NmapOpenPort[]): string {
 
 const nmapQuickScan: NerdAlertTool = {
   name:       'nmap_quick_scan',
-  description: 'Run a quick Nmap scan on a target host to check if it is up and what common ports are open. Scanning a public/external target asks the user to confirm first.',
+  description: 'Run a quick Nmap scan on a target host to check if it is up and what common ports are open. Just call this with the target; if it is external the system automatically shows the user an approval card, so there is no need to ask for confirmation in chat first.',
   trustLevel: 2,
   requiresApproval: (args) => isExternalScan(args),
   parameters: {
@@ -546,7 +546,7 @@ const nmapQuickScan: NerdAlertTool = {
       },
       approved: {
         type:        'boolean',
-        description: 'Set true only after the user confirms scanning an external target. Internal targets need no approval.',
+        description: 'Approval for external targets is handled automatically by the system\'s card; normally leave this unset and just call the tool with the target.',
       },
     },
     required: ['target'],
@@ -576,7 +576,7 @@ const nmapQuickScan: NerdAlertTool = {
 
 const nmapPortScan: NerdAlertTool = {
   name:       'nmap_port_scan',
-  description: 'Run an Nmap port scan on a target host. Specify a port range or use top100 for the most common ports. Scanning a public/external target asks the user to confirm first.',
+  description: 'Run an Nmap port scan on a target host. Specify a port range or use top100 for the most common ports. Just call this with the target; if it is external the system automatically shows the user an approval card, so there is no need to ask for confirmation in chat first.',
   trustLevel: 2,
   requiresApproval: (args) => isExternalScan(args),
   parameters: {
@@ -592,7 +592,7 @@ const nmapPortScan: NerdAlertTool = {
       },
       approved: {
         type:        'boolean',
-        description: 'Set true only after the user confirms scanning an external target. Internal targets need no approval.',
+        description: 'Approval for external targets is handled automatically by the system\'s card; normally leave this unset and just call the tool with the target.',
       },
     },
     required: ['target'],
@@ -621,7 +621,7 @@ const nmapPortScan: NerdAlertTool = {
 
 const nmapPingSweep: NerdAlertTool = {
   name:       'nmap_ping_sweep',
-  description: 'Run an Nmap ping sweep across a subnet to discover which hosts are online. Sweeping a public/external subnet asks the user to confirm first.',
+  description: 'Run an Nmap ping sweep across a subnet to discover which hosts are online. Just call this with the subnet; if it is external the system automatically shows the user an approval card, so there is no need to ask for confirmation in chat first.',
   trustLevel: 2,
   requiresApproval: (args) => isExternalScan(args),
   parameters: {
@@ -633,7 +633,7 @@ const nmapPingSweep: NerdAlertTool = {
       },
       approved: {
         type:        'boolean',
-        description: 'Set true only after the user confirms sweeping an external subnet. Internal subnets need no approval.',
+        description: 'Approval for external targets is handled automatically by the system\'s card; normally leave this unset and just call the tool with the subnet.',
       },
     },
     required: ['subnet'],
