@@ -106,6 +106,8 @@ const fail2banBanIpTool: NerdAlertTool = {
   description: `Ban an IP address in a specific Fail2ban jail. This adds a real firewall block, so use it only after the user has explicitly confirmed. Requires ip and jail (e.g. sshd). Requires approved:true, which you set only after the user confirms the ban in chat. To review current bans first, use fail2ban_banned_ips or fail2ban_check_ip.`,
   trustLevel:       3,
   requiresApproval: true,
+  // v0.10 Phase 3 — target for the autonomous grant matcher's scope allow-list.
+  scopeOf: (args) => (typeof args.ip === 'string' ? args.ip.trim() || undefined : undefined),
   parameters: {
     type: 'object',
     properties: {
@@ -152,6 +154,8 @@ const fail2banUnbanIpTool: NerdAlertTool = {
   description: `Remove a Fail2ban ban for an IP address in a specific jail. Use it only after the user has explicitly confirmed. Requires ip and jail (e.g. sshd). Requires approved:true, which you set only after the user confirms the unban in chat. To review current bans first, use fail2ban_banned_ips or fail2ban_check_ip.`,
   trustLevel:       3,
   requiresApproval: true,
+  // v0.10 Phase 3 — target for the autonomous grant matcher's scope allow-list.
+  scopeOf: (args) => (typeof args.ip === 'string' ? args.ip.trim() || undefined : undefined),
   parameters: {
     type: 'object',
     properties: {

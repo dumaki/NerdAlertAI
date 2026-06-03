@@ -178,6 +178,13 @@ export interface NerdAlertTool {
   // a plain `true` behaves exactly as before (strict superset), and an absent/
   // false/predicate-returns-false result routes straight to executeTool.
   requiresApproval?: boolean | ((args: Record<string, unknown>) => boolean);
+  // v0.10 Phase 3 — optional scope extractor for the autonomous grant matcher.
+  // Returns the call's "target" (the value a grant's `scopes` allow-list is
+  // tested against) from the args, WITHOUT executing — e.g. fail2ban returns
+  // args.ip, project_write would return "<project>/<path>". Absent => a grant
+  // that constrains scopes for this tool fails closed (cannot be verified, so
+  // it does not match). Pure + side-effect-free; the matcher is the only caller.
+  scopeOf?: (args: Record<string, unknown>) => string | undefined;
   execute: (params: Record<string, unknown>, exec?: ToolExecContext) => Promise<NerdAlertResponse>;
 }
 
@@ -211,6 +218,27 @@ export interface ToolGroupConfig {
   trust_level?: number;    // Optional floor-raise (same rule as ToolConfig)
 }
 
+// --- AUTONOMOUS GRANT (v0.10 Phase 3) ---
+// One operator-authored grant that authorizes an autonomous trigger (cron) to
+// run an action the Phase 2 floor would otherwise refuse. A flat structured
+// predicate — tool + optional action/scope allow-lists + rate limit + expiry,
+// deliberately NOT a DSL. Lives under agent.autonomous.grants in config.yaml.
+// In Phase 3 the matcher evaluates these in DRY-RUN only (logs "WOULD
+// AUTO-APPROVE"); nothing auto-runs until Phase 4.
+export interface AutonomousGrant {
+  tool: string;            // required — the tool name this grant authorizes
+  actions?: string[];      // optional — allowed values of the call's `action` arg
+                           //   (for multi-action tools); omit = any action
+  scopes?: string[];       // optional — allow-list of targets (IPv4/CIDR or exact
+                           //   string) matched against the tool's scopeOf(args);
+                           //   omit = any target. A tool with no scopeOf fails
+                           //   closed when scopes is set.
+  max_per_hour?: number;   // rate limit. STORED in Phase 3, ENFORCED in Phase 4
+                           //   (needs the durable counter + circuit breaker).
+  expires?: string;        // optional ISO-8601 expiry; omit = no expiry. An
+                           //   unparseable value fails closed (never matches).
+}
+
 export interface AgentConfig {
   agent: {
     // name + personality are the SEED default only: the boot fallback and the
@@ -229,6 +257,13 @@ export interface AgentConfig {
     // runs it ONCE without raising standing trust, and the per-model ceiling
     // stays a hard cap.
     allow_elevation?: boolean;
+    // v0.10 Phase 3 — autonomous grants (operator-only, never agent-writable —
+    // same invariant as trust_level). Absent => no grants, so the autonomous
+    // floor's matcher returns "not configured" and the Phase 3 dry-run is
+    // byte-identical to Phase 2. Each grant authorizes a cron-origin action the
+    // floor would otherwise refuse; in Phase 3 they are evaluated in dry-run
+    // only (logged), and nothing auto-runs until Phase 4.
+    autonomous?: { grants?: AutonomousGrant[] };
   };
   server: {
     port: number;
