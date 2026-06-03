@@ -29,6 +29,8 @@
 
 import { chat } from '../core/agent';
 import { getTelegramBotToken } from './credential';
+import { resolveQueued } from '../core/permission-broker';
+import type { QueuedCardNotice } from '../core/permission-broker';
 // Message type matches agent.ts internal shape
 type Message = { role: 'user' | 'assistant'; content: string };
 
@@ -68,6 +70,17 @@ interface TelegramMessage {
 interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
+  callback_query?: TelegramCallbackQuery;
+}
+
+// An inline-button tap (Phase 5c). `data` carries our compact payload
+// (`aqr:<id>:1|0`); `message` is the card the button is attached to (so we can
+// edit it in place); `from` is the tapping user (checked against CHAT_ID).
+interface TelegramCallbackQuery {
+  id: string;
+  from: { id: number };
+  message?: { message_id: number; chat: { id: number } };
+  data?: string;
 }
 
 // ── State ────────────────────────────────────────────────────
@@ -148,6 +161,144 @@ function splitMessage(text: string, limit = 4000): string[] {
   return chunks;
 }
 
+// ── Autonomous queue card (Phase 5c) ─────────────────────────
+//
+// Sends the enqueue notice as a tappable APPROVE/DENY card. callback_data is
+// the compact `aqr:<id>:1|0` (~45 bytes, under Telegram's 64-byte cap). The
+// inline buttons resolve through the SAME server-side resolveQueued the UI tray
+// uses, so Telegram and the web UI stay consistent.
+export async function sendQueueCard(card: QueuedCardNotice): Promise<void> {
+  const base = apiBase();
+  if (!base || !CHAT_ID) {
+    console.warn('[Telegram] Bot token or CHAT_ID not configured — skipping queue card');
+    return;
+  }
+  const text =
+    `📥 *Autonomous action awaiting approval*\n` +
+    `Trigger: \`${card.origin}\`\n` +
+    `Tool: \`${card.toolName}\` (L${card.required})\n\n` +
+    `${card.description}`;
+  const keyboard = {
+    inline_keyboard: [[
+      { text: '✅ Approve', callback_data: `aqr:${card.id}:1` },
+      { text: '✖️ Deny',    callback_data: `aqr:${card.id}:0` },
+    ]],
+  };
+  try {
+    const res = await fetch(`${base}/sendMessage`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: CHAT_ID, text, parse_mode: 'Markdown', reply_markup: keyboard }),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      // Markdown can trip on odd descriptions — retry plain text, buttons intact.
+      if (err.includes('Bad Request')) {
+        await fetch(`${base}/sendMessage`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: CHAT_ID, text, reply_markup: keyboard }),
+        });
+      } else {
+        console.error('[Telegram] sendQueueCard failed:', err);
+      }
+    }
+  } catch (err) {
+    console.error('[Telegram] sendQueueCard network error:', err);
+  }
+}
+
+// Pop a short toast on the tapping user's screen (acknowledges the tap).
+async function answerCallbackQuery(callbackId: string, text: string): Promise<void> {
+  const base = apiBase();
+  if (!base) return;
+  try {
+    await fetch(`${base}/answerCallbackQuery`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callback_query_id: callbackId, text, show_alert: false }),
+    });
+  } catch (err) {
+    console.error('[Telegram] answerCallbackQuery error:', err);
+  }
+}
+
+// Rewrite the card to show the outcome and STRIP the buttons, so it can't be
+// re-tapped (the queue entry is single-use server-side anyway; this keeps the
+// phone UI honest and leaves an in-chat record).
+async function editQueueCardOutcome(messageId: number, newText: string): Promise<void> {
+  const base = apiBase();
+  if (!base || !CHAT_ID) return;
+  const payloadBase = { chat_id: CHAT_ID, message_id: messageId, reply_markup: { inline_keyboard: [] } };
+  try {
+    const res = await fetch(`${base}/editMessageText`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payloadBase, text: newText, parse_mode: 'Markdown' }),
+    });
+    if (!res.ok) {
+      await fetch(`${base}/editMessageText`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payloadBase, text: newText }),
+      });
+    }
+  } catch (err) {
+    console.error('[Telegram] editMessageText error:', err);
+  }
+}
+
+// Handle an inline-button tap on a queue card. Locks to CHAT_ID, parses the
+// compact payload, resolves the action server-side, then toasts + rewrites the
+// card. Owns only the `aqr:` prefix; other callback types pass through.
+async function handleCallbackQuery(cq: TelegramCallbackQuery): Promise<void> {
+  // Security: same single-user lock as messages. The card's chat must be YOUR
+  // chat; fall back to the tapping user's id if the message is absent.
+  const lockId = cq.message?.chat?.id ?? cq.from?.id;
+  if (String(lockId ?? '') !== CHAT_ID) {
+    console.warn(`[Telegram] Ignored callback from unknown chat/user: ${lockId}`);
+    await answerCallbackQuery(cq.id, 'Unauthorized.');
+    return;
+  }
+
+  const data = cq.data ?? '';
+  if (!data.startsWith('aqr:')) return;   // not ours — leave for future handlers
+
+  const parts    = data.split(':');       // ['aqr', '<id>', '1'|'0']
+  const id       = parts[1] ?? '';
+  const approved = parts[2] === '1';
+  if (!id) { await answerCallbackQuery(cq.id, 'Malformed action.'); return; }
+
+  let toast: string;
+  let outcomeLine: string;
+  try {
+    const outcome = await resolveQueued(id, approved);
+    switch (outcome.status) {
+      case 'executed':
+        toast       = outcome.result.error ? 'Ran with an error' : 'Done';
+        outcomeLine = outcome.result.error ? '⚠️ Approved — ran with an error (check logs).' : '✅ Approved and executed.';
+        break;
+      case 'denied':
+        toast = 'Dropped'; outcomeLine = '✖️ Denied — nothing ran.';
+        break;
+      case 'refused':
+        toast = 'Not run'; outcomeLine = `⚠️ Not run — ${outcome.reason}`;
+        break;
+      default: // 'unknown'
+        toast = 'No longer available'; outcomeLine = '⌛ No longer available (expired or already resolved).';
+        break;
+    }
+  } catch (err) {
+    console.error('[Telegram] resolveQueued error:', err);
+    toast = 'Error'; outcomeLine = '⚠️ Something went wrong resolving this. Check the server logs.';
+  }
+
+  await answerCallbackQuery(cq.id, toast);
+  if (cq.message?.message_id) {
+    await editQueueCardOutcome(cq.message.message_id, `*Autonomous action* — ${outcomeLine}`);
+  }
+}
+
 // Fetch pending updates from Telegram
 async function getUpdates(offset: number): Promise<TelegramUpdate[]> {
   const base = apiBase();
@@ -161,7 +312,7 @@ async function getUpdates(offset: number): Promise<TelegramUpdate[]> {
 
   try {
     const res = await fetch(
-      `${base}/getUpdates?offset=${offset}&timeout=${POLL_TIMEOUT}&allowed_updates=["message"]`
+      `${base}/getUpdates?offset=${offset}&timeout=${POLL_TIMEOUT}&allowed_updates=["message","callback_query"]`
     );
 
     if (!res.ok) {
@@ -281,6 +432,11 @@ export async function startPolling(): Promise<void> {
         // Handle each message — don't await, so the poll loop stays responsive
         handleMessage(update.message).catch((err: unknown) => {
           console.error('[Telegram] Unhandled error in handleMessage:', err);
+        });
+      } else if (update.callback_query) {
+        // Inline-button tap (Phase 5c queue card). Don't await — keep polling.
+        handleCallbackQuery(update.callback_query).catch((err: unknown) => {
+          console.error('[Telegram] Unhandled error in handleCallbackQuery:', err);
         });
       }
     }
