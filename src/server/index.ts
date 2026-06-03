@@ -23,6 +23,7 @@ import { mountFilesRoutes, ensureProjectsRoot } from './files-routes';
 import { mountVoiceRoutes, ensureVoicesDir, ensureWhisperModelsDir } from './voice-routes';
 import { mountMemoryRoutes, logMemoryBootCapability } from './memory-routes';
 import { mountApprovalRoutes } from './approval-routes';
+import { mountAutonomousQueueRoutes } from './autonomous-queue-routes';
 import { mountRenderRoute } from './render-route';
 import { runBackfill } from '../memory/backfill';
 import { seedDefaults as seedSkillDefaults } from '../skills/engine';
@@ -31,6 +32,7 @@ import { sendMessage } from '../telegram/bot';
 import { startCron, stopCron, setCronStatusEmitter } from '../cron';
 import { setAutonomousNotifier } from '../core/permission-broker';
 import { logGrantsAtBoot } from '../core/autonomous-grants';
+import { initQueue } from '../core/autonomous-queue';
 import {
   initBudget,
   initHeartbeatStore,
@@ -206,6 +208,15 @@ mountMemoryRoutes(app);
 // follow-up, scoped with the elevation / approval-UI phase.
 mountApprovalRoutes(app);
 
+// ---- AUTONOMOUS QUEUE ROUTES (v0.10 Phase 5a) ----
+// GET  /api/autonomous/queue          — pending layer-2 actions awaiting a human
+// POST /api/autonomous/queue/resolve  — { id, approved } -> run or drop
+// Unconditional mount: harmless no-ops when the queue is empty/disabled (list
+// returns [], resolve returns "unknown"). The enqueue side is gated in the
+// broker on agent.autonomous.queue.enabled, so with the flag off nothing is
+// ever queued and these endpoints simply report an empty queue.
+mountAutonomousQueueRoutes(app);
+
 // ---- CHAT ROUTE ----
 // POST /chat — the main endpoint
 // Client sends a message, gets back a NerdAlertResponse
@@ -305,6 +316,9 @@ app.listen(SERVER_PORT, () => {
   // v0.10 Phase 3: one-line summary of any autonomous grants loaded (dry-run).
   // No-op when none are configured, so a grant-free boot is byte-identical.
   logGrantsAtBoot();
+  // v0.10 Phase 5a: load + reap the durable autonomous queue (survives restart)
+  // and schedule its daily sweep. No-op surface when empty/disabled.
+  initQueue();
   console.log('');
 
 startTelegram().catch((err: unknown) => {
