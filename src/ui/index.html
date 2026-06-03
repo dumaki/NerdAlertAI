@@ -7305,13 +7305,13 @@
     card.innerHTML = `
       <div class="card-action">${item.action}</div>
       <div class="card-desc">${item.description}</div>
-      ${isFree ? `<div style="font-size:9px;color:var(--amber);letter-spacing:1px;margin-bottom:8px;line-height:1.5">
+      ${(isFree && !item.queueId) ? `<div style="font-size:9px;color:var(--amber);letter-spacing:1px;margin-bottom:8px;line-height:1.5">
         ⚠ Free tier — ${activeAgentName} will describe this action but not execute it.<br>
         Switch to Claude in Settings for full execution.
       </div>` : ''}
       <div class="card-buttons">
         <button class="card-btn approve" onclick="resolveCard(${idx}, true)">
-          ${isFree ? 'PROCEED ANYWAY' : 'APPROVE'}
+          ${(isFree && !item.queueId) ? 'PROCEED ANYWAY' : 'APPROVE'}
         </button>
         <button class="card-btn deny" onclick="resolveCard(${idx}, false)">DENY</button>
       </div>
@@ -7331,7 +7331,11 @@
     if (!item) return;
     item.resolved = true;
 
-    if (item.serverId) {
+    if (item.queueId) {
+      // Phase 5b — durable autonomous-queue card: resolve through the queue
+      // route so the broker runs (or drops) the parked action server-side.
+      resolveQueuedAction(item.queueId, approved);
+    } else if (item.serverId) {
       // Broker-driven card: resolve through the approval route so the broker
       // executes (or drops) the parked action server-side.
       resolveServerApproval(item.serverId, approved);
@@ -7417,6 +7421,71 @@
       appendErrorMessage('Approval request failed — the server may be down.');
     }
   }
+
+  // ── Phase 5b — durable autonomous queue (layer-2) ──────────────
+  // Cron-origin actions that needed a human and had no grant are parked
+  // server-side (autonomous-queue.ts) with no SSE to the web UI, so we POLL
+  // GET /api/autonomous/queue and surface each as a card in the SAME approval
+  // tray. Resolve routes to /api/autonomous/queue/resolve (sibling of the broker
+  // approval route). When the queue feature is off the list is simply empty, so
+  // this is a harmless no-op.
+  async function resolveQueuedAction(queueId, approved) {
+    try {
+      const r = await fetch('/api/autonomous/queue/resolve', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${CFG.token}` },
+        body:    JSON.stringify({ id: queueId, approved }),
+      });
+      const data = await r.json();
+      if (!data.ok) { appendErrorMessage(data.error || 'This queued action is no longer available.'); return; }
+      if (data.status === 'executed') {
+        renderResolvedToolResult(data.toolName, data.output, data.error);
+      } else if (data.status === 'refused') {
+        appendErrorMessage(`Action not run — ${data.reason || 'it is no longer runnable.'}`);
+      }
+      // 'denied': nothing ran, nothing to render.
+    } catch (e) {
+      appendErrorMessage('Failed to resolve the queued action — the server may be down.');
+    }
+  }
+
+  async function loadAutonomousQueue() {
+    if (!CFG || !CFG.token) return;
+    let items = [];
+    try {
+      const r = await fetch('/api/autonomous/queue', { headers: { 'Authorization': `Bearer ${CFG.token}` } });
+      const data = await r.json();
+      if (!data || !data.ok || !Array.isArray(data.items)) return;
+      items = data.items;
+    } catch (e) { return; }
+
+    const apiIds = new Set(items.map(i => i.id));
+    // Drop queue cards the server no longer lists (resolved elsewhere / expired),
+    // unless mid-resolve (already marked resolved). Non-queue cards are untouched.
+    pendingApprovals = pendingApprovals.filter(a => !a.queueId || a.resolved || apiIds.has(a.queueId));
+
+    const known = new Set(pendingApprovals.filter(a => a.queueId).map(a => a.queueId));
+    let added = 0;
+    for (const it of items) {
+      if (known.has(it.id)) continue;
+      pendingApprovals.push({
+        queueId:     it.id,
+        action:      it.title || it.toolName || 'Autonomous action',
+        description: it.description || '',
+        resolved:    false,
+      });
+      added++;
+    }
+    renderTray();
+    if (added > 0) openTray();   // surface the tray only when genuinely new items appear
+  }
+
+  // Poll on load + every 30s (cron enqueues with no SSE to the web UI). Same
+  // self-contained pattern as the other pollers; the empty-list case is free.
+  document.addEventListener('DOMContentLoaded', () => {
+    loadAutonomousQueue();
+    setInterval(loadAutonomousQueue, 30_000);
+  });
 
   // Render the outcome of an approved action as a tool-result block in chat,
   // mirroring the streaming tool_result card so the user sees what ran.
