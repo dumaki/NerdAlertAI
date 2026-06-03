@@ -349,6 +349,7 @@ async function autoApprove(
 ): Promise<BrokerResult> {
   const ceiling = Math.min(required, ctx.maxModelTrustLevel ?? Number.POSITIVE_INFINITY);
   const via = ctx.agentName ? ` (via ${ctx.agentName})` : '';
+  const grantRef = grant.id ?? grantSummary;   // greppable grant identity for the audit trail
 
   // INTENT before execution. For an L3+ action a failed audit write REFUSES the
   // op — no unaudited autonomous action (same fail-safe as the normal path).
@@ -357,6 +358,7 @@ async function autoApprove(
       ...auditCommon(call, ctx),
       params: call.args,
       trust: { required, ceiling, outcome: 'approved-by-grant' },
+      grantRef,
     });
     if (!intent.ok && required >= 3) {
       try {
@@ -419,6 +421,7 @@ async function autoApprove(
         effect: response.metadata?.auditEffect,
         result: 'ok',
         ms: Date.now() - startedAt,
+        grantRef,
       });
     }
 
@@ -453,6 +456,7 @@ async function autoApprove(
         result: 'error',
         ms: Date.now() - startedAt,
         error: message,
+        grantRef,
       });
     }
     try {
@@ -514,7 +518,7 @@ export async function executeTool(
       // this stays dry-run (logged, then denied); with no grants configured
       // every branch collapses to the exact Phase 2 behaviour (byte-identical).
       const grantEval = evaluateAutonomousGrant(
-        { name: call.name, args: call.args }, t, evalT.required, AUTONOMOUS_CEILING,
+        { name: call.name, args: call.args }, t, evalT.required, AUTONOMOUS_CEILING, origin,
       );
 
       // ── v0.10 Phase 4 — LIVE auto-approve ──────────────
