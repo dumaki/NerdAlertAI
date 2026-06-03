@@ -36,7 +36,7 @@ import {
 } from '../tools/registry';
 import { getPersonality } from '../personalities';
 import { getLLMConfig, getActiveModel, callOpenRouter, callOllama, callHosted, ORMessage } from './llm-client';
-import { executeTool, type BrokerContext } from './permission-broker';
+import { executeTool, type BrokerContext, type TriggerSource } from './permission-broker';
 import { getModelTrustCeiling } from './model-capabilities';
 import { findEnabledTool } from '../tools/registry';
 import { buildActiveProjectContext } from '../projects/active';
@@ -103,7 +103,14 @@ const MAX_ITERATIONS = 10;
 
 export async function chat(
   message: string,
-  history: Message[] = []
+  history: Message[] = [],
+  // v0.10 Phase 1 (L4 groundwork): optional turn origin. Defaults to a live
+  // human turn. Cron passes { trigger: 'cron', triggerId: <job id> }. Additive
+  // and optional, so every existing caller (the /chat route, the streaming
+  // path) is unchanged. Only consumed on the Anthropic tool-loop path below —
+  // the single-turn non-Anthropic path runs no tools, so there is no context
+  // to tag there.
+  opts: { trigger?: TriggerSource; triggerId?: string } = {}
 ): Promise<NerdAlertResponse> {
 
   // Resolve LLM config inside the request, not at module load. The
@@ -230,13 +237,25 @@ export async function chat(
       // viaSuffix is reused below to tag the per-turn Tool call /
       // Tool result / Tool error log lines.
       const agentName = config.agent.name;
-      const viaSuffix = ` (via ${agentName})`;
+      // v0.10 Phase 1: tag the per-turn log lines with the trigger origin when
+      // this is an autonomous turn, so a journalctl tail shows e.g.
+      // "(via Sherman | cron:morning-brief)". 'chat'/absent adds nothing, so
+      // human-turn log lines are unchanged. This is the Phase-1 "broker logs
+      // the trigger" surface; no gating reads it.
+      const originTag = opts.trigger && opts.trigger !== 'chat'
+        ? ` | ${opts.trigger}${opts.triggerId ? `:${opts.triggerId}` : ''}`
+        : '';
+      const viaSuffix = ` (via ${agentName}${originTag})`;
 
       const brokerContext: BrokerContext = {
         userTrustLevel:     config.agent.trust_level,
         maxModelTrustLevel: getModelTrustCeiling(getActiveModel()),
         modelLabel:         llm.model,
         agentName,
+        // v0.10 Phase 1: carry the turn origin into the broker context.
+        // Absent opts => 'chat'. The broker does not gate on this yet.
+        trigger:            opts.trigger ?? 'chat',
+        triggerId:          opts.triggerId,
       };
 
       for (const toolCall of toolUseBlocks) {

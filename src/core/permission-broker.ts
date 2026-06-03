@@ -45,6 +45,16 @@ import type { NerdAlertResponse, Source } from '../types/response.types';
 
 // ── Types ────────────────────────────────────────────────────
 
+/**
+ * Origin of a turn (v0.10 Phase 1 — L4 groundwork). 'chat' is a live human
+ * turn — the default everywhere today. 'cron'/'heartbeat' mark an autonomous
+ * trigger (no human present at fire time). Carried on BrokerContext so later
+ * L4 phases can resolve approval differently for an unattended action; in
+ * Phase 1 the broker makes NO gating decision from it — it is carried and
+ * logged only, so a turn with trigger absent is byte-identical to today.
+ */
+export type TriggerSource = 'chat' | 'cron' | 'heartbeat';
+
 /** What every adapter passes in when a tool call is ready to run. */
 export interface BrokerToolCall {
   /** Stable correlation ID, unique within a turn. */
@@ -90,6 +100,16 @@ export interface BrokerContext {
    * it's diagnostic metadata for log emitters. v0.6.3.4 (Q4).
    */
   agentName?: string;
+  /**
+   * Origin of this turn (v0.10 Phase 1 — L4 groundwork). Absent => 'chat'
+   * (a live human turn), the default on every existing call. 'cron'/'heartbeat'
+   * mark an autonomous trigger. The broker does NOT gate on this in Phase 1;
+   * it is diagnostic metadata only (same posture as agentName). Later L4
+   * phases read it to route approval for an unattended action. triggerId names
+   * the specific source (e.g. a cron job id) for the audit trail.
+   */
+  trigger?: TriggerSource;
+  triggerId?: string;
 }
 
 /** Standardized result every adapter receives. */

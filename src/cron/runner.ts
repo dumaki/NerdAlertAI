@@ -109,7 +109,10 @@ export async function runJob(job: CronJob, scheduledAt: Date): Promise<void> {
   try {
     // Run the agent with the job's prompt.
     // Empty history — cron jobs are always stateless one-shots.
-    const response = await chat(job.prompt, []);
+    // v0.10 Phase 1: tag this turn as a cron-origin autonomous trigger so the
+    // broker context carries it. No behavior change — the broker does not gate
+    // on the trigger yet; this is the wiring later L4 phases build on.
+    const response = await chat(job.prompt, [], { trigger: 'cron', triggerId: job.id });
     const duration = Date.now() - startMs;
     const output   = response.content;
 
@@ -221,7 +224,7 @@ export async function runCatchUp(
       `[NOTE: This is a delayed run. The scheduled time was ${missedStr} but the server was offline. ` +
       `Acknowledge this briefly, then proceed normally.]\n\n${job.prompt}`;
 
-    const response = await chat(catchUpPrompt, []);
+    const response = await chat(catchUpPrompt, [], { trigger: 'cron', triggerId: job.id });
     const duration = Date.now() - startMs;
 
     logRun({
