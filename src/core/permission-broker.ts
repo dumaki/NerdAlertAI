@@ -324,6 +324,24 @@ export function setAutonomousNotifier(fn: (message: string) => void): void {
   autonomousNotifier = fn;
 }
 
+// v0.10 Phase 5c — structured queue-card sink (Telegram inline buttons). Like
+// autonomousNotifier, injected at boot so the broker stays Telegram-free. When
+// set, enqueueAutonomous emits a tappable APPROVE/DENY card instead of the plain
+// text notice; when unset (Telegram off, or hook not wired) the text-notice path
+// is used, so a button-less setup is byte-identical.
+export interface QueuedCardNotice {
+  id:          string;
+  title:       string;
+  description: string;
+  toolName:    string;
+  origin:      string;
+  required:    number;
+}
+let autonomousQueueNotifier: ((card: QueuedCardNotice) => void) | null = null;
+export function setAutonomousQueueNotifier(fn: (card: QueuedCardNotice) => void): void {
+  autonomousQueueNotifier = fn;
+}
+
 // ── Autonomous queue: enqueue (v0.10 Phase 5a) ───────
 //
 // Layer 2 of the resolver. An in-reach (≤ ceiling) autonomous action that needs
@@ -403,14 +421,28 @@ async function enqueueAutonomous(
     });
   }
 
+  // Prefer the structured card sink (Telegram inline buttons, Phase 5c) so the
+  // action can be approved/denied from the phone; fall back to the plain text
+  // notice when no card sink is wired, keeping a button-less setup unchanged.
   try {
-    autonomousNotifier?.(
-      `📥 *Autonomous action queued for approval*\n` +
-      `Trigger: \`${origin}\`\n` +
-      `Tool: \`${call.name}\`${actionPart} (L${required})\n` +
-      `${why}\n` +
-      `Nothing ran. Approve it later from the tray. (id: \`${res.entry.id}\`)`,
-    );
+    if (autonomousQueueNotifier) {
+      autonomousQueueNotifier({
+        id:          res.entry.id,
+        title,
+        description,
+        toolName:    call.name,
+        origin,
+        required,
+      });
+    } else {
+      autonomousNotifier?.(
+        `📥 *Autonomous action queued for approval*\n` +
+        `Trigger: \`${origin}\`\n` +
+        `Tool: \`${call.name}\`${actionPart} (L${required})\n` +
+        `${why}\n` +
+        `Nothing ran. Approve it later from the tray. (id: \`${res.entry.id}\`)`,
+      );
+    }
   } catch { /* notify failure must never break the broker */ }
 
   console.log(`[NerdAlert] Autonomous QUEUED ${call.name} from ${origin} (id: ${res.entry.id})${via}`);
