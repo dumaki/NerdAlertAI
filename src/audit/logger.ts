@@ -126,9 +126,25 @@ export function getAuditDir(): string {
   const envDir = process.env.NERDALERT_AUDIT_DIR
   if (envDir && envDir.trim()) return expandTilde(envDir.trim())
 
-  const cfg = config.logging?.log_dir
-  if (cfg && cfg.trim()) {
-    const expanded = expandTilde(cfg.trim())
+  const cfg = config.logging?.log_dir?.trim()
+
+  // Legacy first-run baseline (v0.10 Phase 2 fix). The committed config.yaml
+  // ships `log_dir: ./logs`. The relative-pinning rule below would resolve that
+  // to ~/.nerdalert/logs — a stale location that never matches the operator's
+  // ~/.nerdalert/audit edit (that edit is local-only and never committed, so it
+  // does NOT reach a fresh install). Treat the legacy relative sentinel
+  // (./logs | logs, any case, optional trailing slash) the same as an absent or
+  // empty value: the canonical ~/.nerdalert/audit, so a new install is correct
+  // out of the box. An operator's ABSOLUTE path (the recommended setting) is
+  // still honored verbatim below, and any OTHER relative path still pins under
+  // ~/.nerdalert. Code-only — no installer/config/setup change needed.
+  const isLegacyDefault =
+    cfg !== undefined &&
+    !path.isAbsolute(cfg) &&
+    cfg.replace(/^\.\/+/, '').replace(/\/+$/, '').toLowerCase() === 'logs'
+
+  if (cfg && !isLegacyDefault) {
+    const expanded = expandTilde(cfg)
     if (path.isAbsolute(expanded)) return expanded
     // Relative => pin under ~/.nerdalert (strip a leading ./), never cwd.
     return path.join(os.homedir(), '.nerdalert', expanded.replace(/^\.\/+/, ''))
