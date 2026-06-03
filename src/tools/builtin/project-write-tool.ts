@@ -66,11 +66,18 @@ async function doWrite(project: string, params: Record<string, unknown>): Promis
   }
 
   const st = await editStatus(root)
-  return text(
-    `${existed ? 'Updated' : 'Created'} "${project}/${relPath}" on edit branch ${branch} (commit ${sha}). ` +
-    `${st.commitsAhead} edit${st.commitsAhead === 1 ? '' : 's'} pending vs ${st.base} — nothing has changed on ${st.base}. ` +
-    `To apply, merge ${branch} into ${st.base}.`
-  )
+  return {
+    type: 'text',
+    content:
+      `${existed ? 'Updated' : 'Created'} "${project}/${relPath}" on edit branch ${branch} (commit ${sha}). ` +
+      `${st.commitsAhead} edit${st.commitsAhead === 1 ? '' : 's'} pending vs ${st.base} — nothing has changed on ${st.base}. ` +
+      `To apply, merge ${branch} into ${st.base}.`,
+    metadata: {
+      // v0.10 Phase 1.5: git recovery handle for the audit log (the prior
+      // version of an overwritten file is this commit's parent on the branch).
+      auditEffect: { kind: existed ? 'overwrite' : 'create', target: `${project}/${relPath}`, commit: sha, branch },
+    },
+  }
 }
 
 async function doStatus(project: string): Promise<NerdAlertResponse> {
@@ -179,10 +186,17 @@ async function doMerge(project: string, params: Record<string, unknown>, exec?: 
   if (!result.merged) {
     return text(`Merge not applied. ${result.reason} ${st.base} is unchanged; use the 'project' tool to inspect it.`)
   }
-  return text(
-    `Applied ${st.commitsAhead} commit${st.commitsAhead === 1 ? '' : 's'} from ${st.branch} onto ${st.base} (now at ${result.head}). ` +
-    `${st.base} is up to date; edit branch ${st.branch} is kept for reference.`
-  )
+  return {
+    type: 'text',
+    content:
+      `Applied ${st.commitsAhead} commit${st.commitsAhead === 1 ? '' : 's'} from ${st.branch} onto ${st.base} (now at ${result.head}). ` +
+      `${st.base} is up to date; edit branch ${st.branch} is kept for reference.`,
+    metadata: {
+      // v0.10 Phase 1.5: git recovery handle for the audit log (base moved from
+      // its prior HEAD to result.head by these commits).
+      auditEffect: { kind: 'merge', target: project, branch: st.branch, base: st.base, head: result.head },
+    },
+  }
 }
 
 const projectWriteTool: NerdAlertTool = {

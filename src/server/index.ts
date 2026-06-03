@@ -48,6 +48,7 @@ import { logAvailableTools } from '../tools/registry';
 import { initTimerState, stopTimerState } from './timer-state';
 import { selfCheckEnv, logEnvSelfCheck } from '../security/env-self-check';
 import { installConsoleRedaction } from '../security/safe-console';
+import { initAuditRetention } from '../audit/logger';
 
 // ──────────────────────────────────────────────────────────────────
 // Install console redaction FIRST, before any other top-level statement.
@@ -60,6 +61,10 @@ import { installConsoleRedaction } from '../security/safe-console';
 // String(arg).join(' '). See src/security/safe-console.ts.
 // ──────────────────────────────────────────────────────────────────
 installConsoleRedaction();
+// v0.10 Phase 1.5: prune expired audit files now and schedule a daily sweep
+// (a server-process timer, off every agent/cron path). No-op when logging is
+// disabled. Runs at boot, independent of cron/heartbeat.
+initAuditRetention();
 
 // Catch unhandled promise rejections globally
 // The Anthropic SDK throws APIUserAbortError when the browser disconnects

@@ -42,6 +42,7 @@ import { randomUUID } from 'crypto';
 import { findTool, effectiveTrustLevelOf, isToolEnabled } from '../tools/registry';
 import { config } from '../config/loader';
 import type { NerdAlertResponse, Source } from '../types/response.types';
+import { recordIntent, recordOutcome } from '../audit/logger';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -110,6 +111,13 @@ export interface BrokerContext {
    */
   trigger?: TriggerSource;
   triggerId?: string;
+  /**
+   * v0.10 Phase 1.5 — one id shared by every audit record from a single turn,
+   * so a multi-step (especially autonomous) run groups as one unit in the log.
+   * Set once per turn in agent.ts; absent on callers that don't set it (the
+   * record simply omits it). The broker never gates on it.
+   */
+  correlationId?: string;
 }
 
 /** Standardized result every adapter receives. */
@@ -235,6 +243,35 @@ function checkTrust(call: BrokerToolCall, ctx: BrokerContext): string | null {
   return null;
 }
 
+// ── Audit bridge (v0.10 Phase 1.5) ────────────────────────
+//
+// The broker is the single chokepoint, so recording here captures every tool
+// call by construction. log_tool_calls gates EXECUTION records (intent/outcome
+// and trust/ceiling denials); log_approvals gates HUMAN approve/deny decisions.
+// The logger self-gates on logging.enabled, so with logging (or these flags)
+// off, every call below is a no-op and behaviour is byte-identical.
+function auditToolCallsOn(): boolean { return config.logging?.log_tool_calls === true; }
+function auditApprovalsOn(): boolean { return config.logging?.log_approvals === true; }
+
+// Fields pulled from the call + context; ts/id are stamped by the logger,
+// correlationId rides on ctx.
+function auditCommon(call: BrokerToolCall, ctx: BrokerContext) {
+  return {
+    correlationId: ctx.correlationId,
+    trigger:       ctx.trigger,
+    triggerId:     ctx.triggerId,
+    personality:   ctx.agentName,
+    model:         ctx.modelLabel,
+    tool:          call.name,
+    action:        typeof call.args?.action === 'string' ? (call.args.action as string) : undefined,
+  };
+}
+
+// Standing ceiling for a denial record (no elevation in play on a denial).
+function standingCeiling(ctx: BrokerContext): number {
+  return Math.min(ctx.userTrustLevel, ctx.maxModelTrustLevel ?? Number.POSITIVE_INFINITY);
+}
+
 // ── Public: executeTool ──────────────────────────────────────
 //
 // Runs a tool call through the gate and returns a BrokerResult.
@@ -245,8 +282,27 @@ export async function executeTool(
   call: BrokerToolCall,
   ctx: BrokerContext,
 ): Promise<BrokerResult> {
+  // evaluateTrust gives the structured result (required level + which gate
+  // blocks) for the audit record; checkTrust gives the exact denial message.
+  const evalT = evaluateTrust(call, ctx);
   const denialReason = checkTrust(call, ctx);
   if (denialReason) {
+    // Record trust/ceiling denials (the "blocked by ceiling on <model>" case).
+    // not-found / disabled are config or hallucination noise, not security
+    // events, so they are left unrecorded.
+    if (auditToolCallsOn() && evalT.found && (evalT.overModelCeiling || evalT.overUserGate)) {
+      recordOutcome({
+        ...auditCommon(call, ctx),
+        params: call.args,
+        trust: {
+          required: evalT.required,
+          ceiling: standingCeiling(ctx),
+          outcome: evalT.overModelCeiling ? 'denied-by-ceiling' : 'denied-by-trust',
+        },
+        result: 'error',
+        error: denialReason,
+      });
+    }
     return {
       id: call.id,
       name: call.name,
@@ -257,27 +313,57 @@ export async function executeTool(
   }
 
   // checkTrust already verified findTool() returns a value, so this
-  // assertion is safe. Fresh lookup so we always use the current
-  // registry state (config hot-reloads aren't a thing yet, but
-  // belt-and-braces keeps this honest).
+  // assertion is safe.
   const tool = findTool(call.name)!;
 
-  // Effective ceiling forwarded into execute() so a tool's per-action gate can
-  // honor the per-model cap, not just global trust (v0.8 1a). undefined cap => Infinity.
-  // A parked ELEVATION action (v0.8.x Slice 3a) carries elevatedCeiling: when
-  // present it replaces userTrustLevel here, so the human-approved re-run clears
-  // the user gate for that one action. It is still min'd with the model ceiling,
-  // which therefore stays a hard cap. Absent => byte-identical.
+  // Effective ceiling forwarded into execute() (v0.8 1a). A parked ELEVATION
+  // action carries elevatedCeiling, which replaces userTrustLevel here so the
+  // human-approved re-run clears the user gate for that one action; it is still
+  // min'd with the model ceiling (a hard cap). Absent => byte-identical.
   const effectiveTrustCeiling = Math.min(
     ctx.elevatedCeiling ?? ctx.userTrustLevel,
     ctx.maxModelTrustLevel ?? Number.POSITIVE_INFINITY,
   );
 
+  // INTENT before execution (v0.10 Phase 1.5). For an L3+ action a failed audit
+  // write REFUSES the op — fail-safe = refuse, no unaudited destruction (the
+  // snapshots.ts SNAPSHOT_FAILED posture). Below L3, best-effort.
+  if (auditToolCallsOn()) {
+    const intent = recordIntent({
+      ...auditCommon(call, ctx),
+      params: call.args,
+      trust: { required: evalT.required, ceiling: effectiveTrustCeiling, outcome: 'allowed' },
+    });
+    if (!intent.ok && evalT.required >= 3) {
+      return {
+        id: call.id,
+        name: call.name,
+        output:
+          `Error: refusing "${call.name}" — trust level ${evalT.required} requires an ` +
+          `audit record and the audit log could not be written (${intent.reason ?? 'unknown'}). ` +
+          `No L3+ action runs unaudited.`,
+        error: true,
+        sources: [],
+      };
+    }
+  }
+
+  const startedAt = Date.now();
   try {
     const response: NerdAlertResponse = await tool.execute(call.args, { effectiveTrustCeiling });
     const output = typeof response.content === 'string'
       ? response.content
       : JSON.stringify(response.content);
+
+    if (auditToolCallsOn()) {
+      recordOutcome({
+        ...auditCommon(call, ctx),
+        trust: { required: evalT.required, ceiling: effectiveTrustCeiling, outcome: 'allowed' },
+        effect: response.metadata?.auditEffect,
+        result: 'ok',
+        ms: Date.now() - startedAt,
+      });
+    }
 
     return {
       id: call.id,
@@ -288,6 +374,15 @@ export async function executeTool(
     };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
+    if (auditToolCallsOn()) {
+      recordOutcome({
+        ...auditCommon(call, ctx),
+        trust: { required: evalT.required, ceiling: effectiveTrustCeiling, outcome: 'allowed' },
+        result: 'error',
+        ms: Date.now() - startedAt,
+        error: message,
+      });
+    }
     return {
       id: call.id,
       name: call.name,
@@ -356,6 +451,18 @@ export async function executeOrPropose(
   // never carded.
   const evalT = evaluateTrust(call, ctx);
   if (!evalT.found || !evalT.enabled || evalT.overModelCeiling) {
+    // Record an above-ceiling denial on the card path (e.g. an L3 write a
+    // capped model attempts). found+enabled+overModelCeiling is the security-
+    // relevant one; not-found/disabled stay unrecorded, as in executeTool.
+    if (auditToolCallsOn() && evalT.found && evalT.enabled && evalT.overModelCeiling) {
+      recordOutcome({
+        ...auditCommon(call, ctx),
+        params: call.args,
+        trust: { required: evalT.required, ceiling: standingCeiling(ctx), outcome: 'denied-by-ceiling' },
+        result: 'error',
+        error: checkTrust(call, ctx) ?? undefined,
+      });
+    }
     return { id: call.id, name: call.name, output: `Error: ${checkTrust(call, ctx)}`, error: true, sources: [] };
   }
   // A USER-gate block is elevatable ONLY when the operator opted in
@@ -364,6 +471,15 @@ export async function executeOrPropose(
   const allowElevation = config.agent?.allow_elevation === true;
   const userGateElevation = evalT.overUserGate && allowElevation;
   if (evalT.overUserGate && !userGateElevation) {
+    if (auditToolCallsOn()) {
+      recordOutcome({
+        ...auditCommon(call, ctx),
+        params: call.args,
+        trust: { required: evalT.required, ceiling: standingCeiling(ctx), outcome: 'denied-by-trust' },
+        result: 'error',
+        error: checkTrust(call, ctx) ?? undefined,
+      });
+    }
     return { id: call.id, name: call.name, output: `Error: ${checkTrust(call, ctx)}`, error: true, sources: [] };
   }
 
@@ -506,6 +622,14 @@ export async function resolveApproval(
   PROPOSED.delete(id); // single-use
 
   if (!approved) {
+    if (auditApprovalsOn()) {
+      const e = evaluateTrust(action.call, action.context);
+      recordOutcome({
+        ...auditCommon(action.call, action.context),
+        params: action.call.args,
+        trust: { required: e.required, ceiling: standingCeiling(action.context), outcome: 'denied-by-human' },
+      });
+    }
     return { status: 'denied', action };
   }
 
@@ -517,6 +641,21 @@ export async function resolveApproval(
   if (action.context.elevatedCeiling !== undefined) {
     const via = action.context.agentName ? ` (via ${action.context.agentName})` : '';
     console.log(`[NerdAlert] Elevation APPLIED: ${action.call.name} running once at L${action.context.elevatedCeiling} (standing L${action.context.userTrustLevel})${via}`);
+  }
+  // Record the human approval (log_approvals). The execution that follows logs
+  // its own intent/outcome under log_tool_calls; the shared correlationId ties
+  // the approval to the run.
+  if (auditApprovalsOn()) {
+    const e = evaluateTrust(action.call, action.context);
+    recordOutcome({
+      ...auditCommon(action.call, action.context),
+      params: action.call.args,
+      trust: {
+        required: e.required,
+        ceiling: Math.min(action.context.elevatedCeiling ?? action.context.userTrustLevel, action.context.maxModelTrustLevel ?? Number.POSITIVE_INFINITY),
+        outcome: 'approved-by-human',
+      },
+    });
   }
   const result = await executeTool(action.call, action.context);
   return { status: 'executed', result };

@@ -51,6 +51,7 @@ import { redact } from '../security/secret-scanner'
 // ── Tunables / defaults ──────────────────────────────────────────────────────
 const DEFAULT_RETENTION_DAYS = 90        // 0 in config => keep forever
 const DAY_MS = 24 * 60 * 60 * 1000
+const MAX_VALUE_CHARS = 512              // cap on any single string value (see deepRedact)
 
 // ── Record shape ─────────────────────────────────────────────────────────────
 // One JSON object per line. `intent` is written before an L3+ destructive op
@@ -160,7 +161,15 @@ function dailyFilePath(dir: string, when: Date): string {
 // cleanly, so every line is always valid JSON. KEYS are untouched (field names);
 // paths/IPs/recipients have no rule => pass through.
 function deepRedact(value: unknown): unknown {
-  if (typeof value === 'string') return redact(value)
+  if (typeof value === 'string') {
+    // The audit log is a forensic INDEX, not a content store — the bytes of a
+    // large value (e.g. a project_write `content` arg up to ~1MB) live in git /
+    // the snapshot, not here. Cap after redaction so a record line stays
+    // bounded regardless of caller. 512 is ample for paths/IPs/recipients/
+    // actions/errors.
+    const r = redact(value)
+    return r.length > MAX_VALUE_CHARS ? r.slice(0, MAX_VALUE_CHARS) + `…[+${r.length - MAX_VALUE_CHARS} chars]` : r
+  }
   if (Array.isArray(value)) return value.map(deepRedact)
   if (value && typeof value === 'object') {
     const out: Record<string, unknown> = {}

@@ -102,6 +102,13 @@ export interface ResponseMeta {
   // (human Approve runs it once at N; standing trust is unchanged) and never
   // crosses the per-model ceiling. Absent => ordinary permitted-level approval.
   elevationRequired?: number;
+
+  // --- AUDIT EFFECT (v0.10 Phase 1.5) ---
+  // Optional recovery handle a mutating tool surfaces for the audit log; the
+  // broker copies it verbatim into the action record's `effect`. Open-ended so
+  // each tool attaches what it has — project_write: { kind, target, commit,
+  // branch } (git handle); a documents write: { ..., snapshot } (snapshot path).
+  auditEffect?: { kind?: string; target?: string; [k: string]: unknown };
 }
 
 

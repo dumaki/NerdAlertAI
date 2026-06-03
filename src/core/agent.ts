@@ -25,6 +25,7 @@
 // See llm-client.ts for explanation of this tradeoff.
 // ============================================================
 
+import { randomUUID } from 'crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config/loader';
 import { NerdAlertResponse } from '../types/response.types';
@@ -187,6 +188,11 @@ export async function chat(
   const availableTools  = getModelVisibleTools(getModelTrustCeiling(getActiveModel()));
   const anthropicTools  = toAnthropicFormat(availableTools);
 
+  // v0.10 Phase 1.5: one correlation id per chat() turn, shared by every tool
+  // call across all ReAct iterations, so the audit log groups a multi-step
+  // (especially autonomous) run as one unit.
+  const correlationId = randomUUID();
+
   let iterations = 0;
 
   while (iterations < MAX_ITERATIONS) {
@@ -256,6 +262,8 @@ export async function chat(
         // Absent opts => 'chat'. The broker does not gate on this yet.
         trigger:            opts.trigger ?? 'chat',
         triggerId:          opts.triggerId,
+        // v0.10 Phase 1.5: per-turn correlation id for the audit trail.
+        correlationId,
       };
 
       for (const toolCall of toolUseBlocks) {
