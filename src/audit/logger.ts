@@ -104,6 +104,12 @@ export interface AuditRecordInput {
   // refused action. Diagnostic only; nothing auto-ran in Phase 3. Omitted
   // entirely when no grants are configured (off-state byte-identical).
   grantDryRun?:   { wouldApprove: boolean; grant?: string; reason?: string }
+  // v0.10 Phase 4.1: the grant id (or compact summary) that authorized a LIVE
+  // auto-approval (outcome 'approved-by-grant'). Stamped on both the intent and
+  // outcome records so the forensic trail names which standing grant fired —
+  // the durable counterpart to the design's approved-by-grant:<id>. Omitted on
+  // every non-auto-approval record.
+  grantRef?:      string
 }
 
 export interface AuditWriteResult {

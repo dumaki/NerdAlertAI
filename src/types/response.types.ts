@@ -226,7 +226,17 @@ export interface ToolGroupConfig {
 // In Phase 3 the matcher evaluates these in DRY-RUN only (logs "WOULD
 // AUTO-APPROVE"); nothing auto-runs until Phase 4.
 export interface AutonomousGrant {
+  id?: string;             // v0.10 Phase 4.1 — optional operator label. Stamped into
+                           //   the durable audit record (grantRef) and every log /
+                           //   Telegram line so the trail is greppable by which standing
+                           //   grant fired. Omit = the compact summary is used instead.
   tool: string;            // required — the tool name this grant authorizes
+  trigger?: string;        // v0.10 Phase 4.1 — the autonomous source allowed to invoke
+                           //   this: `cron:<jobId>` (exact) or `cron` (any cron job).
+                           //   Omitted: the matcher leaves it unconstrained (so Phase 3
+                           //   dry-run is unchanged), but the LIVE gate fails closed — a
+                           //   grant must name its trigger to auto-approve, mirroring the
+                           //   max_per_hour arming rule.
   actions?: string[];      // optional — allowed values of the call's `action` arg
                            //   (for multi-action tools); omit = any action
   scopes?: string[];       // optional — allow-list of targets (IPv4/CIDR or exact

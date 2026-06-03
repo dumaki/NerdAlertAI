@@ -88,11 +88,13 @@ function scopeEntryMatches(entry: string, target: string): boolean {
 // ── Grant summary (for logs / audit) ─────────────────────────
 function summarize(g: AutonomousGrant): string {
   const parts = [g.tool]
+  if (g.trigger) parts.push(`trigger=${g.trigger}`)
   if (g.actions?.length) parts.push(`actions=[${g.actions.join(',')}]`)
   if (g.scopes?.length)  parts.push(`scopes=[${g.scopes.join(',')}]`)
   if (typeof g.max_per_hour === 'number') parts.push(`max_per_hour=${g.max_per_hour}`)
   if (g.expires) parts.push(`expires=${g.expires}`)
-  return parts.join(' ')
+  const body = parts.join(' ')
+  return g.id ? `[${g.id}] ${body}` : body
 }
 
 // ── Single-grant test ────────────────────────────────────────
@@ -104,12 +106,25 @@ function matchOne(
   tool: NerdAlertTool | undefined,
   requiredLevel: number,
   autonomousCeiling: number,
+  triggerKey: string,
 ): string | null {
   if (!g || typeof g.tool !== 'string' || !g.tool.trim()) return 'malformed grant (no tool)'
   if (requiredLevel > autonomousCeiling) {
     return `action L${requiredLevel} is above the autonomous ceiling L${autonomousCeiling}`
   }
   if (g.tool !== call.name) return `tool mismatch (grant is for ${g.tool})`
+
+  // Trigger allow-list (v0.10 Phase 4.1). When the grant names a trigger, the
+  // firing source must match it — either the full `cron:<jobId>` key or the bare
+  // source (`cron`, any job). Omitted => unconstrained HERE; the LIVE gate
+  // separately fails closed on an unnamed trigger, so the matcher stays
+  // permissive and the Phase 3 dry-run keeps reporting matches.
+  if (g.trigger) {
+    const bareSource = triggerKey.split(':')[0]
+    if (g.trigger !== triggerKey && g.trigger !== bareSource) {
+      return `trigger "${triggerKey}" not authorized (grant trigger: ${g.trigger})`
+    }
+  }
 
   // Expiry — unparseable fails closed.
   if (g.expires) {
@@ -146,6 +161,7 @@ export function evaluateAutonomousGrant(
   tool: NerdAlertTool | undefined,
   requiredLevel: number,
   autonomousCeiling: number,
+  triggerKey: string,
 ): GrantDryRunResult {
   const grants = config.agent?.autonomous?.grants
   if (!Array.isArray(grants) || grants.length === 0) {
@@ -155,7 +171,7 @@ export function evaluateAutonomousGrant(
   let sameToolReason: string | null = null
   let lastReason = 'no matching grant'
   for (const g of grants) {
-    const reason = matchOne(g, call, tool, requiredLevel, autonomousCeiling)
+    const reason = matchOne(g, call, tool, requiredLevel, autonomousCeiling, triggerKey)
     if (reason === null) {
       return { configured: true, wouldApprove: true, grant: summarize(g), matchedGrant: g }
     }

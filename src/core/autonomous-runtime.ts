@@ -116,7 +116,8 @@ function writeJson(file: string, data: unknown): void {
 export function grantRateKey(g: AutonomousGrant): string {
   const actions = (g.actions ?? []).slice().sort().join(',')
   const scopes  = (g.scopes  ?? []).slice().sort().join(',')
-  return `${g.tool}|a=${actions}|s=${scopes}`
+  const trigger = g.trigger ?? ''
+  return `${g.tool}|t=${trigger}|a=${actions}|s=${scopes}`
 }
 
 // ── State shapes ─────────────────────────────────────────────
@@ -141,6 +142,14 @@ export function evaluateAutonomousLiveGate(grant: AutonomousGrant): LiveGateResu
   // operator must set max_per_hour to arm it.)
   if (typeof grant.max_per_hour !== 'number' || grant.max_per_hour <= 0) {
     return { ok: false, reason: 'grant has no positive max_per_hour (fail-closed; set a rate limit to arm it)' }
+  }
+
+  // Fail-closed: a live grant must NAME its trigger source (v0.10 Phase 4.1,
+  // approved decision (b)). The matcher stays permissive for an unnamed trigger
+  // so the dry-run still reports the match, but auto-approve will not fire until
+  // the operator scopes the grant to `cron:<jobId>` (or the bare `cron`).
+  if (typeof grant.trigger !== 'string' || !grant.trigger.trim()) {
+    return { ok: false, reason: 'grant does not name a trigger source (fail-closed; set `trigger` to arm it)' }
   }
 
   if (isKillSwitchEngaged()) {
