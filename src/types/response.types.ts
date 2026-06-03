@@ -284,6 +284,14 @@ export interface AgentConfig {
       enabled?: boolean;
       grants?: AutonomousGrant[];
       breaker?: { max_in_window?: number; window_minutes?: number };
+      // v0.10 Phase 5 — durable async queue for in-reach (≤ ceiling) autonomous
+      // actions that need a human and have no matching grant. `enabled` is the
+      // opt-in: absent/false (default) => the floor hard-denies exactly as Phase
+      // 2–4 (byte-identical); true => such actions are persisted to
+      // ~/.nerdalert/autonomous/queue.json, notified, and approvable later.
+      // `ttl_hours` expires a stale entry (default 24; 0 = keep forever).
+      // Operator-only, same invariant as grants/trust_level.
+      queue?: { enabled?: boolean; ttl_hours?: number };
     };
   };
   server: {
