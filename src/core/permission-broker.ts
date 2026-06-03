@@ -41,7 +41,7 @@ import { randomUUID } from 'crypto';
 
 import { findTool, effectiveTrustLevelOf, isToolEnabled } from '../tools/registry';
 import { config } from '../config/loader';
-import type { NerdAlertResponse, Source } from '../types/response.types';
+import type { NerdAlertResponse, Source, NerdAlertTool } from '../types/response.types';
 import { recordIntent, recordOutcome } from '../audit/logger';
 
 // ── Types ────────────────────────────────────────────────────
@@ -272,6 +272,54 @@ function standingCeiling(ctx: BrokerContext): number {
   return Math.min(ctx.userTrustLevel, ctx.maxModelTrustLevel ?? Number.POSITIVE_INFINITY);
 }
 
+// ── Autonomous floor (v0.10 Phase 2) ─────────────────
+//
+// The hard-deny FLOOR for an autonomous trigger (cron/heartbeat). Cron routes
+// through executeTool() DIRECTLY (agent.chat -> ReAct loop -> executeTool),
+// never through executeOrPropose's approval-card path — so an action that would
+// need a human card on the streaming path has, today, no gate here at all: a
+// requiresApproval tool whose trust level is within reach would just RUN
+// unattended, and an above-trust one denies generically. Phase 2 makes the
+// dead-end explicit and safe: an autonomous action that would need a human
+// (approval/elevation) OR is above the autonomous ceiling is hard-denied,
+// recorded, and notified. No grants/queue yet (Phase 3/5) — this is only the
+// floor; later phases relax specific paths ABOVE it.
+//
+// AUTONOMOUS_CEILING (L3): per the approved L4 design, L4/L5 are NEVER
+// autonomous (L5 always denied). An action above L3 fails the floor regardless
+// of its approval flag.
+const AUTONOMOUS_CEILING = 3;
+
+// A turn is autonomous when its trigger is present and not the live-human
+// 'chat' default. agent.ts sets ctx.trigger to (opts.trigger ?? 'chat'), so a
+// human turn (the /chat route, the streaming path, Telegram) is always
+// 'chat'/absent and never trips the floor.
+function isAutonomous(ctx: BrokerContext): boolean {
+  return !!ctx.trigger && ctx.trigger !== 'chat';
+}
+
+// Resolve a tool's approval requirement for a SPECIFIC call. requiresApproval is
+// either a plain boolean or a predicate over the args (so a multi-action tool —
+// project_write, nmap — cards only its dangerous action/targets). Extracted so
+// the autonomous floor (executeTool) and the human card path (executeOrPropose)
+// evaluate it identically; a plain true behaves exactly as before.
+function callNeedsApproval(tool: NerdAlertTool | undefined, args: Record<string, unknown>): boolean {
+  const ra = tool?.requiresApproval;
+  return typeof ra === 'function' ? ra(args) === true : ra === true;
+}
+
+// The autonomous-floor notifier is an INJECTED hook (set once at boot in
+// server/index.ts), not a static import: the broker is core, and importing
+// telegram/bot directly would cycle (broker -> telegram/bot -> agent ->
+// broker). Unset => no push (the deny + audit still happen); the wired
+// sendMessage self-gates when Telegram isn't configured, so a disabled telegram
+// module is a safe no-op. Same inject-at-boot shape as the cron runner's
+// emitCronStatus.
+let autonomousNotifier: ((message: string) => void) | null = null;
+export function setAutonomousNotifier(fn: (message: string) => void): void {
+  autonomousNotifier = fn;
+}
+
 // ── Public: executeTool ──────────────────────────────────────
 //
 // Runs a tool call through the gate and returns a BrokerResult.
@@ -285,6 +333,69 @@ export async function executeTool(
   // evaluateTrust gives the structured result (required level + which gate
   // blocks) for the audit record; checkTrust gives the exact denial message.
   const evalT = evaluateTrust(call, ctx);
+
+  // ── Autonomous floor (v0.10 Phase 2) ──────────────────────
+  // For an autonomous trigger (cron/heartbeat), refuse any action that would
+  // need a human — a requiresApproval tool/target, or anything above the
+  // autonomous ceiling (L4/L5) — BEFORE the ordinary trust gate, so the refusal
+  // is recorded as the autonomous-ceiling event and notified rather than a
+  // generic trust denial (an above-trust requiresApproval write would otherwise
+  // be logged as denied-by-trust; an in-reach one would RUN unattended).
+  // Structurally-invalid calls (not found / disabled / over the per-model
+  // ceiling) fall through to their existing handling below. A human turn never
+  // enters here (isAutonomous is false), so the human path is byte-identical.
+  if (isAutonomous(ctx) && evalT.found && evalT.enabled && !evalT.overModelCeiling) {
+    const t = findTool(call.name);
+    const aboveCeiling = evalT.required > AUTONOMOUS_CEILING;
+    const needsHuman = callNeedsApproval(t, call.args) || aboveCeiling;
+    if (needsHuman) {
+      const origin = `${ctx.trigger}${ctx.triggerId ? `:${ctx.triggerId}` : ''}`;
+      const actionPart = typeof call.args?.action === 'string' ? ` (action: ${call.args.action})` : '';
+      const reason = aboveCeiling
+        ? `it is above the autonomous ceiling (L${AUTONOMOUS_CEILING}); L4/L5 actions are never run unattended`
+        : `it requires human approval and no human is present`;
+      const denial =
+        `Refused: autonomous trigger ${origin} cannot run "${call.name}"${actionPart} — ${reason}. ` +
+        `No grant is configured, so the action was denied and NOT executed. Do not retry.`;
+
+      // Record the autonomous denial (gated on log_tool_calls, like the other
+      // denial records). Reuses the reserved 'denied-autonomous-ceiling' outcome.
+      if (auditToolCallsOn()) {
+        recordOutcome({
+          ...auditCommon(call, ctx),
+          params: call.args,
+          trust: { required: evalT.required, ceiling: standingCeiling(ctx), outcome: 'denied-autonomous-ceiling' },
+          result: 'error',
+          error: denial,
+        });
+      }
+
+      // Notify the operator regardless of the logging flags — this is a safety
+      // signal, not a log line. Self-gated by Telegram availability via the
+      // injected sendMessage; an unset notifier is simply no push, deny stands.
+      try {
+        autonomousNotifier?.(
+          `⛔ *Autonomous action refused*\n` +
+          `Trigger: \`${origin}\`\n` +
+          `Tool: \`${call.name}\`${actionPart}\n` +
+          `Reason: ${aboveCeiling ? `above autonomous ceiling (L${AUTONOMOUS_CEILING})` : 'requires human approval'}\n` +
+          `Nothing was executed. Approve manually if this was intended.`,
+        );
+      } catch { /* a notify failure must never break the broker */ }
+
+      const via = ctx.agentName ? ` (via ${ctx.agentName})` : '';
+      console.log(`[NerdAlert] Autonomous floor: refused ${call.name} from ${origin}${via}`);
+
+      return {
+        id: call.id,
+        name: call.name,
+        output: `Error: ${denial}`,
+        error: true,
+        sources: [],
+      };
+    }
+  }
+
   const denialReason = checkTrust(call, ctx);
   if (denialReason) {
     // Record trust/ceiling denials (the "blocked by ceiling on <model>" case).
@@ -436,8 +547,7 @@ export async function executeOrPropose(
   // Evaluate the approval requirement. A plain boolean behaves as before; a
   // predicate is called with the parsed args so a multi-action tool can card
   // only its dangerous action(s) (project_write: merge yes, write/status no).
-  const ra = tool?.requiresApproval;
-  const needsApproval = typeof ra === 'function' ? ra(call.args) === true : ra === true;
+  const needsApproval = callNeedsApproval(tool, call.args);
 
   // Passthrough: non-approval call, or no card surface on this transport.
   if (!opts.canApprovalCard || !needsApproval) {

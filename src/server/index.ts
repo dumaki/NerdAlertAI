@@ -27,7 +27,9 @@ import { mountRenderRoute } from './render-route';
 import { runBackfill } from '../memory/backfill';
 import { seedDefaults as seedSkillDefaults } from '../skills/engine';
 import { startTelegram } from '../telegram';
+import { sendMessage } from '../telegram/bot';
 import { startCron, stopCron, setCronStatusEmitter } from '../cron';
+import { setAutonomousNotifier } from '../core/permission-broker';
 import {
   initBudget,
   initHeartbeatStore,
@@ -137,6 +139,16 @@ mountUIRoutes(app);
 
 setCronStatusEmitter((jobId: string, status: string) => {
   broadcastCronStatus(jobId, status);
+});
+
+// v0.10 Phase 2: wire the broker's autonomous-floor notifier to Telegram. The
+// broker stays Telegram-free — a static import would cycle (broker ->
+// telegram/bot -> agent -> broker) — so we inject the sink here at boot, the
+// same shape as setCronStatusEmitter above. sendMessage self-gates when
+// Telegram isn't configured, so this is a safe no-op with the module off: the
+// floor's deny + audit still happen, only the push is absent.
+setAutonomousNotifier((message: string) => {
+  sendMessage(message).catch(() => { /* never let a notify failure surface */ });
 });
 
 // ---- SECURITY ROUTES ----
