@@ -236,6 +236,9 @@ export interface AgentConfig {
     log_dir: string;
     log_tool_calls: boolean;
     log_approvals: boolean;
+    // v0.10 Phase 1.5: days to keep audit JSONL files before the retention
+    // sweep prunes them. Absent => 90. 0 (or negative) => keep forever.
+    retention_days?: number;
   };
   voice?: VoiceConfig;       // optional — absent = module disabled, no /api/tts route
   memory?: MemoryConfig;     // optional — absent = pure TF-IDF, no semantic search
