@@ -45,6 +45,8 @@ import type { NerdAlertResponse, Source, NerdAlertTool, AutonomousGrant } from '
 import { recordIntent, recordOutcome } from '../audit/logger';
 import { evaluateAutonomousGrant } from './autonomous-grants';
 import { isAutonomousEnabled, evaluateAutonomousLiveGate, recordAutoApproval } from './autonomous-runtime';
+import { enqueueQueued, listQueued, getQueued, removeQueued } from './autonomous-queue';
+import type { QueuedAutonomousAction } from './autonomous-queue';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -322,6 +324,108 @@ export function setAutonomousNotifier(fn: (message: string) => void): void {
   autonomousNotifier = fn;
 }
 
+// ── Autonomous queue: enqueue (v0.10 Phase 5a) ───────
+//
+// Layer 2 of the resolver. An in-reach (≤ ceiling) autonomous action that needs
+// a human and did NOT auto-approve is PERSISTED for later human sign-off rather
+// than hard-denied. Reached only from the floor when the queue is opted in
+// (agent.autonomous.queue.enabled). Audits 'queued' and notifies; nothing runs
+// now. The stored args carry approved:true so resolveQueued replays the apply
+// path directly. Off (default) => this is never called and the floor denies
+// byte-identically.
+function isAutonomousQueueEnabled(): boolean {
+  return config.agent?.autonomous?.queue?.enabled === true;
+}
+
+async function enqueueAutonomous(
+  call: BrokerToolCall,
+  ctx: BrokerContext,
+  required: number,
+  origin: string,
+  actionPart: string,
+  why: string,
+): Promise<BrokerResult> {
+  const via = ctx.agentName ? ` (via ${ctx.agentName})` : '';
+  const title = `Autonomous action awaiting approval — ${call.name}`;
+  const description =
+    `${origin} proposed "${call.name}"${actionPart} (trust L${required}). ${why} ` +
+    `Approve to run it; deny to drop it.`;
+
+  const res = enqueueQueued({
+    toolName: call.name,
+    args:     { ...call.args, approved: true },
+    ctx: {
+      userTrustLevel:     ctx.userTrustLevel,
+      maxModelTrustLevel: ctx.maxModelTrustLevel,
+      modelLabel:         ctx.modelLabel,
+      agentName:          ctx.agentName,
+      trigger:            ctx.trigger,
+      triggerId:          ctx.triggerId,
+      correlationId:      ctx.correlationId,
+    },
+    origin,
+    title,
+    description,
+    required,
+  });
+
+  // Queue full — refuse + notify; nothing runs, nothing queued.
+  if (!res.ok) {
+    if (auditToolCallsOn()) {
+      recordOutcome({
+        ...auditCommon(call, ctx),
+        params: call.args,
+        trust: { required, ceiling: standingCeiling(ctx), outcome: 'denied-autonomous-ceiling' },
+        result: 'error',
+        error: res.error,
+      });
+    }
+    try {
+      autonomousNotifier?.(
+        `⛔ *Autonomous action dropped*\nTool: \`${call.name}\`${actionPart}\nReason: ${res.error}`,
+      );
+    } catch { /* notify failure must never break the broker */ }
+    console.log(`[NerdAlert] Autonomous queue REFUSED ${call.name} from ${origin}${via} — ${res.error}`);
+    return {
+      id: call.id, name: call.name,
+      output: `Error: ${res.error}. Do not retry.`,
+      error: true, sources: [],
+    };
+  }
+
+  // Audit the queued decision (reserved 'queued' outcome).
+  if (auditToolCallsOn()) {
+    recordOutcome({
+      ...auditCommon(call, ctx),
+      params: call.args,
+      trust: { required, ceiling: standingCeiling(ctx), outcome: 'queued' },
+      result: 'ok',
+    });
+  }
+
+  try {
+    autonomousNotifier?.(
+      `📥 *Autonomous action queued for approval*\n` +
+      `Trigger: \`${origin}\`\n` +
+      `Tool: \`${call.name}\`${actionPart} (L${required})\n` +
+      `${why}\n` +
+      `Nothing ran. Approve it later from the tray. (id: \`${res.entry.id}\`)`,
+    );
+  } catch { /* notify failure must never break the broker */ }
+
+  console.log(`[NerdAlert] Autonomous QUEUED ${call.name} from ${origin} (id: ${res.entry.id})${via}`);
+
+  return {
+    id: call.id,
+    name: call.name,
+    output:
+      `Queued for human approval (id ${res.entry.id}). The action has NOT run and is ` +
+      `awaiting a human decision. Do not retry or call the tool again; stop here.`,
+    error: false,
+    sources: [],
+  };
+}
+
 // ── Autonomous auto-apply (v0.10 Phase 4) ─────────────
 //
 // Runs a grant-authorized action with NO human present. Reached ONLY from the
@@ -537,6 +641,22 @@ export async function executeTool(
           );
         }
         liveBlockReason = gate.reason;
+      }
+
+      // ── v0.10 Phase 5 — queue layer-2 ──────────────
+      // In-reach (≤ ceiling) needs-human action that did NOT auto-approve:
+      // persist it for later human sign-off instead of hard-denying. Above-
+      // ceiling (L4/L5) still hard-denies below. Gated on the queue opt-in; with
+      // it off (default) this is skipped and the deny path runs byte-identically.
+      if (!aboveCeiling && isAutonomousQueueEnabled()) {
+        const why = !grantEval.configured
+          ? `No matching grant.`
+          : grantEval.wouldApprove
+            ? (liveBlockReason
+                ? `A grant matches but auto-approve was blocked (${liveBlockReason}).`
+                : `A grant matches but autonomous auto-approve is not enabled.`)
+            : `No configured grant authorizes it.`;
+        return await enqueueAutonomous(call, ctx, evalT.required, origin, actionPart, why);
       }
 
       const grantClause = !grantEval.configured
@@ -979,6 +1099,94 @@ export async function resolveApproval(
     });
   }
   const result = await executeTool(action.call, action.context);
+  return { status: 'executed', result };
+}
+
+// ── Public: listAutonomousQueue / resolveQueued (v0.10 Phase 5a) ──
+//
+// The durable autonomous queue's read + resolve surface (the web route in
+// autonomous-queue-routes.ts calls these). A queued action is the layer-2
+// counterpart to an approval card: persisted by the floor, resolved later by a
+// human. resolveQueued mirrors resolveApproval — audit the human decision, then
+// (on approve) RUN it. The run goes through executeTool with the trigger flipped
+// to 'chat' (a human IS now present) and elevatedCeiling = required, so the
+// autonomous floor does NOT re-fire (no re-queue) and the user gate is cleared
+// for that one run, exactly like a parked elevation. Provenance is preserved:
+// the queue entry + the approved/denied-by-human decision record carry the cron
+// origin; the execution sub-records share the turn's correlationId.
+
+export function listAutonomousQueue(): QueuedAutonomousAction[] {
+  return listQueued();
+}
+
+export async function resolveQueued(
+  id: string,
+  approved: boolean,
+): Promise<{ status: 'executed'; result: BrokerResult }
+         | { status: 'denied'; entry: QueuedAutonomousAction }
+         | { status: 'refused'; reason: string; entry: QueuedAutonomousAction }
+         | { status: 'unknown' }> {
+  const entry = getQueued(id);
+  if (!entry) return { status: 'unknown' };
+  removeQueued(id); // single-use
+
+  const call: BrokerToolCall = { id: entry.id, name: entry.toolName, args: entry.args };
+  const storedCtx: BrokerContext = {
+    userTrustLevel:     entry.ctx.userTrustLevel,
+    maxModelTrustLevel: entry.ctx.maxModelTrustLevel,
+    modelLabel:         entry.ctx.modelLabel,
+    agentName:          entry.ctx.agentName,
+    trigger:            entry.ctx.trigger as TriggerSource | undefined,
+    triggerId:          entry.ctx.triggerId,
+    correlationId:      entry.ctx.correlationId,
+  };
+
+  if (!approved) {
+    if (auditApprovalsOn()) {
+      const e = evaluateTrust(call, storedCtx);
+      recordOutcome({
+        ...auditCommon(call, storedCtx),
+        params: call.args,
+        trust: { required: e.required, ceiling: standingCeiling(storedCtx), outcome: 'denied-by-human' },
+      });
+    }
+    const via = storedCtx.agentName ? ` (via ${storedCtx.agentName})` : '';
+    console.log(`[NerdAlert] Autonomous queue DENIED by human: ${call.name} (was ${entry.origin})${via}`);
+    return { status: 'denied', entry };
+  }
+
+  // Re-validate at resolution time — the tool may have been disabled or its
+  // trust raised since queuing. A structural problem refuses cleanly.
+  const evalT = evaluateTrust(call, storedCtx);
+  if (!evalT.found || !evalT.enabled) {
+    return { status: 'refused', reason: `"${call.name}" is no longer available (not found or disabled).`, entry };
+  }
+  if (evalT.overModelCeiling) {
+    return { status: 'refused', reason: `"${call.name}" is above the current model's trust ceiling and can't run.`, entry };
+  }
+  if (evalT.required > AUTONOMOUS_CEILING) {
+    return { status: 'refused', reason: `"${call.name}" now requires L${evalT.required}, above the autonomous ceiling L${AUTONOMOUS_CEILING}.`, entry };
+  }
+
+  // Record the human approval (cron provenance preserved via storedCtx).
+  if (auditApprovalsOn()) {
+    recordOutcome({
+      ...auditCommon(call, storedCtx),
+      params: call.args,
+      trust: {
+        required: evalT.required,
+        ceiling: Math.min(evalT.required, storedCtx.maxModelTrustLevel ?? Number.POSITIVE_INFINITY),
+        outcome: 'approved-by-human',
+      },
+    });
+  }
+  const via = storedCtx.agentName ? ` (via ${storedCtx.agentName})` : '';
+  console.log(`[NerdAlert] Autonomous queue APPROVED by human: ${call.name} (was ${entry.origin}) running at L${evalT.required}${via}`);
+
+  // Run as a human-present action: trigger 'chat' (no floor re-fire) +
+  // elevatedCeiling so the user gate is cleared for this one run.
+  const runCtx: BrokerContext = { ...storedCtx, trigger: 'chat', elevatedCeiling: evalT.required };
+  const result = await executeTool(call, runCtx);
   return { status: 'executed', result };
 }
 
