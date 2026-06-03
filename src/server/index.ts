@@ -30,6 +30,7 @@ import { startTelegram } from '../telegram';
 import { sendMessage } from '../telegram/bot';
 import { startCron, stopCron, setCronStatusEmitter } from '../cron';
 import { setAutonomousNotifier } from '../core/permission-broker';
+import { logGrantsAtBoot } from '../core/autonomous-grants';
 import {
   initBudget,
   initHeartbeatStore,
@@ -300,6 +301,10 @@ app.listen(SERVER_PORT, () => {
   // network. The model only loads into RAM on the first embed()
   // call, not at boot.
   logMemoryBootCapability();
+
+  // v0.10 Phase 3: one-line summary of any autonomous grants loaded (dry-run).
+  // No-op when none are configured, so a grant-free boot is byte-identical.
+  logGrantsAtBoot();
   console.log('');
 
 startTelegram().catch((err: unknown) => {

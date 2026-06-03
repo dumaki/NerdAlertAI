@@ -99,6 +99,11 @@ export interface AuditRecordInput {
   result?:        'ok' | 'error'
   error?:         string | null
   ms?:            number
+  // v0.10 Phase 3: dry-run grant evaluation attached to an autonomous denial
+  // record — shows whether a configured grant WOULD have auto-approved the
+  // refused action. Diagnostic only; nothing auto-ran in Phase 3. Omitted
+  // entirely when no grants are configured (off-state byte-identical).
+  grantDryRun?:   { wouldApprove: boolean; grant?: string; reason?: string }
 }
 
 export interface AuditWriteResult {

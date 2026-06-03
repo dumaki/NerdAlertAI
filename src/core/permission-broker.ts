@@ -43,6 +43,7 @@ import { findTool, effectiveTrustLevelOf, isToolEnabled } from '../tools/registr
 import { config } from '../config/loader';
 import type { NerdAlertResponse, Source, NerdAlertTool } from '../types/response.types';
 import { recordIntent, recordOutcome } from '../audit/logger';
+import { evaluateAutonomousGrant } from './autonomous-grants';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -354,12 +355,28 @@ export async function executeTool(
       const reason = aboveCeiling
         ? `it is above the autonomous ceiling (L${AUTONOMOUS_CEILING}); L4/L5 actions are never run unattended`
         : `it requires human approval and no human is present`;
+
+      // v0.10 Phase 3 — grant matcher in DRY-RUN. Evaluate whether a configured
+      // grant WOULD authorize this, to log it and annotate the audit record.
+      // The action is STILL DENIED — auto-approve does not go live until Phase
+      // 4. With no grants configured, grantEval.configured is false and every
+      // branch below collapses to the exact Phase 2 behaviour (byte-identical).
+      const grantEval = evaluateAutonomousGrant(
+        { name: call.name, args: call.args }, t, evalT.required, AUTONOMOUS_CEILING,
+      );
+
+      const grantClause = !grantEval.configured
+        ? `No grant is configured, so the action was denied and NOT executed.`
+        : grantEval.wouldApprove
+          ? `A configured grant WOULD authorize this, but autonomous auto-approve is not enabled (dry-run), so it was denied.`
+          : `No configured grant authorizes this, so the action was denied.`;
       const denial =
         `Refused: autonomous trigger ${origin} cannot run "${call.name}"${actionPart} — ${reason}. ` +
-        `No grant is configured, so the action was denied and NOT executed. Do not retry.`;
+        `${grantClause} Do not retry.`;
 
       // Record the autonomous denial (gated on log_tool_calls, like the other
-      // denial records). Reuses the reserved 'denied-autonomous-ceiling' outcome.
+      // denial records). Reuses the reserved 'denied-autonomous-ceiling' outcome;
+      // attaches the dry-run grant result only when grants are configured.
       if (auditToolCallsOn()) {
         recordOutcome({
           ...auditCommon(call, ctx),
@@ -367,6 +384,9 @@ export async function executeTool(
           trust: { required: evalT.required, ceiling: standingCeiling(ctx), outcome: 'denied-autonomous-ceiling' },
           result: 'error',
           error: denial,
+          ...(grantEval.configured
+            ? { grantDryRun: { wouldApprove: grantEval.wouldApprove, grant: grantEval.grant, reason: grantEval.reason } }
+            : {}),
         });
       }
 
@@ -379,12 +399,19 @@ export async function executeTool(
           `Trigger: \`${origin}\`\n` +
           `Tool: \`${call.name}\`${actionPart}\n` +
           `Reason: ${aboveCeiling ? `above autonomous ceiling (L${AUTONOMOUS_CEILING})` : 'requires human approval'}\n` +
+          (grantEval.wouldApprove ? `Note: a configured grant WOULD auto-approve this once enabled (dry-run).\n` : ``) +
           `Nothing was executed. Approve manually if this was intended.`,
         );
       } catch { /* a notify failure must never break the broker */ }
 
       const via = ctx.agentName ? ` (via ${ctx.agentName})` : '';
-      console.log(`[NerdAlert] Autonomous floor: refused ${call.name} from ${origin}${via}`);
+      if (grantEval.configured && grantEval.wouldApprove) {
+        console.log(`[NerdAlert] Autonomous grant DRY-RUN: WOULD AUTO-APPROVE ${call.name} from ${origin} (grant: ${grantEval.grant})${via} — still denied (Phase 3)`);
+      } else if (grantEval.configured) {
+        console.log(`[NerdAlert] Autonomous grant DRY-RUN: no grant matched ${call.name} from ${origin} (${grantEval.reason})${via}`);
+      } else {
+        console.log(`[NerdAlert] Autonomous floor: refused ${call.name} from ${origin}${via}`);
+      }
 
       return {
         id: call.id,
