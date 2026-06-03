@@ -28,9 +28,9 @@ import { mountRenderRoute } from './render-route';
 import { runBackfill } from '../memory/backfill';
 import { seedDefaults as seedSkillDefaults } from '../skills/engine';
 import { startTelegram } from '../telegram';
-import { sendMessage } from '../telegram/bot';
+import { sendMessage, sendQueueCard } from '../telegram/bot';
 import { startCron, stopCron, setCronStatusEmitter } from '../cron';
-import { setAutonomousNotifier } from '../core/permission-broker';
+import { setAutonomousNotifier, setAutonomousQueueNotifier } from '../core/permission-broker';
 import { logGrantsAtBoot } from '../core/autonomous-grants';
 import { initQueue } from '../core/autonomous-queue';
 import {
@@ -152,6 +152,16 @@ setCronStatusEmitter((jobId: string, status: string) => {
 // floor's deny + audit still happen, only the push is absent.
 setAutonomousNotifier((message: string) => {
   sendMessage(message).catch(() => { /* never let a notify failure surface */ });
+});
+
+// v0.10 Phase 5c: wire the broker's structured queue-card sink to Telegram, so a
+// queued autonomous action arrives as a tappable APPROVE/DENY card resolving the
+// same server-side queue as the web tray. Same inject-at-boot shape; sendQueueCard
+// self-gates when Telegram isn't configured, so this is a safe no-op with the
+// module off (the enqueue still audits; the broker's text-notice fallback is just
+// unused because this hook is set).
+setAutonomousQueueNotifier((card) => {
+  sendQueueCard(card).catch(() => { /* never let a notify failure surface */ });
 });
 
 // ---- SECURITY ROUTES ----
