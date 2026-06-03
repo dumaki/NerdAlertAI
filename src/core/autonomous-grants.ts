@@ -33,6 +33,7 @@
 
 import { config } from '../config/loader'
 import type { NerdAlertTool, AutonomousGrant } from '../types/response.types'
+import { isAutonomousEnabled, logAutonomousStateAtBoot } from './autonomous-runtime'
 
 // ── Result ───────────────────────────────────────────────────
 export interface GrantDryRunResult {
@@ -42,6 +43,9 @@ export interface GrantDryRunResult {
   wouldApprove: boolean
   /** Compact summary of the matched grant, for logs / audit. */
   grant?: string
+  /** The matched grant object itself (Phase 4 reads its max_per_hour + identity
+   *  for the live rate limit). Set only when wouldApprove is true. */
+  matchedGrant?: AutonomousGrant
   /** Why no grant matched (when configured && !wouldApprove). */
   reason?: string
 }
@@ -153,7 +157,7 @@ export function evaluateAutonomousGrant(
   for (const g of grants) {
     const reason = matchOne(g, call, tool, requiredLevel, autonomousCeiling)
     if (reason === null) {
-      return { configured: true, wouldApprove: true, grant: summarize(g) }
+      return { configured: true, wouldApprove: true, grant: summarize(g), matchedGrant: g }
     }
     if (g && g.tool === call.name && sameToolReason === null) sameToolReason = reason
     lastReason = reason
@@ -167,7 +171,16 @@ export function evaluateAutonomousGrant(
 // => no line, byte-identical boot.
 export function logGrantsAtBoot(): void {
   const grants = config.agent?.autonomous?.grants
-  if (!Array.isArray(grants) || grants.length === 0) return
-  console.log(`[autonomous] ${grants.length} grant(s) loaded (DRY-RUN — Phase 3, nothing auto-runs):`)
+  if (!Array.isArray(grants) || grants.length === 0) {
+    // No grants, but an engaged kill-switch / tripped breaker is still worth
+    // surfacing when autonomous acting is enabled.
+    logAutonomousStateAtBoot()
+    return
+  }
+  const mode = isAutonomousEnabled()
+    ? 'LIVE — matching grants auto-run, gated by kill-switch / breaker / rate limit'
+    : 'DRY-RUN — auto-approve disabled, nothing auto-runs'
+  console.log(`[autonomous] ${grants.length} grant(s) loaded (${mode}):`)
   for (const g of grants) console.log(`  - ${summarize(g)}`)
+  logAutonomousStateAtBoot()
 }

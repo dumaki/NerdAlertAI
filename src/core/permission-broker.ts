@@ -41,9 +41,10 @@ import { randomUUID } from 'crypto';
 
 import { findTool, effectiveTrustLevelOf, isToolEnabled } from '../tools/registry';
 import { config } from '../config/loader';
-import type { NerdAlertResponse, Source, NerdAlertTool } from '../types/response.types';
+import type { NerdAlertResponse, Source, NerdAlertTool, AutonomousGrant } from '../types/response.types';
 import { recordIntent, recordOutcome } from '../audit/logger';
 import { evaluateAutonomousGrant } from './autonomous-grants';
+import { isAutonomousEnabled, evaluateAutonomousLiveGate, recordAutoApproval } from './autonomous-runtime';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -321,6 +322,157 @@ export function setAutonomousNotifier(fn: (message: string) => void): void {
   autonomousNotifier = fn;
 }
 
+// ── Autonomous auto-apply (v0.10 Phase 4) ─────────────
+//
+// Runs a grant-authorized action with NO human present. Reached ONLY from the
+// autonomous floor in executeTool, and ONLY after evaluateAutonomousLiveGate
+// has passed (kill-switch clear, breaker untripped, under the per-grant rate
+// limit, max_per_hour set). It mirrors executeTool's own intent -> execute ->
+// outcome tail, with two autonomous-specific guards:
+//   - the durable rate/breaker tick is persisted BEFORE the tool runs, so a
+//     crash can never leave an unaccounted auto-approval (a persist failure
+//     refuses the action);
+//   - an L3+ action still refuses if its audit-intent record can't be written
+//     (no unaudited destruction), exactly as the normal path.
+// The tool is invoked with approved:true at the grant-authorized ceiling — the
+// same apply path a human Approve would take, so the two-step write tools
+// (fail2ban ban/unban, etc.) commit rather than preview.
+async function autoApprove(
+  call: BrokerToolCall,
+  ctx: BrokerContext,
+  tool: NerdAlertTool,
+  required: number,
+  grant: AutonomousGrant,
+  grantSummary: string | undefined,
+  origin: string,
+  actionPart: string,
+): Promise<BrokerResult> {
+  const ceiling = Math.min(required, ctx.maxModelTrustLevel ?? Number.POSITIVE_INFINITY);
+  const via = ctx.agentName ? ` (via ${ctx.agentName})` : '';
+
+  // INTENT before execution. For an L3+ action a failed audit write REFUSES the
+  // op — no unaudited autonomous action (same fail-safe as the normal path).
+  if (auditToolCallsOn()) {
+    const intent = recordIntent({
+      ...auditCommon(call, ctx),
+      params: call.args,
+      trust: { required, ceiling, outcome: 'approved-by-grant' },
+    });
+    if (!intent.ok && required >= 3) {
+      try {
+        autonomousNotifier?.(
+          `⛔ *Autonomous auto-approve refused*\n` +
+          `Tool: \`${call.name}\`${actionPart}\n` +
+          `Reason: audit log unwritable — an L${required} action will not run unaudited.`,
+        );
+      } catch { /* a notify failure must never break the broker */ }
+      return {
+        id: call.id,
+        name: call.name,
+        output:
+          `Error: refusing "${call.name}" — trust level ${required} requires an ` +
+          `audit record and the audit log could not be written (${intent.reason ?? 'unknown'}). ` +
+          `No L3+ action runs unaudited.`,
+        error: true,
+        sources: [],
+      };
+    }
+  }
+
+  // Durable accounting BEFORE the tool runs. A persist failure fails closed: we
+  // refuse rather than run an auto-approval we can't count against the rate
+  // limit / breaker.
+  const rec = recordAutoApproval(grant);
+  if (!rec.ok) {
+    try {
+      autonomousNotifier?.(
+        `⛔ *Autonomous auto-approve refused*\n` +
+        `Tool: \`${call.name}\`${actionPart}\n` +
+        `Reason: ${rec.reason}`,
+      );
+    } catch { /* notify failure must never break the broker */ }
+    console.log(`[NerdAlert] Autonomous auto-approve REFUSED (accounting): ${call.name} from ${origin}${via} — ${rec.reason}`);
+    return {
+      id: call.id,
+      name: call.name,
+      output: `Error: refusing "${call.name}" — ${rec.reason}. Do not retry.`,
+      error: true,
+      sources: [],
+    };
+  }
+
+  // Run the APPROVED apply path at the grant-authorized ceiling.
+  const startedAt = Date.now();
+  try {
+    const response: NerdAlertResponse = await tool.execute(
+      { ...call.args, approved: true },
+      { effectiveTrustCeiling: ceiling },
+    );
+    const output = typeof response.content === 'string'
+      ? response.content
+      : JSON.stringify(response.content);
+
+    if (auditToolCallsOn()) {
+      recordOutcome({
+        ...auditCommon(call, ctx),
+        trust: { required, ceiling, outcome: 'approved-by-grant' },
+        effect: response.metadata?.auditEffect,
+        result: 'ok',
+        ms: Date.now() - startedAt,
+      });
+    }
+
+    try {
+      autonomousNotifier?.(
+        `✅ *Autonomous action auto-approved*\n` +
+        `Trigger: \`${origin}\`\n` +
+        `Tool: \`${call.name}\`${actionPart}\n` +
+        `Grant: ${grantSummary ?? '(unknown)'}\n` +
+        `Ran with no human present (L${required}).` +
+        (rec.justTripped
+          ? `\n\n✂️ *Circuit breaker has now TRIPPED* — further autonomous auto-approvals are halted until you delete the breaker state file (manual reset).`
+          : ``),
+      );
+    } catch { /* notify failure must never break the broker */ }
+
+    console.log(`[NerdAlert] Autonomous AUTO-APPROVED ${call.name} from ${origin} (grant: ${grantSummary})${via}${rec.justTripped ? ' — breaker TRIPPED' : ''}`);
+
+    return {
+      id: call.id,
+      name: call.name,
+      output,
+      error: false,
+      sources: response.metadata?.sources ?? [],
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (auditToolCallsOn()) {
+      recordOutcome({
+        ...auditCommon(call, ctx),
+        trust: { required, ceiling, outcome: 'approved-by-grant' },
+        result: 'error',
+        ms: Date.now() - startedAt,
+        error: message,
+      });
+    }
+    try {
+      autonomousNotifier?.(
+        `⚠️ *Autonomous auto-approved action FAILED*\n` +
+        `Tool: \`${call.name}\`${actionPart}\n` +
+        `Error: ${message}`,
+      );
+    } catch { /* notify failure must never break the broker */ }
+    console.error(`[NerdAlert] Autonomous auto-approved ${call.name} from ${origin} FAILED: ${message}`);
+    return {
+      id: call.id,
+      name: call.name,
+      output: `Error running "${call.name}": ${message}`,
+      error: true,
+      sources: [],
+    };
+  }
+}
+
 // ── Public: executeTool ──────────────────────────────────────
 //
 // Runs a tool call through the gate and returns a BrokerResult.
@@ -356,19 +508,39 @@ export async function executeTool(
         ? `it is above the autonomous ceiling (L${AUTONOMOUS_CEILING}); L4/L5 actions are never run unattended`
         : `it requires human approval and no human is present`;
 
-      // v0.10 Phase 3 — grant matcher in DRY-RUN. Evaluate whether a configured
-      // grant WOULD authorize this, to log it and annotate the audit record.
-      // The action is STILL DENIED — auto-approve does not go live until Phase
-      // 4. With no grants configured, grantEval.configured is false and every
-      // branch below collapses to the exact Phase 2 behaviour (byte-identical).
+      // v0.10 Phase 3/4 — grant matcher. Evaluate whether a configured grant
+      // authorizes this. With autonomous acting ENABLED (Phase 4) and a match,
+      // the live gate below may auto-approve and RUN it; with acting disabled
+      // this stays dry-run (logged, then denied); with no grants configured
+      // every branch collapses to the exact Phase 2 behaviour (byte-identical).
       const grantEval = evaluateAutonomousGrant(
         { name: call.name, args: call.args }, t, evalT.required, AUTONOMOUS_CEILING,
       );
 
+      // ── v0.10 Phase 4 — LIVE auto-approve ──────────────
+      // Only when the operator enabled autonomous acting AND a grant matches.
+      // The live gate (kill-switch / circuit breaker / durable rate limit, all
+      // in autonomous-runtime.ts) decides whether it actually runs. A gate
+      // failure falls through to the deny path below, its reason folded into
+      // the denial via liveBlockReason. With autonomous.enabled false (default)
+      // this whole block is skipped → byte-identical Phase 3 dry-run.
+      let liveBlockReason: string | undefined;
+      if (isAutonomousEnabled() && grantEval.configured && grantEval.wouldApprove && grantEval.matchedGrant) {
+        const gate = evaluateAutonomousLiveGate(grantEval.matchedGrant);
+        if (gate.ok) {
+          return await autoApprove(
+            call, ctx, t!, evalT.required, grantEval.matchedGrant, grantEval.grant, origin, actionPart,
+          );
+        }
+        liveBlockReason = gate.reason;
+      }
+
       const grantClause = !grantEval.configured
         ? `No grant is configured, so the action was denied and NOT executed.`
         : grantEval.wouldApprove
-          ? `A configured grant WOULD authorize this, but autonomous auto-approve is not enabled (dry-run), so it was denied.`
+          ? (liveBlockReason
+              ? `A configured grant matches, but autonomous auto-approve was blocked (${liveBlockReason}), so it was denied.`
+              : `A configured grant WOULD authorize this, but autonomous auto-approve is not enabled (dry-run), so it was denied.`)
           : `No configured grant authorizes this, so the action was denied.`;
       const denial =
         `Refused: autonomous trigger ${origin} cannot run "${call.name}"${actionPart} — ${reason}. ` +
@@ -399,14 +571,22 @@ export async function executeTool(
           `Trigger: \`${origin}\`\n` +
           `Tool: \`${call.name}\`${actionPart}\n` +
           `Reason: ${aboveCeiling ? `above autonomous ceiling (L${AUTONOMOUS_CEILING})` : 'requires human approval'}\n` +
-          (grantEval.wouldApprove ? `Note: a configured grant WOULD auto-approve this once enabled (dry-run).\n` : ``) +
+          (grantEval.wouldApprove
+            ? (liveBlockReason
+                ? `Note: a grant matches but auto-approve was blocked (${liveBlockReason}).\n`
+                : `Note: a configured grant WOULD auto-approve this once enabled (dry-run).\n`)
+            : ``) +
           `Nothing was executed. Approve manually if this was intended.`,
         );
       } catch { /* a notify failure must never break the broker */ }
 
       const via = ctx.agentName ? ` (via ${ctx.agentName})` : '';
       if (grantEval.configured && grantEval.wouldApprove) {
-        console.log(`[NerdAlert] Autonomous grant DRY-RUN: WOULD AUTO-APPROVE ${call.name} from ${origin} (grant: ${grantEval.grant})${via} — still denied (Phase 3)`);
+        if (liveBlockReason) {
+          console.log(`[NerdAlert] Autonomous auto-approve BLOCKED: ${call.name} from ${origin} (grant: ${grantEval.grant})${via} — ${liveBlockReason}`);
+        } else {
+          console.log(`[NerdAlert] Autonomous grant DRY-RUN: WOULD AUTO-APPROVE ${call.name} from ${origin} (grant: ${grantEval.grant})${via} — still denied (Phase 3)`);
+        }
       } else if (grantEval.configured) {
         console.log(`[NerdAlert] Autonomous grant DRY-RUN: no grant matched ${call.name} from ${origin} (${grantEval.reason})${via}`);
       } else {
