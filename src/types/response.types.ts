@@ -261,9 +261,20 @@ export interface AgentConfig {
     // same invariant as trust_level). Absent => no grants, so the autonomous
     // floor's matcher returns "not configured" and the Phase 3 dry-run is
     // byte-identical to Phase 2. Each grant authorizes a cron-origin action the
-    // floor would otherwise refuse; in Phase 3 they are evaluated in dry-run
-    // only (logged), and nothing auto-runs until Phase 4.
-    autonomous?: { grants?: AutonomousGrant[] };
+    // floor would otherwise refuse.
+    //
+    // v0.10 Phase 4 — `enabled` is the master live switch for auto-approve.
+    // Absent/false => matched grants are evaluated in DRY-RUN only (logged,
+    // then denied), byte-identical to Phase 3. true => a matched grant actually
+    // runs the action with no human, behind the kill-switch / circuit breaker /
+    // durable rate limit in autonomous-runtime.ts. `breaker` tunes the global
+    // burst breaker (defaults: 5 auto-approvals per 10 minutes, then a manual-
+    // reset trip). Operator-only, same invariant as grants/trust_level.
+    autonomous?: {
+      enabled?: boolean;
+      grants?: AutonomousGrant[];
+      breaker?: { max_in_window?: number; window_minutes?: number };
+    };
   };
   server: {
     port: number;
