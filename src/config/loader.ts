@@ -40,25 +40,32 @@ import { AgentConfig } from '../types/response.types';
 //      → ../../../config.yaml = <repo>/config.yaml
 //
 // Both layouts resolve to the SAME file at the repo root —
-// just via different relative path depths. The function tries
-// each candidate in order and uses whichever exists.
+// just via different relative path depths. The function detects
+// the layout and resolves the repo-root path directly, so a stray
+// <repo>/dist/config.yaml can never shadow the real repo-root config.
 //
-// Throws with a clear error listing the searched paths if
-// neither candidate is found, so misconfigured deploys fail
+// Throws with a clear error showing the resolved path if it is
+// missing, so misconfigured deploys fail
 // fast and visibly instead of crashing on an unrelated
 // downstream import.
 function findConfigPath(): string {
-  const candidates = [
-    path.join(__dirname, '../../config.yaml'),       // ts-node source layout
-    path.join(__dirname, '../../../config.yaml'),    // compiled dist layout
-  ];
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate;
+  // Repo root differs by layout:
+  //   ts-node:  __dirname = <repo>/src/config       -> ../../
+  //   compiled: __dirname = <repo>/dist/src/config  -> ../../../
+  // Detect the compiled layout explicitly so we ALWAYS land on the repo
+  // root and never on a stale <repo>/dist/config.yaml shadow.
+  const compiledTail = path.join('dist', 'src', 'config');
+  const repoRoot = __dirname.endsWith(compiledTail)
+    ? path.join(__dirname, '..', '..', '..')
+    : path.join(__dirname, '..', '..');
+  const configPath = path.join(repoRoot, 'config.yaml');
+  if (!fs.existsSync(configPath)) {
+    throw new Error(
+      `config.yaml not found at repo root. Resolved: ${configPath}\n` +
+      `Ensure config.yaml is in the repo root.`
+    );
   }
-  throw new Error(
-    `config.yaml not found. Searched:\n  ${candidates.join('\n  ')}\n` +
-    `Ensure config.yaml is in the repo root.`
-  );
+  return configPath;
 }
 const configPath = findConfigPath();
 const rawConfig  = yaml.load(fs.readFileSync(configPath, 'utf8')) as AgentConfig;
