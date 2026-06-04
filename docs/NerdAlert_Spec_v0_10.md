@@ -485,3 +485,95 @@ resolve three ways (curl the route, web tray, Telegram buttons) — approve → 
 - `docs/NerdAlert_Spec_v0_9_2.md` — the prior cap (SOC decouple).
 - `docs/handoffs/HANDOFF_2026-06-03_L4-phase4-5-complete_next-review-and-spec.md`
   (and the Phase 2–3 handoff before it).
+
+---
+
+## Appendix A — Post-L5 roadmap (TBD)
+
+Captured from the v0.10 review session for direction only — **not designed, not
+scheduled, explicitly post-L5.** Each line records the realism verdict and the
+module/skill/core/UI classification so future-you has the reasoning, not just the
+wish. Decision rule used throughout: **a capability (new code / integration /
+trust surface) is a module; a workflow that only orchestrates existing tools is a
+skill** — and a skill can never escalate privilege, because trust is enforced at
+tool-execution regardless of skill text.
+
+### Provider & integration modules
+- **Multi-provider email/calendar** — refactor the Gmail-specific module into a
+  provider abstraction (adapter pattern, same shape as LLM provider routing) with
+  backends: Google API, MS Graph, generic IMAP/SMTP, CalDAV. Mail realistic for
+  Google / Outlook / Yahoo / iCloud / Proton (Proton **only** via Proton Bridge +
+  paid plan). Calendar realistic for Google / Outlook / iCloud (CalDAV);
+  **Proton & Yahoo calendar not possible** (no API/CalDAV). **Multi-mailbox: key
+  credentials by account** (`graph:work`, `imap:personal`) + optional `account`
+  param on mail tools — must be designed in at refactor time, painful to retrofit.
+- **Remote file transfer** (Sherman's old bridge) — extends the v0.9.2 read-only
+  shim template to read/write: stdlib shim per host, Tailscale-bound, bearer token,
+  systemd, token in keychain. list/read **L2**, write/transfer **L3 (separate-tool,
+  carded)**. Shim exposes only designated dirs (impossible-by-construction), size
+  caps, no exec. Prime exfiltration vector — carding + scoped dirs are the controls.
+- **Creative-app MCP modules** (cartoon pipeline) — Blender (full `bpy` API, most
+  feasible); DaVinci Resolve (official scripting API, feasible); Final Draft (drive
+  the `.fdx` XML files directly, **not** the GUI); Toon Boom Harmony (closed/
+  undocumented scripting — hardest, niche). All L2–L3 (project-file writes), as MCP
+  servers fitting the existing MCP-client model.
+- **Native Windows / PowerShell backend** — OS-shell adapter (mac osascript / linux
+  bash / windows PowerShell via `child_process`) + Windows path normalization.
+  keytar maps to Windows Credential Manager, so the secret store ports cleanly.
+  After Linux/Mac are stable.
+
+### Skills (workflows over existing tools)
+- **Budget assistant** — skill, riding a thin xlsx-write capability if one doesn't
+  exist. Reads CSV (model-agnostic) and bank-statement screenshots (vision → Claude
+  path only). **Never touches banks/money**, so the dangerous surface is absent by
+  design.
+- **Meeting-notes / journal from audio** — skill over the existing Whisper STT +
+  document/project write + summarize; maybe a thin "transcribe uploaded file" tool
+  if the STT route is mic-only. Strong first showcase skill for the registry
+  (proven on the weekly cartoon script call).
+
+### Content & publishing
+- **Social/publishing module** — rides the existing ElevenLabs → Hedra → Remotion →
+  Upload-Post pipeline. Realistic as **assisted** publishing: generate + draft
+  post/SEO, human-approved publish (**L3-carded** — public posting). APIs: YouTube
+  Data, Meta Graph (IG/FB), TikTok (gated/approval-heavy), own site (trivial).
+  Fully-autonomous multi-platform posting = an L4 grant, deliberately deferred
+  (brand/ToS/ban risk).
+
+### UI / rendering (one workstream)
+- **Typed-content rendering** via the `NerdAlertResponse` envelope + render window:
+  inline images for "what does X look like" (UI media render + image-source tool);
+  real maps from `map_tool` (structured output → rendered map); agent-generated
+  SVG/HTML live in the render window with chat-driven iteration (the apartment-
+  layout case). Build the three together — same envelope-type + render-window
+  extension.
+
+### Code execution
+- **Sandbox → SSH push** — isolated runtime (no host FS mount, no creds, egress-
+  controlled, impossible-by-construction) for L2/L3 code run+test; deploy to a
+  remote host via the **L5** `ssh` tool (carded, almost certainly never-autonomous).
+  Sandbox first, SSH deploy later. Endgame — exactly where audit + hard gates matter.
+
+### Distribution & discoverability
+- **Module distribution model** — keep the current all-in-codebase + config-toggle
+  model (already "disable = no breakage"); enforce strict module boundaries (no
+  cross-module internal imports; each declares deps/credentials/trust) and lazy-load
+  heavy toolchains (AVClub video, embeddings) so the base stays lean. **Defer true
+  DLC / module-manager** (registry, install/uninstall, signing) until a user base
+  justifies the subsystem. Keeping boundaries clean now makes future DLC a packaging
+  job, not a rewrite.
+- **Website** — docs + discoverability + a **skills registry** (curated/signed
+  catalog + in-app import flow). Safer than a code marketplace because the trust
+  ladder caps a skill's blast radius. Depends on the skills system maturing first.
+- **Homelab SSO onboarding template** — a ready-made Authentik SSO template covering
+  the homelab stack (SOC tools, Synology, Kiwix, Guacamole, Homepage), surfaced
+  through the guided setup advisor / discoverability so users don't reverse-engineer
+  the config the hard way. Pairs with the planned Authentik auth-strategy backend.
+- **Browser extension thin client** — the UI-phase thin client (side panel for
+  documents/scripts/pages, embedded players, approval cards). Reaffirmed post-L5.
+
+### Honest "no / not yet" list
+- Proton calendar, Yahoo calendar — no API; not possible.
+- Toon Boom Harmony MCP — possible but genuinely hard/niche.
+- Fully-autonomous social posting — technically possible, deliberately *not* at
+  launch (brand/ToS/account-ban risk); revisit as an L4 grant much later.
