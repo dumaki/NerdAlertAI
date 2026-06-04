@@ -33,6 +33,7 @@
 
 import { config } from '../config/loader'
 import type { NerdAlertTool, AutonomousGrant } from '../types/response.types'
+import type { AutonomousGrantSummary } from '../personalities/base'
 import { isAutonomousEnabled, logAutonomousStateAtBoot } from './autonomous-runtime'
 
 // ── Result ───────────────────────────────────────────────────
@@ -179,6 +180,45 @@ export function evaluateAutonomousGrant(
     lastReason = reason
   }
   return { configured: true, wouldApprove: false, reason: sameToolReason ?? lastReason }
+}
+
+// ── Prompt-build helper: grants armed for a trigger ──────────
+// Used by core/agent.ts to build the autonomous system-prompt augmentation.
+// Unlike evaluateAutonomousGrant (which needs a concrete call to match
+// actions/scopes), this answers a coarser question asked at prompt-build time,
+// BEFORE any action is chosen: which grants are ARMED for this firing trigger?
+// "Armed" mirrors the live gate's arming criteria - autonomous enabled, a
+// NAMED trigger that matches, a positive max_per_hour, and not expired. It
+// returns only the authorization ENVELOPE (tool + optional action/scope
+// allow-lists) so the agent can tell the model what it is authorized to do. It
+// does NOT authorize execution - the broker's per-call matcher + live gate
+// remain the real gate. Pure (config-read only); fail-closed (anything
+// unverifiable is simply omitted).
+export function grantsArmedForTrigger(triggerKey: string): AutonomousGrantSummary[] {
+  if (!isAutonomousEnabled()) return []
+  const grants = config.agent?.autonomous?.grants
+  if (!Array.isArray(grants) || grants.length === 0) return []
+
+  const bareSource = triggerKey.split(':')[0]
+  const out: AutonomousGrantSummary[] = []
+
+  for (const g of grants) {
+    if (!g || typeof g.tool !== 'string' || !g.tool.trim()) continue
+    // A grant must NAME its trigger to arm (the live gate fails closed on an
+    // unnamed trigger), and that name must match this firing source.
+    if (!g.trigger) continue
+    if (g.trigger !== triggerKey && g.trigger !== bareSource) continue
+    // A positive max_per_hour is required to arm (absent/<=0 is inert).
+    if (typeof g.max_per_hour !== 'number' || g.max_per_hour <= 0) continue
+    // Expiry fails closed (unparseable or past => not armed).
+    if (g.expires) {
+      const exp = Date.parse(g.expires)
+      if (Number.isNaN(exp) || Date.now() >= exp) continue
+    }
+    out.push({ tool: g.tool, actions: g.actions, scopes: g.scopes })
+  }
+
+  return out
 }
 
 // ── Boot log ─────────────────────────────────────────────────

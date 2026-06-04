@@ -8,7 +8,7 @@
 // IT Support by title. Something else by inclination.
 // ============================================================
 
-import { Personality, PersonalityPromptParams } from './base';
+import { Personality, PersonalityPromptParams, buildClearanceDescriptor } from './base';
 
 const toshi: Personality = {
 
@@ -49,20 +49,11 @@ const toshi: Personality = {
   ],
 
   buildSystemPrompt: (params: PersonalityPromptParams): string => {
-    const { agentName, trustLevel, availableTools, ownerContext } = params;
+    const { agentName, trustLevel, availableTools, ownerContext, autonomous } = params;
 
     const toolSection = availableTools.length > 0
       ? `Available capabilities:\n${availableTools.map(t => `  - ${t}`).join('\n')}`
       : `Available capabilities: reasoning and analysis only. No external tools active.`;
-
-    const trustContext = [
-      'Read and reason only. No external connections.',
-      'Read-only access to connected systems.',
-      'Draft and suggest. Nothing sent without approval.',
-      'Act with approval. All actions logged.',
-      'Autonomous on pre-approved routine tasks.',
-      'Elevated access. SSH and exec available this session.',
-    ][trustLevel] ?? 'Unknown clearance level.';
 
     const ownerLine = ownerContext
       ? `\nContext on the person I'm working with:\n${ownerContext}\n`
@@ -75,7 +66,7 @@ You work methodically. You consider your options before acting. You do not annou
 ${ownerLine}
 ${toolSection}
 
-Current clearance: Level ${trustLevel} — ${trustContext}
+Current clearance: Level ${trustLevel} — ${buildClearanceDescriptor(trustLevel, autonomous)}
 
 Your voice:
 You are composed and precise. You do not waste words. You do not perform urgency or enthusiasm you do not feel.

@@ -9,7 +9,7 @@
 // Still shows up. Every day. On time.
 // ============================================================
 
-import { Personality, PersonalityPromptParams } from './base';
+import { Personality, PersonalityPromptParams, buildClearanceDescriptor } from './base';
 
 const brooke: Personality = {
 
@@ -50,20 +50,11 @@ const brooke: Personality = {
   ],
 
   buildSystemPrompt: (params: PersonalityPromptParams): string => {
-    const { agentName, trustLevel, availableTools, ownerContext } = params;
+    const { agentName, trustLevel, availableTools, ownerContext, autonomous } = params;
 
     const toolSection = availableTools.length > 0
       ? `What I can do right now:\n${availableTools.map(t => `  - ${t}`).join('\n')}`
       : `What I can do right now: working from knowledge and reasoning. No external tools active.`;
-
-    const trustContext = [
-      'Read and reason only. No external connections.',
-      'Read-only access to connected systems.',
-      'Draft and suggest. Nothing sent without approval.',
-      'Act with approval. All actions logged.',
-      'Autonomous on pre-approved routine tasks.',
-      'Elevated access. SSH and exec available this session.',
-    ][trustLevel] ?? 'Unknown clearance level.';
 
     const ownerLine = ownerContext
       ? `\nContext about who I'm working with:\n${ownerContext}\n`
@@ -76,7 +67,7 @@ You have spent a significant portion of your career helping people navigate situ
 ${ownerLine}
 ${toolSection}
 
-Current clearance: Level ${trustLevel} — ${trustContext}
+Current clearance: Level ${trustLevel} — ${buildClearanceDescriptor(trustLevel, autonomous)}
 
 Your voice:
 You are warm and direct. You do not use warmth as a substitute for clarity — you use it alongside clarity, because people receive information better when they feel like the person delivering it is actually on their side.

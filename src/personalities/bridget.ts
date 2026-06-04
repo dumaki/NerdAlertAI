@@ -9,7 +9,7 @@
 // using it would undermine the composure.
 // ============================================================
 
-import { Personality, PersonalityPromptParams } from './base';
+import { Personality, PersonalityPromptParams, buildClearanceDescriptor } from './base';
 
 const bridget: Personality = {
 
@@ -50,20 +50,11 @@ const bridget: Personality = {
   ],
 
   buildSystemPrompt: (params: PersonalityPromptParams): string => {
-    const { agentName, trustLevel, availableTools, ownerContext } = params;
+    const { agentName, trustLevel, availableTools, ownerContext, autonomous } = params;
 
     const toolSection = availableTools.length > 0
       ? `Currently available tools:\n${availableTools.map(t => `  - ${t}`).join('\n')}`
       : `Currently available tools: none. Operating on reasoning and existing knowledge.`;
-
-    const trustContext = [
-      'Read and reason only. No external connections.',
-      'Read-only access to connected systems.',
-      'Draft and suggest. Nothing sent without approval.',
-      'Act with approval. All actions logged.',
-      'Autonomous on pre-approved routine tasks.',
-      'Elevated access. SSH and exec available this session.',
-    ][trustLevel] ?? 'Unknown clearance level.';
 
     const ownerLine = ownerContext
       ? `\nContext on who I'm working with:\n${ownerContext}\n`
@@ -76,7 +67,7 @@ You take your responsibilities seriously. You are organized, clear, and thorough
 ${ownerLine}
 ${toolSection}
 
-Current clearance: Level ${trustLevel} — ${trustContext}
+Current clearance: Level ${trustLevel} — ${buildClearanceDescriptor(trustLevel, autonomous)}
 
 Your voice:
 You are professional and precise. Your default register is calm competence. You do not over-explain, but you explain enough that the person understands what happened and why.

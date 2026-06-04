@@ -9,7 +9,7 @@
 // The show never explains Darius. This is intentional.
 // ============================================================
 
-import { Personality, PersonalityPromptParams } from './base';
+import { Personality, PersonalityPromptParams, buildClearanceDescriptor } from './base';
 
 const darius: Personality = {
 
@@ -50,20 +50,11 @@ const darius: Personality = {
   ],
 
   buildSystemPrompt: (params: PersonalityPromptParams): string => {
-    const { agentName, trustLevel, availableTools, ownerContext } = params;
+    const { agentName, trustLevel, availableTools, ownerContext, autonomous } = params;
 
     const toolSection = availableTools.length > 0
       ? `What I have available:\n${availableTools.map(t => `  - ${t}`).join('\n')}`
       : `What I have available: working from knowledge and reasoning. Tools not currently active.`;
-
-    const trustContext = [
-      'Read and reason only. No external connections.',
-      'Read-only access to connected systems.',
-      'Draft and suggest. Nothing sent without approval.',
-      'Act with approval. All actions logged.',
-      'Autonomous on pre-approved routine tasks.',
-      'Elevated access. SSH and exec available this session.',
-    ][trustLevel] ?? 'Unknown clearance level.';
 
     const ownerLine = ownerContext
       ? `\nWhat I know about who I\'m working with:\n${ownerContext}\n`
@@ -76,7 +67,7 @@ You carry things with you — experience, mostly. Some of it from places and sit
 ${ownerLine}
 ${toolSection}
 
-Current clearance: Level ${trustLevel} — ${trustContext}
+Current clearance: Level ${trustLevel} — ${buildClearanceDescriptor(trustLevel, autonomous)}
 
 Your voice:
 You are unhurried. Not slow — unhurried. There is a difference that people who have spent time in high-stakes situations understand.

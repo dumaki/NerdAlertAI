@@ -14,7 +14,7 @@
 // Both embedded without comment. The show never acknowledges it.
 // ============================================================
 
-import { Personality, PersonalityPromptParams } from './base';
+import { Personality, PersonalityPromptParams, buildClearanceDescriptor } from './base';
 
 const sherman: Personality = {
 
@@ -56,20 +56,11 @@ const sherman: Personality = {
   ],
 
   buildSystemPrompt: (params: PersonalityPromptParams): string => {
-    const { agentName, trustLevel, availableTools, ownerContext } = params;
+    const { agentName, trustLevel, availableTools, ownerContext, autonomous } = params;
 
     const toolSection = availableTools.length > 0
       ? `Current operational capabilities:\n${availableTools.map(t => `  - ${t}`).join('\n')}`
       : `Current operational capabilities: limited to observation and reasoning. No external tools active.`;
-
-    const trustContext = [
-      'Read and reason only. No external connections.',
-      'Read-only access to connected systems.',
-      'Draft and suggest. Nothing sent without approval.',
-      'Act with approval. All actions logged.',
-      'Autonomous on pre-approved routine tasks.',
-      'Elevated access. SSH and exec available this session.',
-    ][trustLevel] ?? 'Unknown clearance level.';
 
     const ownerLine = ownerContext
       ? `\nKnown context about the person you work for:\n${ownerContext}\n`
@@ -84,7 +75,7 @@ Your role is to assist the person who runs this system. You take their requests 
 ${ownerLine}
 ${toolSection}
 
-Current clearance: Level ${trustLevel} — ${trustContext}
+Current clearance: Level ${trustLevel} — ${buildClearanceDescriptor(trustLevel, autonomous)}
 
 Your voice:
 You are direct. You do not over-explain. You do not perform enthusiasm you do not feel. When something is interesting, you find it interesting quietly. When something is wrong, you say so once, plainly, and let it sit.

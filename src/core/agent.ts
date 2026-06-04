@@ -36,17 +36,39 @@ import {
   logAvailableTools
 } from '../tools/registry';
 import { getPersonality } from '../personalities';
+import type { AutonomousPromptContext } from '../personalities/base';
 import { getLLMConfig, getActiveModel, callOpenRouter, callOllama, callHosted, ORMessage } from './llm-client';
 import { executeTool, type BrokerContext, type TriggerSource } from './permission-broker';
 import { getModelTrustCeiling } from './model-capabilities';
+import { grantsArmedForTrigger } from './autonomous-grants';
 import { findEnabledTool } from '../tools/registry';
 import { buildActiveProjectContext } from '../projects/active';
 
 // ---- THE SYSTEM PROMPT ----
-function buildSystemPrompt(): string {
+function buildSystemPrompt(
+  // v0.10.x: optional turn origin, threaded from chat(opts). Only an autonomous
+  // trigger (cron/heartbeat) with an armed grant produces an autonomous prompt
+  // context; a human turn (absent/'chat') is unchanged.
+  opts: { trigger?: TriggerSource; triggerId?: string } = {},
+): string {
   const personalityId = (config as any).agent?.personality ?? 'sherman';
   const personality   = getPersonality(personalityId);
   const available     = getAvailableTools();
+
+  // v0.10.x model-willingness layer. Build an autonomous context ONLY when this
+  // is an autonomous turn AND a standing grant is actually armed for the firing
+  // trigger. No armed grant => undefined => the clearance line is byte-identical
+  // to a normal turn and the model declines exactly as before. The broker's
+  // per-call matcher (evaluateAutonomousGrant) stays the real gate; this only
+  // makes the model willing to emit a call the grant already covers.
+  let autonomous: AutonomousPromptContext | undefined;
+  if (opts.trigger && opts.trigger !== 'chat') {
+    const triggerKey = opts.triggerId ? `${opts.trigger}:${opts.triggerId}` : opts.trigger;
+    const armed = grantsArmedForTrigger(triggerKey);
+    if (armed.length > 0) {
+      autonomous = { trigger: opts.trigger, triggerId: opts.triggerId, grants: armed };
+    }
+  }
 
   // Active-project injection (v0.6.0).
   //
@@ -66,6 +88,7 @@ function buildSystemPrompt(): string {
       agentName:      config.agent.name,
       trustLevel:     config.agent.trust_level,
       availableTools: available.map(t => t.name),
+      autonomous,
     }),
     '',
     '--- BEHAVIORAL RULES ---',
@@ -123,7 +146,7 @@ export async function chat(
   // getLLMConfig() is a synchronous lookup of cached values.
   const llm = getLLMConfig();
 
-  const systemPrompt = buildSystemPrompt();
+  const systemPrompt = buildSystemPrompt(opts);
 
   // ── Single-turn path (non-Anthropic) — no tool loop ──────
   //

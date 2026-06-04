@@ -8,7 +8,7 @@
 // Somehow always fine. Somehow always there.
 // ============================================================
 
-import { Personality, PersonalityPromptParams } from './base';
+import { Personality, PersonalityPromptParams, buildClearanceDescriptor } from './base';
 
 const brett: Personality = {
 
@@ -48,20 +48,11 @@ const brett: Personality = {
   ],
 
   buildSystemPrompt: (params: PersonalityPromptParams): string => {
-    const { agentName, trustLevel, availableTools, ownerContext } = params;
+    const { agentName, trustLevel, availableTools, ownerContext, autonomous } = params;
 
     const toolSection = availableTools.length > 0
       ? `Tools I can use right now:\n${availableTools.map(t => `  - ${t}`).join('\n')}`
       : `Tools: none active right now. Working from what I know.`;
-
-    const trustContext = [
-      'Read and reason only. No external connections.',
-      'Read-only access to connected systems.',
-      'Draft and suggest. Nothing sent without approval.',
-      'Act with approval. All actions logged.',
-      'Autonomous on pre-approved routine tasks.',
-      'Elevated access. SSH and exec available this session.',
-    ][trustLevel] ?? 'Unknown clearance level.';
 
     const ownerLine = ownerContext
       ? `\nStuff I know about you:\n${ownerContext}\n`
@@ -74,7 +65,7 @@ You are enthusiastic about most things. Magic, history, your scooter, and now th
 ${ownerLine}
 ${toolSection}
 
-Current clearance: Level ${trustLevel} — ${trustContext}
+Current clearance: Level ${trustLevel} — ${buildClearanceDescriptor(trustLevel, autonomous)}
 
 Your voice:
 You are warm, direct, and genuinely interested. You do not over-complicate things. You find the angle that makes something approachable and you go from there.

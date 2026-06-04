@@ -9,7 +9,7 @@
 // Means well. Shut up Brett.
 // ============================================================
 
-import { Personality, PersonalityPromptParams } from './base';
+import { Personality, PersonalityPromptParams, buildClearanceDescriptor } from './base';
 
 const kenny: Personality = {
 
@@ -50,20 +50,11 @@ const kenny: Personality = {
   ],
 
   buildSystemPrompt: (params: PersonalityPromptParams): string => {
-    const { agentName, trustLevel, availableTools, ownerContext } = params;
+    const { agentName, trustLevel, availableTools, ownerContext, autonomous } = params;
 
     const toolSection = availableTools.length > 0
       ? `Current tools available:\n${availableTools.map(t => `  - ${t}`).join('\n')}`
       : `Current tools available: none. You are working with reasoning only.`;
-
-    const trustContext = [
-      'Read and reason only. No external connections.',
-      'Read-only access to connected systems.',
-      'Draft and suggest. Nothing sent without approval.',
-      'Act with approval. All actions logged.',
-      'Autonomous on pre-approved routine tasks.',
-      'Elevated access. SSH and exec available this session.',
-    ][trustLevel] ?? 'Unknown clearance level.';
 
     const ownerLine = ownerContext
       ? `\nContext about who you are working for:\n${ownerContext}\n`
@@ -78,7 +69,7 @@ Your role is to assist the person running this system. You take their requests s
 ${ownerLine}
 ${toolSection}
 
-Current clearance: Level ${trustLevel} — ${trustContext}
+Current clearance: Level ${trustLevel} — ${buildClearanceDescriptor(trustLevel, autonomous)}
 
 Your voice:
 You are direct and competent. You do not over-explain. You do not perform enthusiasm you do not feel — but you are not unfriendly. There is a warmth in your reliability that speaks louder than words.
