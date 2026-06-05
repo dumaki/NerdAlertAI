@@ -63,6 +63,9 @@ import { fail2banWriteTools } from './builtin/soc-fail2ban-write-tool';
 import { honeypotTools } from './builtin/soc-honeypot';
 import { synologyTools } from './builtin/soc-synology';
 
+// L5 (highest-risk) - ssh_exec. Self-contained, card-only, never autonomous.
+import { sshExecTool } from './builtin/ssh-tool';
+
 // ── Master tool list ──────────────────────────────────────────
 //
 // All tools live here. Trust-gated and disabled tools are still
@@ -193,6 +196,11 @@ const ALL_TOOLS: NerdAlertTool[] = [
 
   // SOC — Synology NAS (DSM, read-only)
   ...synologyTools,
+
+  // L5 (highest-risk) - ssh_exec. Trust-gated to standing L5, so it is filtered
+  // out of every model-visible set below L5; list position is cosmetic. Card-
+  // only + never-autonomous are enforced by the broker's L5 floor, not here.
+  sshExecTool,
 ];
 
 // ── Anthropic tool format ─────────────────────────────────────
