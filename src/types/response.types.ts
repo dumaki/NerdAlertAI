@@ -397,6 +397,7 @@ export interface AgentConfig {
   skills?: SkillsConfig;       // optional: absent/disabled = no seed, no skills panel
   safety?: SafetyConfig;       // optional: absent/disabled = no snapshots; destructive ops unchanged
   render_window?: RenderWindowConfig; // optional: absent/disabled = no /api/render/get route, no viewer
+  ssh?: SshConfig;           // v0.10 L5 Phase 2a: optional ssh module config (hosts + network policy). Absent/disabled => ssh tool unbuilt/hidden, boot byte-identical.
   models?: ModelEntry[];     // v0.7 Slice 5a: declarative model registry (below).
                              // Absent = empty registry, so model-switching has
                              // nothing to allow. Core config, not a removable
@@ -615,4 +616,26 @@ export interface GitSafetyConfig {
 // not mounted, the dock icon is hidden, and the UI is byte-identical.
 export interface RenderWindowConfig {
   enabled: boolean;
+}
+
+// --- SSH MODULE CONFIG (v0.10 L5 Phase 2a) ---
+// Operator config for the highest-risk (L5) ssh tool. Absent OR enabled:false
+// => the ssh tool is unbuilt/hidden and nothing here is read (byte-identical
+// boot). network_policy gates which host ADDRESSES are dialable (default
+// mesh_only: Tailscale mesh only); see src/core/net-classify.ts. The private
+// key + passphrase are credentials in the OS keychain (never here, never .env).
+export type SshNetworkPolicy = 'mesh_only' | 'private_only' | 'allow_public';
+
+export interface SshHostConfig {
+  alias: string;   // short name the operator/agent refers to (e.g. "optiplex")
+  host:  string;   // address to dial: a Tailscale 100.x CGNAT IP, a *.ts.net
+                   //   MagicDNS name, or (under looser policies) a LAN IP / host
+  user:  string;   // ssh login user for this host
+}
+
+export interface SshConfig {
+  enabled: boolean;
+  network_policy?: SshNetworkPolicy;     // default 'mesh_only'
+  command_timeout_seconds?: number;      // default 30
+  hosts?: SshHostConfig[];               // operator allow-list; only these are dialable
 }

@@ -32,6 +32,7 @@ import { sendMessage, sendQueueCard } from '../telegram/bot';
 import { startCron, stopCron, setCronStatusEmitter } from '../cron';
 import { setAutonomousNotifier, setAutonomousQueueNotifier } from '../core/permission-broker';
 import { logGrantsAtBoot } from '../core/autonomous-grants';
+import { logSshHostsAtBoot } from '../core/ssh-config';
 import { initQueue } from '../core/autonomous-queue';
 import {
   initBudget,
@@ -327,6 +328,9 @@ app.listen(SERVER_PORT, () => {
   // v0.10 Phase 3: one-line summary of any autonomous grants loaded (dry-run).
   // No-op when none are configured, so a grant-free boot is byte-identical.
   logGrantsAtBoot();
+  // v0.10 L5 Phase 2a: one-line summary of the ssh module + per-host network
+  // classification under the active policy. No-op when ssh is disabled/absent.
+  logSshHostsAtBoot();
   // v0.10 Phase 5a: load + reap the durable autonomous queue (survives restart)
   // and schedule its daily sweep. No-op surface when empty/disabled.
   initQueue();
