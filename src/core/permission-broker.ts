@@ -122,6 +122,15 @@ export interface BrokerContext {
    * record simply omits it). The broker never gates on it.
    */
   correlationId?: string;
+  /**
+   * v0.10 L5 - set ONLY by resolveApproval when a human approves a parked card,
+   * marking this as the resolved-approval re-run. executeTool's L5 floor refuses
+   * a tool at/above L5_TRUST_FLOOR unless this is set, so an L5 (ssh/exec) action
+   * runs ONLY via the human card path - never a direct adapter / Telegram /
+   * autonomous call. Absent on every ordinary call => byte-identical; on a
+   * sub-L5 tool it has no effect.
+   */
+  cardApproved?: boolean;
 }
 
 /** Standardized result every adapter receives. */
@@ -301,6 +310,21 @@ function standingCeiling(ctx: BrokerContext): number {
 // autonomous (L5 always denied). An action above L3 fails the floor regardless
 // of its approval flag.
 const AUTONOMOUS_CEILING = 3;
+
+// L5 floor (v0.10 - highest-risk tier).
+// L5 is the highest tool-trust tier (ssh/exec-class). Beyond the ordinary trust
+// gate it carries two hard properties, both enforced in this broker:
+//   1. CARD-ONLY: an L5 tool runs ONLY as a human-resolved approval
+//      (resolveApproval sets ctx.cardApproved). Every other entry into
+//      executeTool (the OpenAI/pseudo adapters, the agent.ts loop, prefetch,
+//      Telegram, cron) lacks the marker and is refused. One way in, by construction.
+//   2. NOT ELEVATABLE: never reached via the one-off allow_elevation card;
+//      executeOrPropose denies an above-standing-trust L5 call instead of parking
+//      one. L5 requires STANDING trust_level: 5.
+// L5 is also never autonomous: the AUTONOMOUS_CEILING floor already hard-denies
+// it (required 5 > 3). No tool registers L5 today, so every L5 guard is a no-op
+// until one does (strict-superset / byte-identical).
+const L5_TRUST_FLOOR = 5;
 
 // A turn is autonomous when its trigger is present and not the live-human
 // 'chat' default. agent.ts sets ctx.trigger to (opts.trigger ?? 'chat'), so a
@@ -673,7 +697,11 @@ export async function executeTool(
       // the denial via liveBlockReason. With autonomous.enabled false (default)
       // this whole block is skipped → byte-identical Phase 3 dry-run.
       let liveBlockReason: string | undefined;
-      if (isAutonomousEnabled() && grantEval.configured && grantEval.wouldApprove && grantEval.matchedGrant) {
+      // Belt-and-braces: an above-ceiling (L4/L5) action NEVER auto-approves, even
+      // if a (misconfigured) matcher said it would. The grant matcher already
+      // refuses above-ceiling, so this changes nothing for valid grants; it makes
+      // "L5 is never autonomous" hold at the floor independent of the matcher.
+      if (!aboveCeiling && isAutonomousEnabled() && grantEval.configured && grantEval.wouldApprove && grantEval.matchedGrant) {
         const gate = evaluateAutonomousLiveGate(grantEval.matchedGrant);
         if (gate.ok) {
           return await autoApprove(
@@ -765,6 +793,33 @@ export async function executeTool(
         sources: [],
       };
     }
+  }
+
+  // L5 floor (v0.10).
+  // A structurally-valid L5 call that is NOT a resolved human approval is refused
+  // here. resolveApproval is the only caller that sets cardApproved, so the
+  // OpenAI/pseudo adapters, the agent.ts loop, prefetch, Telegram, and a
+  // non-streaming Anthropic turn all land here and stop. Autonomous L5 was already
+  // denied by the floor above (required > AUTONOMOUS_CEILING), so this only fires
+  // on a human-trigger direct path. No L5 tool today => never fires.
+  if (evalT.found && evalT.enabled && !evalT.overModelCeiling
+      && evalT.required >= L5_TRUST_FLOOR && !ctx.cardApproved) {
+    const denial =
+      `Refused: "${call.name}" is an L${evalT.required} (highest-risk) action and runs ONLY ` +
+      `via an explicit human approval card. It cannot be executed directly from this path. ` +
+      `Do not retry.`;
+    if (auditToolCallsOn()) {
+      recordOutcome({
+        ...auditCommon(call, ctx),
+        params: call.args,
+        trust: { required: evalT.required, ceiling: standingCeiling(ctx), outcome: 'denied-l5-uncarded' },
+        result: 'error',
+        error: denial,
+      });
+    }
+    const via = ctx.agentName ? ` (via ${ctx.agentName})` : '';
+    console.log(`[NerdAlert] L5 floor: refused ${call.name} - no card approval on this path${via}`);
+    return { id: call.id, name: call.name, output: `Error: ${denial}`, error: true, sources: [] };
   }
 
   const denialReason = checkTrust(call, ctx);
@@ -952,6 +1007,30 @@ export async function executeOrPropose(
   // A USER-gate block is elevatable ONLY when the operator opted in
   // (agent.allow_elevation). Off => deny exactly as before — byte-identical
   // no-elevation behaviour for a below-reach call.
+  // L5 is NEVER one-off elevatable (v0.10). An L5 tool above the user's STANDING
+  // trust is denied here rather than parked as an elevation card - L5 requires a
+  // deliberate standing trust_level: 5. At standing L5, overUserGate is false and
+  // this is skipped (the normal card path runs). No L5 tool today => never fires.
+  if (evalT.required >= L5_TRUST_FLOOR && evalT.overUserGate) {
+    if (auditToolCallsOn()) {
+      recordOutcome({
+        ...auditCommon(call, ctx),
+        params: call.args,
+        trust: { required: evalT.required, ceiling: standingCeiling(ctx), outcome: 'denied-by-trust' },
+        result: 'error',
+        error: `"${call.name}" requires standing L${evalT.required}; not one-off elevatable.`,
+      });
+    }
+    return {
+      id: call.id, name: call.name,
+      output:
+        `Error: "${call.name}" is an L${evalT.required} action and requires STANDING trust ` +
+        `level ${evalT.required} in config.yaml. It cannot be elevated for a single action. ` +
+        `Do not retry.`,
+      error: true, sources: [],
+    };
+  }
+
   const allowElevation = config.agent?.allow_elevation === true;
   const userGateElevation = evalT.overUserGate && allowElevation;
   if (evalT.overUserGate && !userGateElevation) {
@@ -1141,7 +1220,9 @@ export async function resolveApproval(
       },
     });
   }
-  const result = await executeTool(action.call, action.context);
+  // cardApproved marks this as the resolved-approval re-run so executeTool's L5
+  // floor admits it - the only path an L5 tool can execute. Harmless on sub-L5.
+  const result = await executeTool(action.call, { ...action.context, cardApproved: true });
   return { status: 'executed', result };
 }
 

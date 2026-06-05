@@ -454,6 +454,14 @@ export function getModelVisibleTools(ceiling?: number, opts?: ModelVisibleOpts):
       const policy = resolveToolPolicy(tool);
       if (!policy.enabled) return false;
       if (typeof ceiling === 'number' && policy.effectiveMinTrustLevel > ceiling) return false;
+      // v0.10 L5: never elevation-surface an L5 (highest-risk) tool above the
+      // user's STANDING trust. L5 is not one-off elevatable (the broker denies an
+      // above-standing L5 call rather than carding it), so showing it here only
+      // invites a refused attempt. At standing L5 it is already in
+      // getAvailableTools, so this hides nothing legitimately reachable.
+      // (5 mirrors the broker's L5_TRUST_FLOOR; inlined to avoid a
+      // registry -> broker import cycle.)
+      if (policy.effectiveMinTrustLevel >= 5 && policy.effectiveMinTrustLevel > config.agent.trust_level) return false;
       return true;
     });
   }

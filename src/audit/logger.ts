@@ -73,6 +73,7 @@ export type AuditTrustOutcome =
   | 'queued'
   | 'approved-by-grant'
   | 'denied-autonomous-ceiling'
+  | 'denied-l5-uncarded'        // v0.10 L5: an L5 tool attempted outside the human card path
 
 // The recovery handle for a mutating op. `target` is the resource (path / ip /
 // recipient); `snapshot` is the pre-change copy a reader can restore from.
