@@ -109,6 +109,19 @@ export function buildSSEBridge(
           output: event.output,
           error: event.error,
         });
+        // v0.10.x typed-content: when the tool returned a renderable response
+        // (map/image), emit a second wire event the UI renders inline. One
+        // emission point for every provider. Absent render => nothing extra,
+        // so the existing tool_result behaviour is byte-identical.
+        if (event.render) {
+          writeSSE(res, 'typed_content', {
+            id:      event.id,
+            name:    event.name,
+            kind:    event.render.type,        // 'map' | 'image'
+            content: event.render.content,
+            metadata: event.render.metadata ?? {},
+          });
+        }
         break;
 
       case 'tool_prefetch':

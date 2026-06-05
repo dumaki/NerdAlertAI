@@ -144,6 +144,14 @@ export interface BrokerResult {
    * normal result, so existing adapters that ignore it are unchanged.
    */
   approval?: { id: string; title: string; description: string; toolName: string };
+  /**
+   * v0.10.x typed-content: the full typed response when the executed tool
+   * returned a renderable type ('map' / 'image'). Carried out so the adapter
+   * can attach it to the tool_result event and the bridge can emit a
+   * `typed_content` SSE for inline rendering. Absent for plain text results,
+   * so every existing adapter that ignores it is byte-identical.
+   */
+  typed?: NerdAlertResponse;
 }
 
 /** A proposed action that requires human sign-off before running. */
@@ -845,6 +853,10 @@ export async function executeTool(
       output,
       error: false,
       sources: response.metadata?.sources ?? [],
+      // v0.10.x typed-content: surface a renderable response (map) so the
+      // adapter -> bridge can emit a typed_content SSE. Plain text => undefined.
+      // ('image' joins this in Slice I once it's a ResponseType.)
+      typed: response.type === 'map' ? response : undefined,
     };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

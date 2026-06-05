@@ -37,7 +37,7 @@
 //   "one of N possible shapes" in TypeScript.
 // ============================================================
 
-import type { Source } from '../types/response.types';
+import type { Source, NerdAlertResponse } from '../types/response.types';
 
 // ── Event kinds ──────────────────────────────────────────────
 //
@@ -135,6 +135,13 @@ export interface AgentEventToolResult {
   error: boolean;
   /** Sources the tool reported via metadata.sources. */
   sources?: Source[];
+  /**
+   * v0.10.x typed-content: the full typed response when the tool returned a
+   * renderable type (e.g. 'map', 'image'). The bridge emits a `typed_content`
+   * SSE alongside `tool_result` so the UI can render it inline. Absent for a
+   * plain 'text' result, so existing consumers are unaffected.
+   */
+  render?: NerdAlertResponse;
 }
 
 /**
@@ -302,6 +309,7 @@ export const toolResult = (
   output: string,
   error = false,
   sources?: Source[],
+  render?: NerdAlertResponse,
 ): AgentEventToolResult => ({
   kind: 'tool_result',
   id,
@@ -309,6 +317,7 @@ export const toolResult = (
   output,
   error,
   sources,
+  render,
 });
 
 export const turnComplete = (

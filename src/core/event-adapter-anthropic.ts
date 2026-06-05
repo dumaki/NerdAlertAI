@@ -337,6 +337,7 @@ export async function runAnthropicAdapter(
             result.output,
             result.error,
             result.sources.length ? result.sources : undefined,
+            result.typed,   // v0.10.x typed-content (map/image) -> typed_content SSE
           ));
         }
 

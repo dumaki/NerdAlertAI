@@ -25,6 +25,7 @@ export type ResponseType =
   | 'audio'      // Audio file — renders embedded player in chat
   | 'video'      // Video file or URL — renders embedded player in chat
   | 'data'       // Structured JSON — renders as table or chart
+  | 'map'        // Geospatial result — renders an interactive map inline (v0.10.x typed-content)
   | 'approval';  // Agent needs human sign-off before proceeding
 
 
@@ -63,6 +64,31 @@ export interface ImageAttachment {
 
   /** Base64-encoded raw bytes (no `data:` prefix — just the payload). */
   data: string;
+}
+
+
+// --- MAP RENDER PAYLOAD (v0.10.x typed-content) ---
+// Structured geospatial data a 'map' response carries in metadata.map so
+// the UI can draw a real interactive map (Leaflet) instead of plain text.
+// Coordinates are decimal degrees. The route, when present, is a GeoJSON
+// LineString whose coordinates are [lon, lat] pairs (GeoJSON axis order),
+// matching what OSRM returns directly. Purely additive: a 'text' response
+// never sets this, so existing tools are unchanged.
+
+export interface MapMarker {
+  lat:    number;
+  lon:    number;
+  label?: string;   // popup text, e.g. the canonical address
+}
+
+export interface MapRender {
+  center:  { lat: number; lon: number };  // fallback view for a single point
+  zoom:    number;                        // fallback zoom for a single point
+  markers: MapMarker[];                   // 1 for geocode, 2 for directions
+  route?:  {                              // present only for directions
+    type:        'LineString';
+    coordinates: [number, number][];      // GeoJSON [lon, lat] pairs
+  };
 }
 
 
@@ -109,6 +135,12 @@ export interface ResponseMeta {
   // each tool attaches what it has — project_write: { kind, target, commit,
   // branch } (git handle); a documents write: { ..., snapshot } (snapshot path).
   auditEffect?: { kind?: string; target?: string; [k: string]: unknown };
+
+  // --- MAP RENDER (v0.10.x typed-content) ---
+  // Populated by a 'map' response (e.g. the maps tool). Carries the geo data
+  // the UI renders as an inline interactive map. Absent on every other
+  // response type, so this is strictly additive.
+  map?: MapRender;
 }
 
 

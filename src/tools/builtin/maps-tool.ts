@@ -120,6 +120,7 @@ interface OsrmRouteResponse {
   routes?: Array<{
     distance: number;   // meters
     duration: number;   // seconds
+    geometry?: { type: 'LineString'; coordinates: [number, number][] };  // overview=full&geometries=geojson
   }>;
   message?: string;
 }
@@ -248,6 +249,9 @@ type TravelMode = 'driving' | 'walking' | 'cycling';
 interface RouteResult {
   distanceMeters:  number;
   durationSeconds: number;
+  // v0.10.x typed-content: the drawn route line (GeoJSON LineString, [lon,lat]).
+  // Present when OSRM returns geometry; undefined => the map shows just markers.
+  geometry?: { type: 'LineString'; coordinates: [number, number][] };
 }
 
 async function fetchDirections(
@@ -260,14 +264,22 @@ async function fetchDirections(
   // only, no polyline or step-by-step. Smallest possible response.
   // Step-by-step directions are a v0.6+ addition when we have a UI
   // surface to render them.
-  const url = `${OSRM_BASE_URL}/${mode}/${coords}?overview=false&steps=false`;
+  // overview=full + geometries=geojson gives us the route polyline as GeoJSON
+  // ([lon,lat] pairs) so the UI can draw the actual route line. steps=false
+  // keeps the response lean (no turn-by-turn). The text answer is unchanged;
+  // the geometry only feeds the inline map render.
+  const url = `${OSRM_BASE_URL}/${mode}/${coords}?overview=full&geometries=geojson&steps=false`;
 
   const data = await fetchJSON<OsrmRouteResponse>(url);
   if (data.code !== 'Ok' || !data.routes || data.routes.length === 0) {
     return null;
   }
   const r = data.routes[0];
-  return { distanceMeters: r.distance, durationSeconds: r.duration };
+  return {
+    distanceMeters:  r.distance,
+    durationSeconds: r.duration,
+    geometry: r.geometry && r.geometry.type === 'LineString' ? r.geometry : undefined,
+  };
 }
 
 // ── Memory lookup ────────────────────────────────────────────
@@ -474,13 +486,19 @@ const mapsTool: NerdAlertTool = {
       }
 
       return {
-        type:    'text',
+        type:    'map',
         content:
           `${cap(hit.displayName, RESULT_TEXT_CAP)}\n` +
           `Coordinates: ${hit.latitude.toFixed(5)}, ${hit.longitude.toFixed(5)}`,
         metadata: {
           title:   `Map — ${cap(hit.displayName, 80)}`,
           sources: [OSM_SOURCE],
+          // v0.10.x typed-content: single point -> one marker, fixed zoom.
+          map: {
+            center:  { lat: hit.latitude, lon: hit.longitude },
+            zoom:    14,
+            markers: [{ lat: hit.latitude, lon: hit.longitude, label: hit.displayName }],
+          },
         },
       };
     }
@@ -586,7 +604,7 @@ const mapsTool: NerdAlertTool = {
         : `From: ${cap(fromHit.displayName, 80)}`;
 
       return {
-        type: 'text',
+        type: 'map',
         content:
           fromLine + '\n' +
           `To:   ${cap(toHit.displayName, 80)}\n` +
@@ -596,6 +614,17 @@ const mapsTool: NerdAlertTool = {
         metadata: {
           title:   `Directions — ${cap(toHit.displayName, 60)}`,
           sources: [OSM_SOURCE],
+          // v0.10.x typed-content: two markers + the route line. center/zoom are
+          // a fallback; the UI fits bounds to the markers + route when present.
+          map: {
+            center:  { lat: fromHit.latitude, lon: fromHit.longitude },
+            zoom:    12,
+            markers: [
+              { lat: fromHit.latitude, lon: fromHit.longitude, label: fromHit.displayName },
+              { lat: toHit.latitude,   lon: toHit.longitude,   label: toHit.displayName },
+            ],
+            route: route.geometry,
+          },
         },
       };
     }

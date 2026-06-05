@@ -82,7 +82,7 @@ import { WebSuppressionTracker } from './web-suppression';
 import type { ORMessage, OpenAIContentPart } from './llm-client';
 import { resolveProviderKey } from './llm-client';
 import { getModel } from '../config/models';
-import type { Source } from '../types/response.types';
+import type { Source, NerdAlertResponse } from '../types/response.types';
 import {
   budgetKey,
   resolveCeiling,
@@ -546,7 +546,7 @@ export async function runOpenAIAdapter(
         // ── Web suppression interception ────────────────────
         // See src/core/web-suppression.ts. Mistral via Ollama is
         // the entrenched failure case this protects against.
-        let result: { output: string; error: boolean; sources: Source[] };
+        let result: { output: string; error: boolean; sources: Source[]; typed?: NerdAlertResponse };
         if (suppressionTracker.shouldSuppress(call.function.name)) {
           const triggeredBy = suppressionTracker.succeededList();
           console.log(
@@ -583,6 +583,7 @@ export async function runOpenAIAdapter(
           result.output,
           result.error,
           result.sources.length ? result.sources : undefined,
+          result.typed,   // v0.10.x typed-content (map/image) -> typed_content SSE
         ));
 
         // Push the tool result turn. tool_call_id correlates this

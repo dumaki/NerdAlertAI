@@ -47,7 +47,7 @@ import {
   streamOpenRouter,
 } from './llm-client';
 import { WebSuppressionTracker } from './web-suppression';
-import type { Source } from '../types/response.types';
+import type { Source, NerdAlertResponse } from '../types/response.types';
 import type { NerdAlertTool } from '../types/response.types';
 
 // ── Open-tag types ───────────────────────────────────────────
@@ -655,7 +655,7 @@ export async function runPseudoToolAdapter(
       // See src/core/web-suppression.ts. Free-tier Nemotron and
       // Mistral-fallback both land here; both have shown the
       // "specialized tool then web" stacking pattern.
-      let result: { output: string; error: boolean; sources: Source[] };
+      let result: { output: string; error: boolean; sources: Source[]; typed?: NerdAlertResponse };
       if (suppressionTracker.shouldSuppress(call.name)) {
         const triggeredBy = suppressionTracker.succeededList();
         console.log(
@@ -685,6 +685,7 @@ export async function runPseudoToolAdapter(
         result.output,
         result.error,
         result.sources.length ? result.sources : undefined,
+        result.typed,   // v0.10.x typed-content (map/image) -> typed_content SSE
       ));
       resultBlocks.push(`<tool_result name="${call.name}">${result.output}</tool_result>`);
     }

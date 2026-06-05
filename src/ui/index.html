@@ -7616,6 +7616,69 @@
     }
   }
 
+  // v0.10.x typed-content inline renderer. Slice M handles 'map'; other kinds
+  // (e.g. 'image') fall through and render nothing yet, so an unknown kind
+  // never throws (forward-compatible).
+  function renderTypedContent(payload) {
+    if (!payload || payload.kind !== 'map') return;
+    var geo = payload.metadata && payload.metadata.map;
+    if (!geo || !Array.isArray(geo.markers) || geo.markers.length === 0) return;
+
+    var card = document.createElement('div');
+    card.className = 'typed-content typed-map';
+    card.style.margin = '10px 0';
+    card.style.maxWidth = '680px';
+    card.style.border = '1px solid rgba(255,255,255,0.12)';
+    card.style.borderRadius = '10px';
+    card.style.overflow = 'hidden';
+
+    var frame = document.createElement('iframe');
+    frame.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+    frame.setAttribute('loading', 'lazy');
+    frame.setAttribute('title', (payload.metadata && payload.metadata.title) || 'Map');
+    frame.style.width = '100%';
+    frame.style.height = '320px';
+    frame.style.border = '0';
+    frame.style.display = 'block';
+    frame.srcdoc = buildMapSrcdoc(geo);
+    card.appendChild(frame);
+
+    var streamDiv = document.getElementById('streaming-bubble');
+    if (streamDiv) {
+      streamDiv.appendChild(card);
+    } else {
+      var container = document.getElementById('chat-messages');
+      if (container) container.appendChild(card);
+    }
+    scrollToBottom();
+  }
+
+  // Builds the sandboxed iframe document that draws the map with Leaflet (CDN)
+  // over OpenStreetMap tiles. The geo payload is passed as base64-encoded JSON
+  // so no value inside it can break out of the inline script. Vendoring Leaflet
+  // under /assets for offline use is a tracked follow-up.
+  function buildMapSrcdoc(geo) {
+    var b64 = btoa(unescape(encodeURIComponent(JSON.stringify(geo))));
+    return ''
+      + '<!DOCTYPE html><html><head><meta charset="utf-8">'
+      + '<meta name="viewport" content="width=device-width, initial-scale=1">'
+      + '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">'
+      + '<style>html,body,#map{height:100%;margin:0}#map{background:#11141a}</style>'
+      + '</head><body><div id="map"></div>'
+      + '<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>'
+      + '<script>'
+      + 'var D=JSON.parse(decodeURIComponent(escape(atob("' + b64 + '"))));'
+      + 'var map=L.map("map");'
+      + 'L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap contributors"}).addTo(map);'
+      + 'var layers=[];'
+      + '(D.markers||[]).forEach(function(mk){var mar=L.marker([mk.lat,mk.lon]).addTo(map);if(mk.label){mar.bindPopup(mk.label);}layers.push(mar);});'
+      + 'if(D.route&&D.route.coordinates){layers.push(L.geoJSON(D.route,{style:{color:"#3aa0ff",weight:4,opacity:0.9}}).addTo(map));}'
+      + 'if(layers.length>1){map.fitBounds(L.featureGroup(layers).getBounds().pad(0.25));}'
+      + 'else if(D.center){map.setView([D.center.lat,D.center.lon],D.zoom||13);}'
+      + 'setTimeout(function(){map.invalidateSize();},60);'
+      + '<\/script></body></html>';
+  }
+
   function renderSourcesFooter(sources) {
     if (!Array.isArray(sources) || sources.length === 0) return;
 
@@ -8236,6 +8299,13 @@
               if (streamDiv) streamDiv.appendChild(block);
             }
             scrollToBottom();
+          }
+
+          else if (eventType === 'typed_content') {
+            // v0.10.x typed-content: a tool returned a renderable response.
+            // Slice M handles 'map'; the plain tool_result already rendered the
+            // text answer, this adds the inline visual. Unknown kinds no-op.
+            renderTypedContent(parsed);
           }
 
           else if (eventType === 'approval_request') {
