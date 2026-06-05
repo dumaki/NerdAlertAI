@@ -10,39 +10,31 @@
 //      only resolveApproval sets. One way in, by construction.
 //   2. NOT ELEVATABLE / NEVER AUTONOMOUS — requires STANDING trust_level:5 and
 //      the autonomous ceiling (L3) hard-denies it on any cron/heartbeat turn.
-// This file therefore does NOT re-implement those guarantees; it only provides
-// the side-effect-free PREVIEW (Phase 2b) and — later — the apply branch (2c).
+// This file is the trust/approval wrapper; the ssh engine (connect, TOFU host
+// keys, credential cache) lives in core/ssh-client.ts — the same tool/engine
+// split as the fail2ban write tool over its shim client.
 //
-// PHASE 2b SCOPE
+// TWO BRANCHES
 // ─────────────────────────────────────────────────────────
-// PREVIEW only. The apply branch (approved:true) is a clear "not yet
-// implemented (Phase 2c)" stub. The preview touches NO network: it resolves the
-// host alias against the operator allow-list (ssh-config.ts) and the active
-// network policy (net-classify.ts), then either:
-//   - returns a plain err() with NO approvalReady (module disabled, missing
-//     input, unknown alias, or a policy-blocked host) — relayed to the model,
-//     never carded, the same posture as fail2ban's missing-input branch; or
-//   - returns a ready preview (metadata.approvalReady) carrying the exposure
-//     badge, which the broker parks as an Approve/Deny card.
-//
-// APPROVAL (two-step, broker-carded) — mirrors soc-fail2ban-write-tool.ts
-// ─────────────────────────────────────────────────────────
-// requiresApproval:true routes this through executeOrPropose on a card-capable
-// transport. The broker forces the side-effect-free preview (approved:false —
-// a model-supplied approved:true cannot skip it), and if the preview signals
-// metadata.approvalReady it parks the approved variant and raises a real card.
-// The human click runs the apply branch via resolveApproval (which sets
-// ctx.cardApproved, the only key past the L5 floor).
+// PREVIEW (approved !== true): side-effect-free. Resolves the host alias
+//   against the operator allow-list (ssh-config) and the active network policy
+//   (net-classify), then either relays a plain err() with NO approvalReady
+//   (module disabled / missing input / unknown alias / policy-blocked host) or
+//   returns a ready preview carrying the exposure badge, which the broker parks
+//   as an Approve/Deny card. Touches NO network.
+// APPLY (approved === true, Phase 2c): re-validates (defense-in-depth) and runs
+//   the command via the ssh engine, narrating the structured result. Reached
+//   only via the human card (the L5 floor guarantees it).
 //
 // SECRETS
 // ─────────────────────────────────────────────────────────
 // This file owns NO secrets. The private key + passphrase are credentials in
-// the OS keychain (Phase 2c), never here, never .env. Phase 2b reads only host
-// addresses, users, and policy — all from config.ssh via ssh-config.ts.
+// the OS keychain (loaded by core/ssh-client.ts), never here, never .env.
 // ============================================================
 
 import { NerdAlertTool, NerdAlertResponse } from '../../types/response.types';
-import { isSshEnabled, resolveSshHost, listSshHosts } from '../../core/ssh-config';
+import { isSshEnabled, resolveSshHost, listSshHosts, getSshTimeoutSeconds } from '../../core/ssh-config';
+import { runSshCommand } from '../../core/ssh-client';
 import type { HostClass } from '../../core/net-classify';
 
 // ── Response helper ───────────────────────────────────────────
@@ -120,6 +112,76 @@ function previewSshExec(host: string, command: string): NerdAlertResponse {
   };
 }
 
+// ── Apply (Phase 2c) ──────────────────────────────────────────
+// Reached ONLY via resolveApproval (the L5 floor refuses every other path), so
+// a human has already approved this exact command. Re-validates as defense-in-
+// depth (config may have changed since the preview raised the card), runs the
+// command via the ssh engine, and narrates the structured result. A non-zero
+// remote exit is a RESULT, not a tool failure; only connect/auth/host-key/
+// timeout failures are surfaced as errors. Every outcome carries an exec
+// auditEffect with NO recovery handle (exec is irreversible).
+async function applySshExec(host: string, command: string): Promise<NerdAlertResponse> {
+  if (!isSshEnabled()) return err('the ssh module is disabled in config.yaml (set ssh.enabled: true to use it).');
+  if (!host)    return err('ssh_exec requires a "host" (a configured host alias).');
+  if (!command) return err('ssh_exec requires a "command" to run.');
+
+  const resolved = resolveSshHost(host);
+  if (!resolved) {
+    const known     = listSshHosts().map(h => h.alias);
+    const knownPart = known.length > 0
+      ? `Configured aliases: ${known.join(', ')}.`
+      : 'No ssh hosts are configured.';
+    return err(`unknown ssh host alias: ${JSON.stringify(host)}. ${knownPart}`);
+  }
+  if (!resolved.allowed) {
+    return err(`host "${resolved.alias}" is blocked by network_policy: ${resolved.reason}`);
+  }
+
+  const target = `${resolved.user}@${resolved.host}`;
+  const result = await runSshCommand({
+    host:           resolved.host,
+    user:           resolved.user,
+    command,
+    timeoutSeconds: getSshTimeoutSeconds(),
+  });
+
+  // Connect / auth / host-key / timeout / no-key failure: the command did not
+  // complete. Audit the attempt (exitCode null) and narrate the reason.
+  if (!result.ok) {
+    return {
+      type:    'text',
+      content: `Error: ${result.error ?? 'ssh command failed'}`,
+      metadata: {
+        title:   'SSH error',
+        sources: [],
+        auditEffect: { kind: 'exec', target, command, exitCode: null },
+      },
+    };
+  }
+
+  // The command ran. exitCode (including non-zero) is data, not a tool error.
+  const exitLine =
+    result.exitCode === 0      ? 'Command completed (exit 0).'
+    : result.exitCode === null ? `Command ended via signal ${result.signal ?? 'unknown'}.`
+    :                            `Command exited with status ${result.exitCode}.`;
+
+  const parts: string[] = [];
+  if (result.stdout.trim()) parts.push(`stdout:\n${result.stdout}`);
+  if (result.stderr.trim()) parts.push(`stderr:\n${result.stderr}`);
+  if (parts.length === 0)    parts.push('(no output)');
+
+  return {
+    type:    'text',
+    content: `${target}: ${exitLine}\n\n${parts.join('\n\n')}`,
+    metadata: {
+      title:   `SSH ${target}`,
+      sources: [],
+      // No recovery handle: exec is irreversible. exitCode is the forensic payload.
+      auditEffect: { kind: 'exec', target, command, exitCode: result.exitCode },
+    },
+  };
+}
+
 // ════════════════════════════════════════════════════════════
 // ssh_exec — run a remote command over SSH (L5)
 // ════════════════════════════════════════════════════════════
@@ -150,11 +212,10 @@ export const sshExecTool: NerdAlertTool = {
     const host    = typeof params.host    === 'string' ? params.host.trim()    : '';
     const command = typeof params.command === 'string' ? params.command.trim() : '';
 
-    // Apply branch — Phase 2b STUB. The L5 floor guarantees this is reached only
-    // via resolveApproval (a human has already approved the card), so the only
-    // thing missing is the ssh2 connect, which lands in Phase 2c.
+    // Apply branch (Phase 2c). The L5 floor guarantees this is reached only via
+    // resolveApproval (a human has already approved this exact card).
     if (params.approved === true) {
-      return err('ssh_exec apply is not yet implemented (Phase 2c). The command was NOT run.');
+      return applySshExec(host, command);
     }
 
     // Preview branch — side-effect-free, no network.

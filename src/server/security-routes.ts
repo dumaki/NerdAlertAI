@@ -121,6 +121,8 @@ const ALLOWED: Record<string, { description: string; minLen: number; maxLen: num
   'synology-password':         { description: 'Synology DSM password (paired with SYNOLOGY_USERNAME env var; recommend a dedicated read-only DSM user)', minLen: 1,  maxLen: 200 },
   'fail2ban-shim-token':       { description: 'Bearer token for the read-only fail2ban shim on ids-pi (port 8021; paired with FAIL2BAN_SHIM_URL)', minLen: 32, maxLen: 128 },
   'nmap-shim-token':           { description: 'Bearer token for the nmap shim on the openclaw PC (paired with NMAP_SHIM_URL)', minLen: 32, maxLen: 128 },
+  'ssh-private-key':           { description: 'SSH private key (PEM / OpenSSH format) for the shared L5 ssh identity. See docs/setup-ssh.md.', minLen: 100, maxLen: 20000 },
+  'ssh-key-passphrase':        { description: 'Passphrase for the ssh private key (optional; only if the key is encrypted)', minLen: 1, maxLen: 1024 },
 };
 
 // ---------- Provider key probes ----------
@@ -534,6 +536,17 @@ export function mountSecurityRoutes(app: Express): void {
           await initNmapCredential();
         } catch (e: any) {
           console.warn('[security] nmap-shim cache refresh after credential write failed:', e?.message);
+        }
+      }
+
+      // SSH private key / passphrase (L5 ssh_exec) - refresh the cache in the
+      // ssh module so the next ssh_exec uses the new identity without a restart.
+      if (name === 'ssh-private-key' || name === 'ssh-key-passphrase') {
+        try {
+          const { initSshCredential } = require('../core/ssh-client');
+          await initSshCredential();
+        } catch (e: any) {
+          console.warn('[security] ssh credential cache refresh after credential write failed:', e?.message);
         }
       }
 

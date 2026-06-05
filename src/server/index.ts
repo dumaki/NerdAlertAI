@@ -32,7 +32,7 @@ import { sendMessage, sendQueueCard } from '../telegram/bot';
 import { startCron, stopCron, setCronStatusEmitter } from '../cron';
 import { setAutonomousNotifier, setAutonomousQueueNotifier } from '../core/permission-broker';
 import { logGrantsAtBoot } from '../core/autonomous-grants';
-import { logSshHostsAtBoot } from '../core/ssh-config';
+import { logSshHostsAtBoot, isSshEnabled } from '../core/ssh-config';
 import { initQueue } from '../core/autonomous-queue';
 import {
   initBudget,
@@ -45,6 +45,7 @@ import { startReminders, stopReminders } from '../reminders';
 import { initGmailCredential } from '../gmail/config';
 import { initGithubCredential } from '../github/config';
 import { initYoutubeApiKey } from '../tools/builtin/video-tool';
+import { initSshCredential } from '../core/ssh-client';
 import { initCalendarCredential } from '../gmail/calendar';
 import { initActiveProject } from '../projects/active';
 import { initActivePersonality, getActivePersonality } from '../personalities/active';
@@ -406,6 +407,19 @@ startTelegram().catch((err: unknown) => {
   }).catch((err: unknown) => {
     console.error('[NerdAlert] initYoutubeApiKey failed:', err);
   });
+
+  // v0.10 L5 Phase 2c: pull the shared ssh identity (private key + optional
+  // passphrase) from the credential store once at boot, ONLY when the ssh module
+  // is enabled - a no-ssh boot does zero keychain reads. getSshKey() then reads
+  // it synchronously on the (carded, rare) ssh_exec path; ensureSshKey covers a
+  // key added between boot and first use.
+  if (isSshEnabled()) {
+    initSshCredential().then(found => {
+      if (found) console.log('[NerdAlert] SSH private key loaded from credential store');
+    }).catch((err: unknown) => {
+      console.error('[NerdAlert] initSshCredential failed:', err);
+    });
+  }
 
   // ── Active project state (v0.6.0) ───────────────────────
   // Load the persisted active-project marker from disk so the

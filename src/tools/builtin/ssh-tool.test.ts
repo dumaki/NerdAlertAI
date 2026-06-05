@@ -1,30 +1,36 @@
-// Tests for the L5 ssh_exec tool — Phase 2b (preview branch + apply stub).
+// Tests for the L5 ssh_exec tool — preview branch (Phase 2b) + apply branch (2c).
 // Run with: npm test   (or: npx vitest run)
 //
-// Phase 2b ships the side-effect-free PREVIEW only. These tests pin the preview
-// contract the broker's card path depends on:
+// Preview pins the contract the broker's card path depends on:
 //   - an allowed (mesh) host yields a ready-to-card preview (approvalReady) with
 //     the exposure badge;
 //   - an unknown alias, a policy-blocked host, a disabled module, or missing
-//     input each yields a plain err() with NO approvalReady (relayed, not carded);
-//   - the apply branch is a clear Phase-2c stub that runs nothing;
-//   - the tool is trustLevel:5 + requiresApproval and scopes by host alias.
+//     input each yields a plain err() with NO approvalReady (relayed, not carded).
+// Apply pins the post-approval behaviour with the ssh engine mocked:
+//   - a completed run renders the exit status + output and carries an exec
+//     auditEffect (no recovery handle);
+//   - a non-zero exit is a RESULT, not a tool error;
+//   - a connect/host-key failure is narrated, exitCode null;
+//   - apply re-validates (unknown / policy-blocked host -> err, never dials).
 //
-// ssh_exec reads config.ssh via core/ssh-config.ts (which reads the config
-// loader); net-classify.ts is pure. So mocking ONLY the config loader drives the
-// whole resolve + policy path. The preview touches no network, so nothing else
-// needs mocking.
+// ssh_exec reads config.ssh via core/ssh-config.ts (net-classify is pure), so
+// mocking the config loader drives the whole resolve + policy path. The ssh
+// ENGINE (core/ssh-client.ts) is mocked so the apply branch is tested without a
+// real ssh socket.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-// vi.hoisted builds the fake config before the vi.mock factory runs; tests mutate
-// h.config.ssh per case in beforeEach.
 const h = vi.hoisted(() => {
   const config: any = { agent: {}, logging: {} };
-  return { config };
+  const runSshCommand = vi.fn();
+  return { config, runSshCommand };
 });
 
 vi.mock('../../config/loader', () => ({ config: h.config }));
+// Mock the engine so apply is exercised without a real ssh socket.
+// getSshTimeoutSeconds is NOT here - it lives in ssh-config, driven by the
+// mocked config loader above.
+vi.mock('../../core/ssh-client', () => ({ runSshCommand: h.runSshCommand }));
 
 import { sshExecTool } from './ssh-tool';
 
@@ -40,6 +46,7 @@ beforeEach(() => {
       { alias: 'webhost',  host: '8.8.8.8',       user: 'root'   },
     ],
   };
+  h.runSshCommand.mockReset();
 });
 
 describe('ssh_exec — tool shape', () => {
@@ -62,6 +69,7 @@ describe('ssh_exec — preview branch', () => {
     expect(res.content).toContain('MESH (Tailscale)');
     expect(res.content).toContain('uptime');
     expect(res.content).toContain('dumaki@100.86.173.63');
+    expect(h.runSshCommand).not.toHaveBeenCalled();   // preview touches no network
   });
 
   it('resolves the alias case-insensitively', async () => {
@@ -102,11 +110,50 @@ describe('ssh_exec — preview branch', () => {
   });
 });
 
-describe('ssh_exec — apply branch (Phase 2b stub)', () => {
-  it('returns a not-implemented error and runs nothing', async () => {
+describe('ssh_exec — apply branch (Phase 2c)', () => {
+  it('runs the command and returns exit 0 output with an exec auditEffect', async () => {
+    h.runSshCommand.mockResolvedValue({ ok: true, exitCode: 0, stdout: 'load: 0.1\n', stderr: '' });
     const res = await sshExecTool.execute({ host: 'optiplex', command: 'uptime', approved: true });
+
+    expect(h.runSshCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ host: '100.86.173.63', user: 'dumaki', command: 'uptime' }),
+    );
+    expect(res.content).toContain('exit 0');
+    expect(res.content).toContain('load: 0.1');
+    expect(res.metadata.auditEffect).toEqual(
+      expect.objectContaining({ kind: 'exec', target: 'dumaki@100.86.173.63', command: 'uptime', exitCode: 0 }),
+    );
     expect(res.metadata.approvalReady).toBeUndefined();
-    expect(res.content).toContain('Phase 2c');
-    expect(res.content).toContain('NOT run');
+  });
+
+  it('renders a non-zero exit as a result (not a tool error)', async () => {
+    h.runSshCommand.mockResolvedValue({ ok: true, exitCode: 2, stdout: '', stderr: 'nope\n' });
+    const res = await sshExecTool.execute({ host: 'optiplex', command: 'false', approved: true });
+    expect(res.content).toContain('status 2');
+    expect(res.content).toContain('nope');
+    expect(res.metadata.auditEffect).toEqual(expect.objectContaining({ exitCode: 2 }));
+  });
+
+  it('narrates a connect/host-key failure and records exitCode null', async () => {
+    h.runSshCommand.mockResolvedValue({
+      ok: false, exitCode: null, stdout: '', stderr: '',
+      error: 'HOST KEY MISMATCH for 100.86.173.63',
+    });
+    const res = await sshExecTool.execute({ host: 'optiplex', command: 'uptime', approved: true });
+    expect(res.content).toContain('Error:');
+    expect(res.content).toContain('HOST KEY MISMATCH');
+    expect(res.metadata.auditEffect).toEqual(expect.objectContaining({ kind: 'exec', exitCode: null }));
+  });
+
+  it('re-validates on apply: unknown alias errs and never dials', async () => {
+    const res = await sshExecTool.execute({ host: 'ghost', command: 'uptime', approved: true });
+    expect(res.content.toLowerCase()).toContain('unknown ssh host alias');
+    expect(h.runSshCommand).not.toHaveBeenCalled();
+  });
+
+  it('re-validates on apply: policy-blocked host errs and never dials', async () => {
+    const res = await sshExecTool.execute({ host: 'webhost', command: 'uptime', approved: true });
+    expect(res.content.toLowerCase()).toContain('network_policy');
+    expect(h.runSshCommand).not.toHaveBeenCalled();
   });
 });
