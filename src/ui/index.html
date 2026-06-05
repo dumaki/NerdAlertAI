@@ -7725,19 +7725,19 @@
     appendTypedCard(card);
   }
 
-  // Builds the sandboxed iframe document that draws the map with Leaflet (CDN)
+  // Builds the sandboxed iframe document that draws the map with Leaflet (vendored)
   // over OpenStreetMap tiles. The geo payload is passed as base64-encoded JSON
-  // so no value inside it can break out of the inline script. Vendoring Leaflet
-  // under /assets for offline use is a tracked follow-up.
+  // so no value inside it can break out of the inline script. Leaflet 1.9.4 is
+  // vendored under /assets/leaflet/ for offline use (no CDN dependency).
   function buildMapSrcdoc(geo) {
     var b64 = btoa(unescape(encodeURIComponent(JSON.stringify(geo))));
     return ''
       + '<!DOCTYPE html><html><head><meta charset="utf-8">'
       + '<meta name="viewport" content="width=device-width, initial-scale=1">'
-      + '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">'
+      + '<link rel="stylesheet" href="/assets/leaflet/leaflet.css">'
       + '<style>html,body,#map{height:100%;margin:0}#map{background:#11141a}</style>'
       + '</head><body><div id="map"></div>'
-      + '<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>'
+      + '<script src="/assets/leaflet/leaflet.js"><\/script>'
       + '<script>'
       + 'var D=JSON.parse(decodeURIComponent(escape(atob("' + b64 + '"))));'
       + 'var map=L.map("map");'
