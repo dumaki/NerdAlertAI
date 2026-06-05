@@ -914,6 +914,18 @@ async function handleNarrationStream(
     const id = `prefetch_${r.toolName}`;
     sseEvent(res, 'tool_start',  { id, name: r.toolName });
     sseEvent(res, 'tool_result', { id, name: r.toolName, output: r.data });
+    // v0.10.x typed-content: a prefetched tool that returned a renderable
+    // response (map/image) emits the same typed_content event the tool-loop
+    // bridge does, so the inline render works on the narration path too.
+    if (r.typed) {
+      sseEvent(res, 'typed_content', {
+        id,
+        name:     r.toolName,
+        kind:     r.typed.type,
+        content:  r.typed.content,
+        metadata: r.typed.metadata ?? {},
+      });
+    }
   }
 
   // Emit the buffered response. Pre-v0.5.28 streamed token events

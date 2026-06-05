@@ -51,7 +51,7 @@
 //   requiresNarration(results)    → boolean          false if all failed
 // ============================================================
 
-import { Source }            from '../types/response.types';
+import { Source, NerdAlertResponse } from '../types/response.types';
 import { executeTool, type BrokerContext } from './permission-broker';
 import * as chrono from 'chrono-node';
 import {
@@ -81,6 +81,11 @@ export interface PrefetchResult {
   data:      string;   // stringified result or error message
   available: boolean;  // false if tool threw or returned empty
   sources?:  Source[]; // citations from this tool's metadata, if any
+  // v0.10.x typed-content: the full typed response when the prefetched
+  // tool returned a renderable type (map/image). Carried so the narration
+  // path can emit a typed_content SSE and render the inline visual, the
+  // same way the tool-loop bridge does. Absent for plain-text tools.
+  typed?:    NerdAlertResponse;
   // v0.6.3.9: mechanical, display-only data (a project file listing /
   // roster) that must be rendered VERBATIM, not narrated. Set in
   // prefetchTools for project list/projects actions; the narration
@@ -928,6 +933,47 @@ const INTENT_MAP: Record<string, IntentGroup> = {
 
       // Fall through to defaultParams (list_repos). Bare 'github'
       // queries get a useful answer rather than a no-op whoami.
+      return undefined;
+    },
+  },
+
+  // ── Image search (open-licensed images, v0.10.x Slice I) ──
+  // Without this group, "show me a picture of X" / "what does X look
+  // like" matches no group, drops to the native tool loop, and Mistral
+  // freezes on tool discovery under the 59-tool list (the same failure
+  // that motivated the maps/cron/memory groups). Prefetch runs
+  // image_search server-side; the narration path renders the grid via
+  // the typed payload (PrefetchResult.typed -> typed_content SSE).
+  //
+  // 'look like' is included for "what does X look like"; it can mildly
+  // over-fire on figurative uses ("what does success look like") —
+  // acceptable, the result is just an unwanted image grid, easy to tune.
+  image_search: {
+    keywords: [
+      'picture of', 'pictures of', 'pic of', 'pics of',
+      'photo of', 'photos of', 'photograph of', 'photographs of',
+      'image of', 'images of',
+      'show me a picture', 'show me a photo', 'show me an image',
+      'show me pictures', 'show me photos', 'show me images',
+      'find a picture', 'find pictures', 'find a photo', 'find photos',
+      'find an image', 'find images',
+      'look like', 'looks like',
+    ],
+    tools: ['image_search'],
+    paramExtractor: (msg: string) => {
+      // "what does a red panda look like" / "what do red pandas look like"
+      let m = msg.match(/\bwhat\s+(?:do|does)\s+(?:a\s+|an\s+|the\s+)?(.+?)\s+looks?\s+like\b/i);
+      if (m && m[1]) return { query: m[1].trim() };
+      // "...picture/photo/image of X"
+      m = msg.match(/\b(?:picture|pictures|pic|pics|photo|photos|photograph|photographs|image|images)\s+of\s+(.+?)[?.!]*\s*$/i);
+      if (m && m[1]) return { query: m[1].trim() };
+      // "show me a picture/photo/image [of] X"
+      m = msg.match(/\bshow\s+me\s+(?:a\s+|an\s+|some\s+)?(?:picture|pictures|pic|pics|photo|photos|image|images)\s+(?:of\s+)?(.+?)[?.!]*\s*$/i);
+      if (m && m[1]) return { query: m[1].trim() };
+      // generic "<subject> looks like" fallback
+      m = msg.match(/\b(?:a\s+|an\s+|the\s+)?([A-Za-z0-9][\w\s'-]*?)\s+looks?\s+like\b/i);
+      if (m && m[1]) return { query: m[1].trim() };
+      // No clean extraction — tool returns a "what to find" prompt.
       return undefined;
     },
   },
@@ -2083,6 +2129,7 @@ export async function prefetchTools(
       available: result.output.length > 0,
       sources:   result.sources,
       renderVerbatim: isMechanicalProjectList || undefined,
+      typed:     result.typed,   // v0.10.x typed-content (map/image) -> narration typed_content SSE
     });
   }
 

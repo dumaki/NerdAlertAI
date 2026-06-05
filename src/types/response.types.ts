@@ -26,6 +26,7 @@ export type ResponseType =
   | 'video'      // Video file or URL — renders embedded player in chat
   | 'data'       // Structured JSON — renders as table or chart
   | 'map'        // Geospatial result — renders an interactive map inline (v0.10.x typed-content)
+  | 'image'      // Open-licensed images — renders a thumbnail grid inline (v0.10.x typed-content)
   | 'approval';  // Agent needs human sign-off before proceeding
 
 
@@ -101,6 +102,29 @@ export interface MapRender {
 //   title?: string   means "title may or may not be present"
 //   Without the ?, it would be required on every response.
 
+// --- IMAGE RENDER PAYLOAD (v0.10.x typed-content) ---
+// Structured image results an 'image' response carries in metadata.images so
+// the UI can render a thumbnail grid inline. We surface the Openverse-proxied
+// thumbnail (single origin: api.openverse.org) rather than the source CDN url,
+// so the browser never hotlinks arbitrary third-party hosts. Each item links
+// out to its source page (foreign_landing_url) for full res + license, and
+// carries the ready-made CC attribution string. Purely additive.
+
+export interface ImageResult {
+  thumbnail:    string;   // Openverse-proxied thumb URL — what the grid renders
+  full?:        string;   // original source-CDN image URL — optional link target
+  title?:       string;
+  attribution?: string;   // ready-made "<title> by <creator> is licensed under ..."
+  sourceUrl?:   string;   // foreign_landing_url — the provider's page for this image
+  license?:     string;   // e.g. "by-nc-sa 2.0"
+}
+
+export interface ImageRender {
+  query?:  string;          // the search term, for the grid caption
+  images:  ImageResult[];   // ordered results (UI caps how many it shows)
+}
+
+
 export interface ResponseMeta {
   title?: string;       // Panel header, player label, approval prompt title
   sources?: Source[];   // If present, renders collapsed Sources footer
@@ -141,6 +165,11 @@ export interface ResponseMeta {
   // the UI renders as an inline interactive map. Absent on every other
   // response type, so this is strictly additive.
   map?: MapRender;
+
+  // --- IMAGE RENDER (v0.10.x typed-content) ---
+  // Populated by an 'image' response (e.g. the image_search tool). Absent on
+  // every other response type, so this is strictly additive.
+  images?: ImageRender;
 }
 
 

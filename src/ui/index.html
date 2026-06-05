@@ -7616,11 +7616,30 @@
     }
   }
 
-  // v0.10.x typed-content inline renderer. Slice M handles 'map'; other kinds
-  // (e.g. 'image') fall through and render nothing yet, so an unknown kind
-  // never throws (forward-compatible).
+  // v0.10.x typed-content inline renderer. Dispatches by kind: 'map' draws an
+  // interactive map, 'image' draws an open-licensed thumbnail grid. Unknown
+  // kinds no-op, so a future type can't throw here (forward-compatible).
   function renderTypedContent(payload) {
-    if (!payload || payload.kind !== 'map') return;
+    if (!payload) return;
+    if (payload.kind === 'map')   { renderTypedMap(payload);    return; }
+    if (payload.kind === 'image') { renderTypedImages(payload); return; }
+    // unknown kind: no-op (forward-compatible)
+  }
+
+  // Shared placement: drop a typed card into the in-progress agent bubble if
+  // one is streaming, else into the messages container. Then keep the view pinned.
+  function appendTypedCard(card) {
+    var streamDiv = document.getElementById('streaming-bubble');
+    if (streamDiv) {
+      streamDiv.appendChild(card);
+    } else {
+      var container = document.getElementById('chat-messages');
+      if (container) container.appendChild(card);
+    }
+    scrollToBottom();
+  }
+
+  function renderTypedMap(payload) {
     var geo = payload.metadata && payload.metadata.map;
     if (!geo || !Array.isArray(geo.markers) || geo.markers.length === 0) return;
 
@@ -7643,14 +7662,67 @@
     frame.srcdoc = buildMapSrcdoc(geo);
     card.appendChild(frame);
 
-    var streamDiv = document.getElementById('streaming-bubble');
-    if (streamDiv) {
-      streamDiv.appendChild(card);
-    } else {
-      var container = document.getElementById('chat-messages');
-      if (container) container.appendChild(card);
-    }
-    scrollToBottom();
+    appendTypedCard(card);
+  }
+
+  // Open-licensed image grid (Slice I). Renders the Openverse-proxied thumbnail
+  // only (single external origin); each tile links to the source page for full
+  // res + license. referrer suppressed for privacy. A broken thumb hides its tile.
+  function renderTypedImages(payload) {
+    var data = payload.metadata && payload.metadata.images;
+    var imgs = data && Array.isArray(data.images) ? data.images : [];
+    if (imgs.length === 0) return;
+
+    var card = document.createElement('div');
+    card.className = 'typed-content typed-images';
+    card.style.margin = '10px 0';
+    card.style.maxWidth = '680px';
+    card.style.display = 'grid';
+    card.style.gridTemplateColumns = 'repeat(auto-fill, minmax(150px, 1fr))';
+    card.style.gap = '8px';
+
+    imgs.forEach(function (im) {
+      if (!im || !im.thumbnail) return;
+      var a = document.createElement('a');
+      a.href = im.sourceUrl || im.full || im.thumbnail;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.title = im.attribution || im.title || '';
+      a.style.display = 'block';
+      a.style.position = 'relative';
+      a.style.borderRadius = '8px';
+      a.style.overflow = 'hidden';
+      a.style.border = '1px solid rgba(255,255,255,0.12)';
+      a.style.background = '#11141a';
+
+      var img = document.createElement('img');
+      img.src = im.thumbnail;
+      img.alt = im.title || (payload.metadata && payload.metadata.title) || 'image';
+      img.loading = 'lazy';
+      img.referrerPolicy = 'no-referrer';
+      img.style.width = '100%';
+      img.style.height = '150px';
+      img.style.objectFit = 'cover';
+      img.style.display = 'block';
+      img.onerror = function () { a.style.display = 'none'; };
+      a.appendChild(img);
+
+      if (im.license) {
+        var tag = document.createElement('span');
+        tag.textContent = im.license;
+        tag.style.position = 'absolute';
+        tag.style.bottom = '0';
+        tag.style.right = '0';
+        tag.style.fontSize = '10px';
+        tag.style.padding = '1px 4px';
+        tag.style.background = 'rgba(0,0,0,0.6)';
+        tag.style.color = '#cfe';
+        a.appendChild(tag);
+      }
+      card.appendChild(a);
+    });
+
+    appendTypedCard(card);
   }
 
   // Builds the sandboxed iframe document that draws the map with Leaflet (CDN)

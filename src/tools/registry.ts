@@ -35,6 +35,7 @@ import githubWriteTool  from './builtin/github-write-tool';
 import githubSetupTool  from './builtin/github-setup';
 import helpTool        from './builtin/help-tool';
 import weatherTool     from './builtin/weather-tool';
+import imageSearchTool from './builtin/image-search-tool';
 import rssTool         from './builtin/rss-tool';
 import timerTool       from './builtin/timer-tool';
 import hostMetricsTool from './builtin/host-metrics';
@@ -77,6 +78,10 @@ const ALL_TOOLS: NerdAlertTool[] = [
   memoryTool,
   helpTool,
   weatherTool,
+  // image_search (L1, keyless Openverse) sits before web/specialized tools so a
+  // small model scoring top-to-bottom matches "show me a picture of X" here
+  // before it reaches web. Renders inline via typed-content (Slice I).
+  imageSearchTool,
 
   // Specialized tools that overlap with `web` go BEFORE `web` in the
   // list. Small models (Mistral 24B observed in v0.5.31.2 testing)

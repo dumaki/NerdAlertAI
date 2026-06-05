@@ -853,10 +853,9 @@ export async function executeTool(
       output,
       error: false,
       sources: response.metadata?.sources ?? [],
-      // v0.10.x typed-content: surface a renderable response (map) so the
-      // adapter -> bridge can emit a typed_content SSE. Plain text => undefined.
-      // ('image' joins this in Slice I once it's a ResponseType.)
-      typed: response.type === 'map' ? response : undefined,
+      // v0.10.x typed-content: surface a renderable response (map / image) so
+      // the adapter -> bridge can emit a typed_content SSE. Plain text => undefined.
+      typed: (response.type === 'map' || response.type === 'image') ? response : undefined,
     };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
