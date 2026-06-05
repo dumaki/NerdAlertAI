@@ -46,12 +46,14 @@ import {
   buildInjectedPrompt,
   clipPrefetchForFreeTier,
   evaluatePrefetchRelevance,
+  intentToolNames,
   PREFETCH_RELEVANCE_THRESHOLD,
   type PrefetchResult,
   type PrefetchRelevanceJudgment,
   type HistoryTurn,
 } from '../core/intent-prefetch';
 import { checkResponseReferencesData } from '../core/narration-postcheck';
+import { selectToolsForTurn, type ToolNarrowing } from '../core/tool-selector';
 import { getAllJobs, getRecentRuns } from '../cron';
 import {
   saveSession,
@@ -87,6 +89,7 @@ import { mountSkillsRoute }        from './skills-route';
 import { createToolTurnObserver }  from '../skills/telemetry';
 import { buildSkillsContext }      from '../skills/context';
 import type { Source } from '../types/response.types';
+import type { NerdAlertTool } from '../types/response.types';
 
 // ── New layer imports ────────────────────────────────────────
 import { type AgentEvent } from '../core/agent-events';
@@ -340,6 +343,29 @@ function convertHistoryForOpenAI(messages: Anthropic.MessageParam[]): ORMessage[
 
 const noNativeToolSupport = new Set<string>();
 
+// ── Per-turn tool narrowing helper (weak-model paths) ────────
+// Wraps the tool-selector for the two freeze-prone handlers (Ollama,
+// OpenRouter/pseudo). Anthropic and hosted handlers never call this,
+// so they keep the full list. When narrowing is undefined or the
+// selector fails open, the full visible list is returned unchanged
+// (strict-superset). Logs one greppable line when a turn was actually
+// narrowed - that line is the reliability sweep's recall telemetry.
+async function narrowVisibleTools(
+  visible:    NerdAlertTool[],
+  narrowing:  ToolNarrowing | undefined,
+  modelLabel: string,
+): Promise<NerdAlertTool[]> {
+  if (!narrowing) return visible;
+  const sel = await selectToolsForTurn(visible, narrowing);
+  if (sel.narrowed) {
+    console.log(
+      `[tool-select] ${modelLabel}: ${sel.tools.length}/${visible.length} ` +
+      `[${sel.tools.map(t => t.name).join(',')}] (${sel.reason})`
+    );
+  }
+  return sel.tools;
+}
+
 // ── Anthropic streaming handler — through the AgentEvent layer ──
 async function handleAnthropicStream(
   res:             Response,
@@ -444,6 +470,7 @@ async function handleOllamaStream(
   trustLevel:      number,
   agentName:       string,
   telemetry:       ((event: AgentEvent) => void) | undefined,
+  narrowing?:      ToolNarrowing,
 ): Promise<void> {
 
   const llm = getLLMConfig();
@@ -453,7 +480,7 @@ async function handleOllamaStream(
   // skip the probe and route straight to pseudo-tool.
   if (noNativeToolSupport.has(bareModel)) {
     console.log(`[capability-cache] ${bareModel} → pseudo-tool (cached)`);
-    return handlePseudoToolStream(res, systemPrompt, initialMessages, prefetchSources, trustLevel, agentName, telemetry, 'ollama');
+    return handlePseudoToolStream(res, systemPrompt, initialMessages, prefetchSources, trustLevel, agentName, telemetry, 'ollama', narrowing);
   }
 
   // Convert Anthropic MessageParam history → ORMessage via the
@@ -471,7 +498,8 @@ async function handleOllamaStream(
     },
   });
 
-  const availableTools = getModelVisibleTools(getModelTrustCeiling(getActiveModel()));
+  const visibleTools = getModelVisibleTools(getModelTrustCeiling(getActiveModel()));
+  const availableTools = await narrowVisibleTools(visibleTools, narrowing, bareModel);
   const openAITools = toOpenAIFormat(availableTools);
 
   const brokerContext: BrokerContext = {
@@ -544,6 +572,7 @@ async function handlePseudoToolStream(
   agentName:         string,
   telemetry:          ((event: AgentEvent) => void) | undefined,
   transportOverride?: 'openrouter' | 'ollama',
+  narrowing?:         ToolNarrowing,
 ): Promise<void> {
 
   const llm = getLLMConfig();
@@ -564,7 +593,8 @@ async function handlePseudoToolStream(
     },
   });
 
-  const availableTools = getModelVisibleTools(getModelTrustCeiling(getActiveModel()));
+  const visibleTools = getModelVisibleTools(getModelTrustCeiling(getActiveModel()));
+  const availableTools = await narrowVisibleTools(visibleTools, narrowing, llm.model.replace(/^ollama\//, ''));
 
   const brokerContext: BrokerContext = {
     userTrustLevel: trustLevel,
@@ -1119,9 +1149,10 @@ export function mountUIRoutes(app: Express): void {
       let enrichedPrompt = systemPrompt;
       const prefetchSources: Source[] = [];
       let prefetchResults: PrefetchResult[] = [];
+      let detectedGroups: string[] = [];
 
       if (needsPrefetch) {
-        const detectedGroups = detectIntent(safeMessage, agentName);
+        detectedGroups = detectIntent(safeMessage, agentName);
 
         if (detectedGroups.length > 0) {
           const historyTurns: HistoryTurn[] = conversationHistory
@@ -1161,6 +1192,17 @@ export function mountUIRoutes(app: Express): void {
       }
 
       // ── Route to the right adapter ────────────────────────
+      // Per-turn tool narrowing input (weak-model paths only).
+      // Freeze-prone local/free models (Ollama, OpenRouter) get a
+      // narrowed tool list this turn (see tool-selector.ts). Built only
+      // for those providers; undefined leaves the full list, so the
+      // Anthropic + hosted handlers (which never receive it) are
+      // untouched. intentTools is the keyword recall net derived from
+      // the detectIntent already run above for prefetch.
+      const narrowing: ToolNarrowing | undefined = needsPrefetch
+        ? { query: safeMessage, intentTools: intentToolNames(detectedGroups) }
+        : undefined;
+
       const hasNarratablePrefetch = prefetchResults.some(r => r.available);
 
       // ── Prefetch relevance gate (v0.5.28 — Approach B) ─────────────────────────────────────────
@@ -1343,9 +1385,9 @@ export function mountUIRoutes(app: Express): void {
             `[narration] postcheck bail (${outcome.reason}) → tool loop fallback`
           );
           if (llm.provider === 'ollama') {
-            await handleOllamaStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry);
+            await handleOllamaStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry, narrowing);
           } else {
-            await handlePseudoToolStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry);
+            await handlePseudoToolStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry, undefined, narrowing);
           }
         }
       } else if (llm.provider === 'ollama') {
@@ -1356,10 +1398,10 @@ export function mountUIRoutes(app: Express): void {
         // didn't run; prefetchSources is empty when no tool returned
         // data). In the gate-bail case it strips the misroute data
         // out of the model's input so the tool loop runs clean.
-        await handleOllamaStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry);
+        await handleOllamaStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry, narrowing);
       } else {
         // OpenRouter — same bail behavior as the Ollama branch.
-        await handlePseudoToolStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry);
+        await handlePseudoToolStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry, undefined, narrowing);
       }
 
       const saveable = [

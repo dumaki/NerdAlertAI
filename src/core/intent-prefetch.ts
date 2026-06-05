@@ -2085,6 +2085,21 @@ export function detectIntent(message: string, agentName?: string): string[] {
   return matched;
 }
 
+// ── intentToolNames ────────────────────────────────────────
+//
+// Maps already-detected intent group names to the tool names those
+// groups own. Used by the tool-selector's narrowing as the keyword
+// recall net (deterministic hits guaranteed into the narrowed set).
+//
+// Takes GROUPS, not a message, on purpose: the caller (ui-routes) has
+// already run detectIntent for prefetch, so this neither re-detects
+// nor re-logs, and the tool-selector never has to import this module
+// (no circular dependency). Returns a de-duplicated tool-name list;
+// empty groups in -> empty list out.
+export function intentToolNames(groups: string[]): string[] {
+  return [...new Set(groups.flatMap(g => INTENT_MAP[g]?.tools ?? []))];
+}
+
 // ── prefetchTools ─────────────────────────────────────────────
 //
 // Runs each tool via registry execute(). Mirrors the runTool()
