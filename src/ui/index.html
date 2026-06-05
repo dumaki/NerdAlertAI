@@ -7617,12 +7617,13 @@
   }
 
   // v0.10.x typed-content inline renderer. Dispatches by kind: 'map' draws an
-  // interactive map, 'image' draws an open-licensed thumbnail grid. Unknown
-  // kinds no-op, so a future type can't throw here (forward-compatible).
+  // interactive map, 'image' draws an open-licensed thumbnail grid, 'video'
+  // draws an embedded player (iframe or native). Unknown kinds no-op (forward-compatible).
   function renderTypedContent(payload) {
     if (!payload) return;
     if (payload.kind === 'map')   { renderTypedMap(payload);    return; }
     if (payload.kind === 'image') { renderTypedImages(payload); return; }
+    if (payload.kind === 'video') { renderTypedVideo(payload);  return; }
     // unknown kind: no-op (forward-compatible)
   }
 
@@ -7721,6 +7722,73 @@
       }
       card.appendChild(a);
     });
+
+    appendTypedCard(card);
+  }
+
+  // Inline video player (v0.10.x typed-content, Phase A). Two modes:
+  //   embedUrl  -> iframe with src (YouTube nocookie / Vimeo DNT)
+  //   directUrl -> native <video controls> element (mp4/webm/ogg)
+  // Same card pattern as maps/images; appendTypedCard handles placement.
+  function renderTypedVideo(payload) {
+    var video = payload.metadata && payload.metadata.video;
+    if (!video) return;
+
+    var card = document.createElement('div');
+    card.className = 'typed-content typed-video';
+    card.style.margin = '10px 0';
+    card.style.maxWidth = '680px';
+    card.style.border = '1px solid rgba(255,255,255,0.12)';
+    card.style.borderRadius = '10px';
+    card.style.overflow = 'hidden';
+
+    if (video.embedUrl) {
+      // YouTube/Vimeo embed -> iframe with src pointing to the embed URL.
+      // sandbox allows scripts (the player is JS), same-origin (player state),
+      // and popups ("Watch on YouTube" link). allow= for media playback features.
+      var frame = document.createElement('iframe');
+      frame.setAttribute('src', video.embedUrl);
+      frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-popups');
+      frame.setAttribute('allow', 'autoplay; encrypted-media; fullscreen');
+      frame.setAttribute('allowfullscreen', '');
+      frame.setAttribute('loading', 'lazy');
+      frame.setAttribute('title', video.title || 'Video');
+      frame.style.width = '100%';
+      frame.style.height = '380px';
+      frame.style.border = '0';
+      frame.style.display = 'block';
+      card.appendChild(frame);
+    } else if (video.directUrl) {
+      // Direct file -> native <video> element. preload=metadata fetches
+      // duration/dimensions without downloading the whole file.
+      var player = document.createElement('video');
+      player.setAttribute('controls', '');
+      player.setAttribute('preload', 'metadata');
+      player.setAttribute('src', video.directUrl);
+      player.style.width = '100%';
+      player.style.maxHeight = '380px';
+      player.style.display = 'block';
+      player.style.background = '#000';
+      card.appendChild(player);
+    } else {
+      return;
+    }
+
+    // Title/source caption below the player.
+    if (video.title || video.source) {
+      var caption = document.createElement('div');
+      caption.style.padding = '6px 10px';
+      caption.style.fontSize = '12px';
+      caption.style.opacity = '0.7';
+      caption.style.background = 'rgba(0,0,0,0.3)';
+      var text = video.title || '';
+      if (video.source) {
+        text += text ? ' \u2014 ' : '';
+        text += video.source.charAt(0).toUpperCase() + video.source.slice(1);
+      }
+      caption.textContent = text;
+      card.appendChild(caption);
+    }
 
     appendTypedCard(card);
   }

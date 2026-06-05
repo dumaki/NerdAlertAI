@@ -853,9 +853,9 @@ export async function executeTool(
       output,
       error: false,
       sources: response.metadata?.sources ?? [],
-      // v0.10.x typed-content: surface a renderable response (map / image) so
+      // v0.10.x typed-content: surface a renderable response (map / image / video) so
       // the adapter -> bridge can emit a typed_content SSE. Plain text => undefined.
-      typed: (response.type === 'map' || response.type === 'image') ? response : undefined,
+      typed: (response.type === 'map' || response.type === 'image' || response.type === 'video') ? response : undefined,
     };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

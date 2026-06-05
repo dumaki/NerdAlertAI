@@ -978,6 +978,28 @@ const INTENT_MAP: Record<string, IntentGroup> = {
     },
   },
 
+  // ── Video embed (v0.10.x typed-content, Phase A) ──
+  // Covers "play this video" / "watch this" + YouTube/Vimeo URL detection.
+  // Phase B extends keywords for search-intent ("show me a video of X").
+  // Same narration-path motivation as maps/image_search: Mistral freezes
+  // on tool discovery, so prefetch runs the video tool server-side.
+  video: {
+    keywords: [
+      'play this video', 'play this', 'play the video',
+      'watch this video', 'watch this', 'watch the video',
+      'embed this video', 'embed video',
+      'youtube.com', 'youtu.be', 'vimeo.com',
+    ],
+    tools: ['video'],
+    paramExtractor: (msg: string) => {
+      // Extract a URL from the message. The video tool's embed action
+      // handles YouTube/Vimeo detection, so we just need to find the URL.
+      const m = msg.match(/https?:\/\/[^\s)>"']+/i);
+      if (m) return { action: 'embed', url: m[0] };
+      return undefined;
+    },
+  },
+
   weather: {
     keywords: ['weather', 'forecast', 'temperature', 'how cold', 'how hot',
                'how warm', 'rain', 'raining', 'snow', 'snowing', 'sunny',

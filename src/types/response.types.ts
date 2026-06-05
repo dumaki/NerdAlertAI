@@ -124,6 +124,20 @@ export interface ImageRender {
   images:  ImageResult[];   // ordered results (UI caps how many it shows)
 }
 
+// --- VIDEO RENDER (v0.10.x typed-content, Phase A) ---
+// Populated by a 'video' response. Two rendering modes:
+//   embedUrl  -> sandboxed iframe (YouTube/Vimeo nocookie embed)
+//   directUrl -> native <video> element (mp4/webm/ogg file)
+// Exactly one of embedUrl/directUrl should be set per result.
+export interface VideoRender {
+  embedUrl?:   string;   // nocookie embed URL (YouTube/Vimeo)
+  directUrl?:  string;   // direct mp4/webm for native <video>
+  title?:      string;   // video title for caption
+  thumbnail?:  string;   // preview image URL (optional)
+  source?:     string;   // 'youtube' | 'vimeo' | 'wikimedia' | 'archive' | 'direct'
+  duration?:   number;   // length in seconds (optional)
+}
+
 
 export interface ResponseMeta {
   title?: string;       // Panel header, player label, approval prompt title
@@ -170,6 +184,11 @@ export interface ResponseMeta {
   // Populated by an 'image' response (e.g. the image_search tool). Absent on
   // every other response type, so this is strictly additive.
   images?: ImageRender;
+
+  // --- VIDEO RENDER (v0.10.x typed-content, Phase A) ---
+  // Populated by a 'video' response (e.g. the video tool). Absent on
+  // every other response type, so this is strictly additive.
+  video?: VideoRender;
 }
 
 
