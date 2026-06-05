@@ -101,6 +101,7 @@ const ALLOWED: Record<string, { description: string; minLen: number; maxLen: num
   'telegram-bot-token':     { description: 'Telegram Bot Token',                                minLen: 40, maxLen: 80 },
   'sonarr-api-key':         { description: 'Sonarr API key',                                    minLen: 16, maxLen: 64 },
   'radarr-api-key':         { description: 'Radarr API key',                                    minLen: 16, maxLen: 64 },
+  'youtube-api-key':        { description: 'YouTube Data API v3 key (optional; enables YouTube video search). See docs/setup-youtube.md.', minLen: 30, maxLen: 60 },
   'openclaw-token':         { description: 'OpenClaw gateway token',                            minLen: 16, maxLen: 200 },
   'openrouter-key':         { description: 'OpenRouter API key',                                minLen: 30, maxLen: 200, test: 'provider' },
   'anthropic-key':          { description: 'Anthropic API key',                                 minLen: 30, maxLen: 200, test: 'provider' },
@@ -360,6 +361,18 @@ export function mountSecurityRoutes(app: Express): void {
           await initGithubCredential();
         } catch (e: any) {
           console.warn('[security] github cache refresh after credential write failed:', e?.message);
+        }
+      }
+
+      // YouTube Data API key - refresh the cache in the video tool so the
+      // next "video of X" search picks up the new key without a restart.
+      // No key -> video search stays Wikimedia-only (graceful degradation).
+      if (name === 'youtube-api-key') {
+        try {
+          const { initYoutubeApiKey } = require('../tools/builtin/video-tool');
+          await initYoutubeApiKey();
+        } catch (e: any) {
+          console.warn('[security] youtube-api-key cache refresh after credential write failed:', e?.message);
         }
       }
 

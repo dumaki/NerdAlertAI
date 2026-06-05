@@ -38,6 +38,7 @@
 // ============================================================
 
 import { NerdAlertTool, NerdAlertResponse, VideoRender, Source } from '../../types/response.types';
+import { getCredential } from '../../security/credential-store';
 
 // ── Configuration ─────────────────────────────────────────────
 
@@ -63,6 +64,42 @@ const WIKIMEDIA_SOURCE: Source = {
   label: 'Wikimedia Commons',
   url:   'https://commons.wikimedia.org',
 };
+
+// ── YouTube API key (Phase C - optional, keyed search) ───────
+// The video tool keeps its OWN credential cache rather than borrowing
+// Gmail's. The whole video feature is self-contained: if the tool is
+// removed, the youtube-api-key slot in the credential store is simply
+// unused and nothing else changes (the modular-removal contract, P6).
+//
+// initYoutubeApiKey() resolves the key ONCE at boot (and again after a
+// /setup panel write) so getYoutubeApiKey() is a synchronous read on the
+// hot path - same shape as initGmailCredential in src/gmail/config.ts.
+// No key configured -> getYoutubeApiKey() returns null and the search
+// action goes straight to Wikimedia, exactly as in Phase B.
+//
+// The key is read from the credential store (keychain or chmod-600 file),
+// never from .env, never hardcoded (P1).
+let cachedYoutubeApiKey: string | null = null;
+
+export async function initYoutubeApiKey(): Promise<boolean> {
+  try {
+    const value = await getCredential('youtube-api-key');
+    if (value) {
+      cachedYoutubeApiKey = value;
+      return true;
+    }
+    cachedYoutubeApiKey = null;
+    return false;
+  } catch {
+    // Keychain read failed (rare). Treat as no-key: Wikimedia-only.
+    cachedYoutubeApiKey = null;
+    return false;
+  }
+}
+
+export function getYoutubeApiKey(): string | null {
+  return cachedYoutubeApiKey;
+}
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -325,6 +362,82 @@ async function searchWikimediaVideos(query: string): Promise<WikimediaVideo | nu
   return null;
 }
 
+// ── YouTube Data API v3 search (Phase C) ──────────────────────
+// Keyed search via the official Data API. Returns the single best
+// EMBEDDABLE video as a nocookie embed, or null when the API returns
+// no embeddable results. Throws on transport/HTTP errors (fetchJSON
+// rejects on non-2xx, e.g. 403 quota-exhausted) so the caller can log
+// and fall back to Wikimedia.
+//
+// QUOTA: search.list costs 100 units against the default 10,000/day
+// quota (~100 searches/day). maxResults does not change the cost, so we
+// request 1 - the renderer shows a single video, matching the Wikimedia
+// path. videoEmbeddable=true filters out videos YouTube refuses to embed
+// (otherwise the iframe renders an error). safeSearch=moderate is a sane
+// default. The key travels only as an HTTPS query param to googleapis.com
+// and is never logged.
+
+const YOUTUBE_API_URL = 'https://www.googleapis.com/youtube/v3/search';
+
+interface YoutubeVideo {
+  videoId:   string;
+  title:     string;
+  thumbnail: string;
+  embedUrl:  string;
+  watchUrl:  string;
+}
+
+// Minimal shape of the search.list response - only the fields we read.
+interface YoutubeSearchResponse {
+  items?: Array<{
+    id?: { videoId?: string };
+    snippet?: {
+      title?: string;
+      thumbnails?: {
+        high?:    { url?: string };
+        medium?:  { url?: string };
+        default?: { url?: string };
+      };
+    };
+  }>;
+}
+
+async function searchYoutubeVideos(query: string, apiKey: string): Promise<YoutubeVideo | null> {
+  const trimmed = query.trim();
+  if (!trimmed) return null;
+
+  const url =
+    `${YOUTUBE_API_URL}` +
+    `?part=snippet` +
+    `&type=video` +
+    `&videoEmbeddable=true` +
+    `&safeSearch=moderate` +
+    `&maxResults=1` +
+    `&q=${encodeURIComponent(trimmed)}` +
+    `&key=${encodeURIComponent(apiKey)}`;
+
+  const data = await fetchJSON<YoutubeSearchResponse>(url);
+  const item = data.items?.[0];
+  const videoId = item?.id?.videoId;
+  if (!item || !videoId) return null;
+
+  const snippet = item.snippet ?? {};
+  const title = (snippet.title && snippet.title.trim()) ? snippet.title.trim() : 'Untitled';
+  const thumbnail =
+    snippet.thumbnails?.high?.url ??
+    snippet.thumbnails?.medium?.url ??
+    snippet.thumbnails?.default?.url ??
+    `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+
+  return {
+    videoId,
+    title,
+    thumbnail,
+    embedUrl: `https://www.youtube-nocookie.com/embed/${videoId}`,
+    watchUrl: `https://www.youtube.com/watch?v=${videoId}`,
+  };
+}
+
 // ── The tool ─────────────────────────────────────────────────
 
 const videoTool: NerdAlertTool = {
@@ -434,6 +547,44 @@ const videoTool: NerdAlertTool = {
           content:  'video.search requires a query. Tell me what to find a video of.',
           metadata: {},
         };
+      }
+
+      // ── YouTube first (Phase C) ────────────────────────────
+      // If an API key is configured, try YouTube Data API v3 before
+      // Wikimedia - vastly broader coverage (music, pop culture,
+      // tutorials) than Commons. On ANY failure (quota/403, network,
+      // malformed response) we log for the operator and fall through
+      // to the Wikimedia path below, so search never hard-fails just
+      // because YouTube is unavailable. No key -> getYoutubeApiKey()
+      // returns null and this block is skipped entirely (P6: remove
+      // the key and behaviour is byte-identical to Phase B).
+      const ytKey = getYoutubeApiKey();
+      if (ytKey) {
+        try {
+          const yt = await searchYoutubeVideos(query, ytKey);
+          if (yt) {
+            return {
+              type:    'video',
+              content: `${yt.title} - from YouTube.`,
+              metadata: {
+                title:   `Video - ${yt.title}`,
+                sources: [{ label: 'YouTube', url: yt.watchUrl }],
+                video: {
+                  embedUrl:  yt.embedUrl,
+                  title:     yt.title,
+                  thumbnail: yt.thumbnail,
+                  source:    'youtube',
+                },
+              },
+            };
+          }
+          // yt === null: no embeddable result. Fall through to Wikimedia.
+        } catch (e: unknown) {
+          // Quota/auth/network failure. Operator-only log (never shown
+          // to the user); the response still succeeds via Wikimedia.
+          const msg = e instanceof Error ? e.message : String(e);
+          console.warn(`[video] youtube search failed (${msg}), falling back to wikimedia`);
+        }
       }
 
       let video: WikimediaVideo | null;

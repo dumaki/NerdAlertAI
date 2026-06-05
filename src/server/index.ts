@@ -43,6 +43,7 @@ import {
 import { startReminders, stopReminders } from '../reminders';
 import { initGmailCredential } from '../gmail/config';
 import { initGithubCredential } from '../github/config';
+import { initYoutubeApiKey } from '../tools/builtin/video-tool';
 import { initCalendarCredential } from '../gmail/calendar';
 import { initActiveProject } from '../projects/active';
 import { initActivePersonality, getActivePersonality } from '../personalities/active';
@@ -388,6 +389,18 @@ startTelegram().catch((err: unknown) => {
     if (found) console.log('[NerdAlert] Calendar credential loaded from credential store');
   }).catch((err: unknown) => {
     console.error('[NerdAlert] initCalendarCredential failed:', err);
+  });
+
+  // Pull the optional youtube-api-key from the credential store once at boot,
+  // so the video tool's search action can read it synchronously via
+  // getYoutubeApiKey(). Same fire-and-forget shape and graceful story as the
+  // credential inits above: if nothing is stored, getYoutubeApiKey() returns
+  // null and "video of X" stays Wikimedia-only (Phase B behaviour). The
+  // video feature is self-contained, so this is a no-op when the key is unset.
+  initYoutubeApiKey().then(found => {
+    if (found) console.log('[NerdAlert] YouTube API key loaded from credential store');
+  }).catch((err: unknown) => {
+    console.error('[NerdAlert] initYoutubeApiKey failed:', err);
   });
 
   // ── Active project state (v0.6.0) ───────────────────────
