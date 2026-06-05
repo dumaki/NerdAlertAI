@@ -978,24 +978,43 @@ const INTENT_MAP: Record<string, IntentGroup> = {
     },
   },
 
-  // ── Video embed (v0.10.x typed-content, Phase A) ──
-  // Covers "play this video" / "watch this" + YouTube/Vimeo URL detection.
-  // Phase B extends keywords for search-intent ("show me a video of X").
-  // Same narration-path motivation as maps/image_search: Mistral freezes
-  // on tool discovery, so prefetch runs the video tool server-side.
+  // ── Video embed + search (v0.10.x typed-content, Phase A+B) ──
+  // Covers embed-intent ("play this" + URL detection) and search-intent
+  // ("show me a video of X"). Same narration-path motivation as
+  // maps/image_search: Mistral freezes on tool discovery, so prefetch
+  // runs the video tool server-side.
   video: {
     keywords: [
+      // Embed-intent (Phase A)
       'play this video', 'play this', 'play the video',
       'watch this video', 'watch this', 'watch the video',
       'embed this video', 'embed video',
       'youtube.com', 'youtu.be', 'vimeo.com',
+      // Search-intent (Phase B)
+      'video of', 'videos of',
+      'show me a video', 'show me videos',
+      'find a video', 'find videos',
+      'find me a video', 'search for a video',
     ],
     tools: ['video'],
     paramExtractor: (msg: string) => {
-      // Extract a URL from the message. The video tool's embed action
-      // handles YouTube/Vimeo detection, so we just need to find the URL.
-      const m = msg.match(/https?:\/\/[^\s)>"']+/i);
-      if (m) return { action: 'embed', url: m[0] };
+      // URL present -> embed action (Phase A). Check this first so
+      // "play this https://youtube.com/..." always embeds, never searches.
+      const urlMatch = msg.match(/https?:\/\/[^\s)>"']+/i);
+      if (urlMatch) return { action: 'embed', url: urlMatch[0] };
+
+      // "video of X" / "show me a video of X" -> search action (Phase B).
+      let m = msg.match(/\bvideo(?:s)?\s+(?:of|about|on|showing)\s+(.+?)[?.!]*\s*$/i);
+      if (m && m[1]) return { action: 'search', query: m[1].trim() };
+
+      // "show me a video <subject>" without "of"
+      m = msg.match(/\bshow\s+me\s+(?:a\s+|some\s+)?video(?:s)?\s+(.+?)[?.!]*\s*$/i);
+      if (m && m[1]) return { action: 'search', query: m[1].trim() };
+
+      // "find a video <subject>"
+      m = msg.match(/\bfind\s+(?:a\s+|me\s+a\s+|some\s+)?video(?:s)?\s+(?:of\s+|about\s+|on\s+)?(.+?)[?.!]*\s*$/i);
+      if (m && m[1]) return { action: 'search', query: m[1].trim() };
+
       return undefined;
     },
   },
