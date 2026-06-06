@@ -39,11 +39,11 @@ import * as path from 'path';
 // Hard cap on the injected content so a large file can't blow the context
 // budget. ~6KB is generous for standing directives; over that we truncate with
 // a visible marker rather than silently dropping the tail.
-const MAX_INSTRUCTIONS_CHARS = 6 * 1024;
+export const MAX_INSTRUCTIONS_CHARS = 6 * 1024;
 
 // ~/.nerdalert/instructions.md by default; NERDALERT_INSTRUCTIONS_PATH overrides
 // it for tests / operator relocation (same idea as NERDALERT_SSH_DIR).
-function instructionsPath(): string {
+export function instructionsPath(): string {
   const override = process.env.NERDALERT_INSTRUCTIONS_PATH;
   if (override && override.trim()) return override.trim();
   return path.join(os.homedir(), '.nerdalert', 'instructions.md');

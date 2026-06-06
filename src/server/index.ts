@@ -19,6 +19,7 @@ import { chat } from '../core/agent';
 import { getAuthMiddleware, initServerAuthToken, getServerAuthToken } from './auth';
 import { mountUIRoutes, broadcastCronStatus } from './ui-routes';
 import { mountSecurityRoutes } from './security-routes';
+import { mountInstructionsRoutes } from './instructions-route';
 import { mountFilesRoutes, ensureProjectsRoot } from './files-routes';
 import { mountVoiceRoutes, ensureVoicesDir, ensureWhisperModelsDir } from './voice-routes';
 import { mountMemoryRoutes, logMemoryBootCapability } from './memory-routes';
@@ -174,6 +175,7 @@ setAutonomousQueueNotifier((card) => {
 // Credentials submitted here go straight to the OS keychain (or file
 // fallback) — they never touch the model, the session store, or the logs.
 mountSecurityRoutes(app);
+mountInstructionsRoutes(app);   // P7 operator instructions panel (read/write instructions.md)
 
 // ---- FILES ROUTES ----
 // POST /api/files/upload accepts drag-and-drop / paperclip uploads from
