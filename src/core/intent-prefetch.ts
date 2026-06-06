@@ -72,6 +72,10 @@ import { getEmbeddingCapability } from '../memory/capability';
 // replacement — when documents is on, large project.read overruns get
 // pointed at the documents.search escape hatch instead of "switch model".
 import { config } from '../config/loader';
+// v0.11.x: dormancy gate for the browser navigate prefetch -- skipped
+// entirely when the module is disabled, so the prefetch path stays
+// byte-identical when browser is off (P6).
+import { isBrowserEnabled } from './browser-config';
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -92,6 +96,13 @@ export interface PrefetchResult {
   // handler emits it directly and skips model generation, killing the
   // list-fabrication failure mode. Absent/false = narrate as before.
   renderVerbatim?: boolean;
+  // v0.11.x: skip the prefetch relevance gate for this result. Set for the
+  // browser navigate prefetch -- the user NAMED the destination, so cosine
+  // similarity between the question and the page text is the wrong test and
+  // would wrongly bail the narration. evaluatePrefetchRelevance scores an
+  // exempt tool as fully relevant (similarity 1). Generalizes to any tool
+  // whose data is explicitly requested rather than semantically matched.
+  relevanceExempt?: boolean;
 }
 
 // ── Intent map ────────────────────────────────────────────────
@@ -1969,7 +1980,7 @@ const NAV_DOMAIN_SRC =
 const HARD_BROWSE_RE = new RegExp(
   '\\b(?:' + NAV_BROWSE_VERBS.map(escapeForRegex).join('|') + ')\\s+' +
   '(?:(?:the|a|up|to)\\s+|https?:\\/\\/)*' +
-  '(?:' + NAV_DOMAIN_SRC + ')\\b',
+  '(' + NAV_DOMAIN_SRC + ')\\b',
   'i',
 );
 
@@ -1988,6 +1999,21 @@ function hasBrowseNavSignal(message: string): boolean {
 
 function hasHardBrowseIntent(message: string): boolean {
   return HARD_BROWSE_RE.test(message);
+}
+
+// extractNavUrl — the URL/host to OPEN for a high-confidence navigation, or
+// null. Gated on hasHardBrowseIntent (a browse verb adjacent to a domain), so
+// it never fires on a bare pasted URL with no verb or on a fetch/play phrasing
+// — those keep their own turns. Prefers a full explicit URL (path preserved)
+// when present, else the bare host HARD_BROWSE_RE captured (group 1). Used by
+// prefetchTools to open the page server-side so weak models narrate the result
+// instead of failing to emit the navigate tool_call.
+export function extractNavUrl(message: string): string | null {
+  if (!HARD_BROWSE_RE.test(message)) return null;
+  const urlMatch = message.match(NAV_URL_RE);
+  if (urlMatch) return urlMatch[0].replace(/[.,;:!?)]+$/, '');
+  const m = message.match(HARD_BROWSE_RE);
+  return m && m[1] ? m[1] : null;
 }
 
 export function detectIntent(message: string, agentName?: string): string[] {
@@ -2340,6 +2366,40 @@ export async function prefetchTools(
     });
   }
 
+  // ── v0.11.x: high-confidence navigation prefetch ────────────
+  // The browser group is selectionOnly (recall net only), but its L2 read
+  // tool 'browser' navigate IS a data source: it opens a page and returns the
+  // visible text + a source link in one call, exactly like web. On a hard
+  // "open <domain>" intent (extractNavUrl, gated by hasHardBrowseIntent) we
+  // prefetch the navigate so weak models narrate the page instead of failing
+  // to emit the tool_call (the observed Mistral bare-phrasing gap). ONLY the
+  // read tool runs here — browser_act (L5, card-only) is NEVER prefetched. The
+  // result is relevanceExempt: the user NAMED the destination, so the cosine
+  // gate would wrongly bail on it. Gated on isBrowserEnabled() so a disabled
+  // module adds nothing to the prefetch path (P6 dormancy).
+  if (isBrowserEnabled() && groupNames.includes('browser') && userQuery) {
+    const navUrl = extractNavUrl(userQuery);
+    if (navUrl) {
+      const navResult = await executeTool(
+        { id: 'prefetch_browser', name: 'browser', args: { action: 'navigate', url: navUrl } },
+        brokerContext,
+      );
+      if (navResult.error) {
+        results.push({ toolName: 'browser', groupName: 'browser', data: 'Unavailable', available: false });
+      } else {
+        results.push({
+          toolName:        'browser',
+          groupName:       'browser',
+          data:            navResult.output || 'No data returned',
+          available:       navResult.output.length > 0,
+          sources:         navResult.sources,
+          typed:           navResult.typed,
+          relevanceExempt: true,
+        });
+      }
+    }
+  }
+
   // v0.6.3.4 (Q4): suffix the per-turn log line with the agent name
   // when the caller threaded one through BrokerContext. Same shape as
   // detectIntent's viaSuffix above; read from the context here because
@@ -2689,6 +2749,13 @@ export async function evaluatePrefetchRelevance(
   // line lets us spot if this is happening systematically.
   const perToolScores: PrefetchToolScore[] = [];
   for (const r of available) {
+    // v0.11.x: relevance-exempt tools (browser navigate) skip the cosine
+    // test. The user NAMED the destination, so cosine(question, page-text)
+    // is the wrong signal and would wrongly bail. Score it fully relevant.
+    if (r.relevanceExempt) {
+      perToolScores.push({ toolName: r.toolName, similarity: 1 });
+      continue;
+    }
     try {
       const dataVec    = await embed(r.data);
       const similarity = dotProduct(userVec, dataVec);

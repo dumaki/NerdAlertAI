@@ -15,14 +15,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   executeTool: vi.fn(),
   config: { documents: {}, agent: {} } as any,
+  embed: vi.fn(),
+  cap: { available: false } as { available: boolean; error?: string },
+  browserEnabled: true,
 }));
 
 vi.mock('../config/loader', () => ({ config: h.config }));
 vi.mock('./permission-broker', () => ({ executeTool: h.executeTool }));
-vi.mock('../memory/embedder', () => ({ embed: vi.fn() }));
-vi.mock('../memory/capability', () => ({ getEmbeddingCapability: () => ({ available: false }) }));
+vi.mock('../memory/embedder', () => ({ embed: h.embed }));
+vi.mock('../memory/capability', () => ({ getEmbeddingCapability: () => h.cap }));
+vi.mock('./browser-config', () => ({ isBrowserEnabled: () => h.browserEnabled }));
 
-import { detectIntent, intentToolNames, prefetchTools } from './intent-prefetch';
+import { detectIntent, intentToolNames, prefetchTools, extractNavUrl, evaluatePrefetchRelevance } from './intent-prefetch';
 
 const CTX = { userTrustLevel: 5, maxModelTrustLevel: 5, modelLabel: 'm', agentName: 'A' } as any;
 
@@ -151,5 +155,83 @@ describe('detectIntent -- nav-gate guards (the demotion must NOT overreach)', ()
     const matched = detectIntent('open the budget.xlsx');
     expect(matched).toContain('project');
     expect(matched).not.toContain('browser');
+  });
+});
+
+// ── nav prefetch: extractNavUrl + browser navigate prefetch (v0.11.x) ──
+//
+// The browser group is selectionOnly for the recall net, but the L2 read
+// tool's navigate action is a data source: on a hard "open <domain>" intent
+// prefetchTools opens the page server-side so a weak model narrates it
+// instead of failing to emit the tool_call. browser_act (L5) is NEVER
+// prefetched. The result is relevanceExempt so the cosine gate can't bail it.
+
+describe('extractNavUrl -- the URL/host to open', () => {
+  it('returns the bare host on a verb+domain intent', () => {
+    expect(extractNavUrl('open kotaku.com')).toBe('kotaku.com');
+  });
+  it('returns the full URL (path preserved) when one is present', () => {
+    expect(extractNavUrl('go to https://kotaku.com/news/today')).toBe('https://kotaku.com/news/today');
+  });
+  it('returns null on a bare pasted URL with no browse verb', () => {
+    expect(extractNavUrl('https://kotaku.com')).toBeNull();
+  });
+  it('returns null on a media-embed phrasing', () => {
+    expect(extractNavUrl('play this https://youtu.be/dQw4w9WgXcQ')).toBeNull();
+  });
+  it('returns null when there is no navigation intent', () => {
+    expect(extractNavUrl('check my gmail')).toBeNull();
+  });
+});
+
+describe('prefetchTools -- browser navigate prefetch', () => {
+  beforeEach(() => { h.executeTool.mockReset(); h.browserEnabled = true; });
+
+  it('prefetches browser navigate on a hard "open <domain>" intent', async () => {
+    h.executeTool.mockResolvedValue({ error: false, output: 'PAGE TEXT', sources: [{ label: 'Kotaku', url: 'https://kotaku.com' }] });
+    const results = await prefetchTools(['browser'], CTX, 'open kotaku.com');
+    expect(h.executeTool).toHaveBeenCalledTimes(1);
+    const call = h.executeTool.mock.calls[0][0];
+    expect(call.name).toBe('browser');
+    expect(call.args).toEqual({ action: 'navigate', url: 'kotaku.com' });
+    expect(results).toHaveLength(1);
+    expect(results[0].toolName).toBe('browser');
+    expect(results[0].available).toBe(true);
+    expect(results[0].relevanceExempt).toBe(true);
+  });
+
+  it('never prefetches browser_act (L5), only the read tool', async () => {
+    h.executeTool.mockResolvedValue({ error: false, output: 'PAGE TEXT', sources: [] });
+    await prefetchTools(['browser'], CTX, 'open gmail.com');
+    expect(h.executeTool).toHaveBeenCalledTimes(1);
+    expect(h.executeTool.mock.calls.every(c => c[0].name !== 'browser_act')).toBe(true);
+  });
+
+  it('does NOT navigate-prefetch without a hard nav signal', async () => {
+    const results = await prefetchTools(['browser'], CTX, 'click the login button');
+    expect(h.executeTool).not.toHaveBeenCalled();
+    expect(results).toEqual([]);
+  });
+
+  it('skips the navigate prefetch when the browser module is disabled (dormancy)', async () => {
+    h.browserEnabled = false;
+    const results = await prefetchTools(['browser'], CTX, 'open kotaku.com');
+    expect(h.executeTool).not.toHaveBeenCalled();
+    expect(results).toEqual([]);
+  });
+});
+
+describe('evaluatePrefetchRelevance -- exempt tools bypass the cosine gate', () => {
+  it('scores a relevanceExempt result as fully relevant without embedding it', async () => {
+    h.cap = { available: true };
+    h.embed.mockReset();
+    const judgment = await evaluatePrefetchRelevance('open kotaku.com', [
+      { toolName: 'browser', groupName: 'browser', data: 'PAGE TEXT', available: true, relevanceExempt: true },
+    ] as any);
+    expect(judgment.relevant).toBe(true);
+    expect(judgment.maxSimilarity).toBe(1);
+    // The user message is embedded once; the exempt tool's data is NOT.
+    expect(h.embed).toHaveBeenCalledTimes(1);
+    h.cap = { available: false };
   });
 });
