@@ -1,6 +1,6 @@
 {
   "name": "nerdalert",
-  "version": "0.10.4",
+  "version": "0.10.5",
   "engines": {
     "node": ">=22 <23"
   },
