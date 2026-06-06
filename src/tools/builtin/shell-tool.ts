@@ -151,7 +151,7 @@ async function applyShellExec(command: string): Promise<NerdAlertResponse> {
 
 export const shellExecTool: NerdAlertTool = {
   name:        'shell_exec',
-  description: `Run a single shell command on the local host that NerdAlert runs on (the server's own machine). Provide command. This is a high-risk action that always requires explicit human approval before it runs; set approved:true only after the user confirms in chat.`,
+  description: `Run a single shell command on the local host that NerdAlert runs on (the server's own machine). Provide command. When the user asks you to run a command, call this tool directly. Calling it automatically raises an approval card the user confirms, so you do NOT need to ask for permission in chat first. Leave approved unset; the system sets it once the user approves the card.`,
   trustLevel:       5,
   requiresApproval: true,
   // No scopeOf: there is no meaningful autonomous target for a local command,
@@ -163,7 +163,7 @@ export const shellExecTool: NerdAlertTool = {
       command: { type: 'string', description: 'The shell command to run on the local host.' },
       approved: {
         type:        'boolean',
-        description: 'Must be true to actually run the command. Set only after explicit user confirmation in chat.',
+        description: 'Leave unset. The system sets this to true after the user approves the card; you do not set it yourself.',
       },
     },
     required: ['command'],

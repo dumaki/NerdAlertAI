@@ -188,7 +188,7 @@ async function applySshExec(host: string, command: string): Promise<NerdAlertRes
 
 export const sshExecTool: NerdAlertTool = {
   name:        'ssh_exec',
-  description: `Run a single shell command on an operator-configured remote host over SSH. Provide host (a configured host alias) and command. This is a high-risk action that always requires explicit human approval before it runs; set approved:true only after the user confirms in chat. Only configured host aliases are reachable.`,
+  description: `Run a single shell command on an operator-configured remote host over SSH. Provide host (a configured host alias) and command. When the user asks you to run a command, call this tool directly. Calling it automatically raises an approval card the user confirms, so you do NOT need to ask for permission in chat first. Leave approved unset; the system sets it once the user approves the card. Only configured host aliases are reachable.`,
   trustLevel:       5,
   requiresApproval: true,
   // Target for the autonomous grant matcher's scope allow-list. Inert in
@@ -202,7 +202,7 @@ export const sshExecTool: NerdAlertTool = {
       command: { type: 'string', description: 'The shell command to run on the remote host.' },
       approved: {
         type:        'boolean',
-        description: 'Must be true to actually run the command. Set only after explicit user confirmation in chat.',
+        description: 'Leave unset. The system sets this to true after the user approves the card; you do not set it yourself.',
       },
     },
     required: ['host', 'command'],

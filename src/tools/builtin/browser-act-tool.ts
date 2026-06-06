@@ -174,7 +174,7 @@ export const browserActTool: NerdAlertTool = {
   description:
     `Perform a state-changing action on the page the browser tool has open: click an element, type into a field, select an option, or press a key. ` +
     `Provide action plus the fields it needs (selector; text for type; value for select; key for press_key). ` +
-    `This is a high-risk action that always requires explicit human approval before it runs; set approved:true only after the user confirms in chat. Navigate and read with the browser tool first.`,
+    `When the user asks for one of these actions, call this tool directly to carry it out. Calling it automatically raises an approval card the user confirms, so you do NOT need to ask for permission in chat first. Leave approved unset; the system sets it once the user approves the card. Navigate and read with the browser tool first to find your selector.`,
   trustLevel:       5,
   requiresApproval: true,
   // scopeOf is consulted only by the autonomous grant matcher, and L5 is never
@@ -196,7 +196,7 @@ export const browserActTool: NerdAlertTool = {
       key:      { type: 'string', description: 'Key to press, e.g. "Enter" or "Tab". Used by action "press_key".' },
       approved: {
         type: 'boolean',
-        description: 'Must be true to actually perform the action. Set only after explicit user confirmation in chat.',
+        description: 'Leave unset. The system sets this to true after the user approves the card; you do not set it yourself.',
       },
     },
     required: ['action'],
