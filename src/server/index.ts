@@ -33,6 +33,7 @@ import { startCron, stopCron, setCronStatusEmitter } from '../cron';
 import { setAutonomousNotifier, setAutonomousQueueNotifier } from '../core/permission-broker';
 import { logGrantsAtBoot } from '../core/autonomous-grants';
 import { logSshHostsAtBoot, isSshEnabled } from '../core/ssh-config';
+import { logShellConfigAtBoot } from '../core/shell-config';
 import { initQueue } from '../core/autonomous-queue';
 import {
   initBudget,
@@ -332,6 +333,9 @@ app.listen(SERVER_PORT, () => {
   // v0.10 L5 Phase 2a: one-line summary of the ssh module + per-host network
   // classification under the active policy. No-op when ssh is disabled/absent.
   logSshHostsAtBoot();
+  // v0.10.x L5: one-line summary of the shell (local-exec) module's resolved
+  // working dir + timeout. No-op when shell is disabled/absent.
+  logShellConfigAtBoot();
   // v0.10 Phase 5a: load + reap the durable autonomous queue (survives restart)
   // and schedule its daily sweep. No-op surface when empty/disabled.
   initQueue();

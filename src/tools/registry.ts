@@ -65,6 +65,10 @@ import { synologyTools } from './builtin/soc-synology';
 
 // L5 (highest-risk) - ssh_exec. Self-contained, card-only, never autonomous.
 import { sshExecTool } from './builtin/ssh-tool';
+// L5 (highest-risk) - shell_exec. Local-host command exec; rides the same
+// trust-level-keyed L5 floor as ssh_exec (card-only, never autonomous, not
+// elevatable) with no broker changes.
+import { shellExecTool } from './builtin/shell-tool';
 
 // ── Master tool list ──────────────────────────────────────────
 //
@@ -201,6 +205,11 @@ const ALL_TOOLS: NerdAlertTool[] = [
   // out of every model-visible set below L5; list position is cosmetic. Card-
   // only + never-autonomous are enforced by the broker's L5 floor, not here.
   sshExecTool,
+
+  // L5 (highest-risk) - shell_exec. Same L5 floor as ssh_exec; trust-gated to
+  // standing L5, so it is filtered out of every model-visible set below L5 and
+  // its list position is cosmetic.
+  shellExecTool,
 ];
 
 // ── Anthropic tool format ─────────────────────────────────────
