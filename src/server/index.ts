@@ -36,6 +36,7 @@ import { logGrantsAtBoot } from '../core/autonomous-grants';
 import { logSshHostsAtBoot, isSshEnabled } from '../core/ssh-config';
 import { logShellConfigAtBoot } from '../core/shell-config';
 import { logBrowserConfigAtBoot } from '../core/browser-config';
+import { closeBrowser } from '../core/browser-client';
 import { initQueue } from '../core/autonomous-queue';
 import {
   initBudget,
@@ -606,23 +607,25 @@ startTelegram().catch((err: unknown) => {
   // state and renders nothing.
   initTimerState();
 
-  process.on('SIGTERM', () => {
-    console.log('[Server] SIGTERM received — shutting down...');
+  // Graceful shutdown: run the synchronous module stops, then give a launched
+  // browser a brief window to close cleanly so Chromium never orphans. The race
+  // guarantees the process still exits within ~2s even if close hangs (systemd
+  // would SIGKILL eventually anyway). closeBrowser() fast-resolves to a no-op
+  // when no browser was ever launched, so non-browser shutdown is unaffected.
+  const gracefulShutdown = (signal: string): void => {
+    console.log(`[Server] ${signal} received — shutting down...`);
     stopReminders();
     stopCron();
     stopHeartbeat();
     stopTimerState();
-    process.exit(0);
-  });
+    void Promise.race([
+      closeBrowser(),
+      new Promise<void>(resolve => setTimeout(resolve, 2000)),
+    ]).finally(() => process.exit(0));
+  };
 
-  process.on('SIGINT', () => {
-    console.log('[Server] SIGINT received — shutting down...');
-    stopReminders();
-    stopCron();
-    stopHeartbeat();
-    stopTimerState();
-    process.exit(0);
-  });
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 });
 
   });

@@ -69,6 +69,12 @@ import { sshExecTool } from './builtin/ssh-tool';
 // trust-level-keyed L5 floor as ssh_exec (card-only, never autonomous, not
 // elevatable) with no broker changes.
 import { shellExecTool } from './builtin/shell-tool';
+// Browser automation (v0.10.x). Conditionally registered in ALL_TOOLS below on
+// isBrowserEnabled() so an absent/disabled browser module leaves the list
+// byte-identical. browser is L2 (read-only); browser_act is L5 (card-only).
+import { isBrowserEnabled } from '../core/browser-config';
+import { browserTool } from './builtin/browser-tool';
+import { browserActTool } from './builtin/browser-act-tool';
 
 // ── Master tool list ──────────────────────────────────────────
 //
@@ -118,6 +124,12 @@ const ALL_TOOLS: NerdAlertTool[] = [
   rssTool,
 
   webTool,
+
+  // Browser automation read tool (browser, L2). Conditionally present: included
+  // only when config.browser.enabled is true, so a disabled/absent browser
+  // module is byte-identical (true dormancy for an L2 tool that trust cannot
+  // hide). Sits after web so general search still routes to web first.
+  ...(isBrowserEnabled() ? [browserTool] : []),
 
   timerTool,
   hostMetricsTool,
@@ -210,6 +222,12 @@ const ALL_TOOLS: NerdAlertTool[] = [
   // standing L5, so it is filtered out of every model-visible set below L5 and
   // its list position is cosmetic.
   shellExecTool,
+
+  // L5 (highest-risk) - browser_act. Same L5 floor as ssh_exec/shell_exec
+  // (card-only, never autonomous, not elevatable). Conditionally present on
+  // isBrowserEnabled() like the browser read tool above, so a disabled browser
+  // module leaves the list byte-identical.
+  ...(isBrowserEnabled() ? [browserActTool] : []),
 ];
 
 // ── Anthropic tool format ─────────────────────────────────────

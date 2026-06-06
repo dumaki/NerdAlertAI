@@ -140,6 +140,17 @@ export async function closeBrowser(): Promise<void> {
   }
 }
 
+// Read the current page's URL WITHOUT launching the browser. Returns null when
+// no context is open yet (so the act-tool preview stays side-effect-free) or the
+// page is blank. page.url() is synchronous in Playwright, so this is a pure read.
+export function getCurrentUrl(): string | null {
+  if (!cachedContext) return null;
+  const pages = cachedContext.pages();
+  if (pages.length === 0) return null;
+  const u = pages[0].url();
+  return u && u !== 'about:blank' ? u : null;
+}
+
 // ── URL resolution ────────────────────────────────────────────
 // Build the URL we actually navigate to. A bare host ('example.com',
 // 'localhost:3000') gets an https:// prefix (omnibox behaviour); anything that
