@@ -5397,6 +5397,12 @@
   var _renderPointer = null;
   var _renderEnabled = false;   // flipped true by the capability probe below
 
+  // Session baseline (render-badge fix): wall-clock time this page loaded. An
+  // artifact counts as "new this session" only if its mtime is later than this,
+  // so a leftover file from a prior session can never light the badge, while a
+  // genuinely mid-session artifact still does. Companion to the bootId pointer.
+  var _renderBaselineMtime = Date.now();
+
   var RENDER_KEY_PREFIX = 'nerdalert:render:';
   function _renderKey() { return RENDER_KEY_PREFIX + ((CFG && CFG.bootId) || 'nobootid'); }
 
@@ -5557,7 +5563,10 @@
       .then(function(data) {
         if (!data || !data.ok || !data.latest) return;
         var prevMtime = (_renderPointer && _renderPointer.mtime) || 0;
-        if (data.latest.mtime > prevMtime) {
+        // Light only for an artifact created DURING this session: newer than
+        // the page-load baseline (kills the pre-existing-file false positive on
+        // the first turn after a restart) AND newer than any pointer we hold.
+        if (data.latest.mtime > _renderBaselineMtime && data.latest.mtime > prevMtime) {
           window.__setRenderPointer(data.latest);   // persists pointer + lights badge
         }
       })
