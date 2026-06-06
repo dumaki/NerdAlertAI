@@ -399,6 +399,7 @@ export interface AgentConfig {
   render_window?: RenderWindowConfig; // optional: absent/disabled = no /api/render/get route, no viewer
   ssh?: SshConfig;           // v0.10 L5 Phase 2a: optional ssh module config (hosts + network policy). Absent/disabled => ssh tool unbuilt/hidden, boot byte-identical.
   shell?: ShellConfig;       // v0.10.x L5: optional local-exec module config (cwd + timeout). Absent/disabled => shell_exec hidden, boot byte-identical.
+  browser?: BrowserConfig;   // v0.10.x L5: optional browser-automation module config (dedicated Chrome profile). Absent/disabled => browser tools hidden, boot byte-identical.
   models?: ModelEntry[];     // v0.7 Slice 5a: declarative model registry (below).
                              // Absent = empty registry, so model-switching has
                              // nothing to allow. Core config, not a removable
@@ -653,4 +654,21 @@ export interface ShellConfig {
   enabled: boolean;
   cwd?: string;                     // working dir for commands; ~ expanded; default os.homedir()
   command_timeout_seconds?: number; // default 30
+}
+
+// --- BROWSER MODULE CONFIG (v0.10.x L5 - browser automation) ---
+// Operator config for the browser-automation module: a real, headed Chrome the
+// agent drives over CDP/Playwright using a DEDICATED NerdAlert profile (NOT the
+// operator's primary browser), so the agent starts with no logged-in sessions.
+// Absent OR enabled:false => the browser / browser_act tools are hidden and
+// nothing here is read (byte-identical boot). The read tool (browser) is L2;
+// every state-changing action (browser_act) is an L5 human approval card. The
+// dedicated profile is the structural credential boundary; the L5 card is the
+// per-action control. Engine details live in src/core/browser-client.ts.
+export interface BrowserConfig {
+  enabled: boolean;
+  profile_dir?: string;                // dedicated Chrome profile dir; ~ expanded; default ~/.nerdalert/browser-profile
+  headless?: boolean;                  // default false (watch the window on a desktop); set true on a headless host
+  navigation_timeout_seconds?: number; // default 30
+  blocked_schemes?: string[];          // schemes the engine refuses to open; default ['chrome:', 'about:', 'file:', 'view-source:']
 }
