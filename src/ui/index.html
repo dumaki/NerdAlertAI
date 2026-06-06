@@ -3801,6 +3801,11 @@
           </svg>
         </span>
       </button>
+      <!-- v0.10.6 -- Instructions Panel. Always visible (discovery is the point);
+           edits ~/.nerdalert/instructions.md via the P7 /api/instructions route. -->
+      <button class="dock-icon" data-view="instructions" onclick="switchView('instructions', null)" aria-label="Instructions">
+        <span class="dock-icon-glyph">✎</span>
+      </button>
       <button class="dock-icon" data-view="settings" onclick="switchView('settings', null)" aria-label="Settings">
         <span class="dock-icon-glyph">⚙</span>
       </button>
@@ -5298,10 +5303,115 @@
     if (view === 'tools')    { openPanel('tools'); return; }
     if (view === 'models')   { openPanel('models'); return; }
     if (view === 'export')   { openPanel('export');   return; }
+    if (view === 'instructions') { openPanel('instructions'); return; }
     if (view === 'settings') { openPanel('settings'); return; }
     if (view === 'chat')     { closePanel(); }
   }
 
+
+  // ============================================================
+  // INSTRUCTIONS PANEL (v0.10.6)
+  // ============================================================
+  // Operator editor for ~/.nerdalert/instructions.md, backed by the P7
+  // /api/instructions routes. Direct fetch - never routed through the agent,
+  // so the file stays a write-root of no tool. Saved edits are read fresh by
+  // the prompt builder on the next turn (no restart). Empty save deletes the
+  // file (feature off); over-cap save is rejected by the server.
+  let NA_INSTR_MAX = 6144;   // bytes; refreshed from GET /api/instructions
+
+  function getInstructionsPanelHTML() {
+    return `
+      <div class="tools-panel-intro">
+        Standing instructions are injected into every conversation, for every
+        personality. Cooperative guidance, not a hard gate. For a rule that must
+        hold no matter what, disable the tool or lower the trust level instead.
+        Saved changes take effect on your next message; clearing the box and
+        saving turns the feature off.
+      </div>
+      <textarea id="na-instructions-text" spellcheck="false"
+        placeholder="e.g. Before running any shell_exec command, explain in one line what it will do."
+        style="width:100%; box-sizing:border-box; min-height:260px; resize:vertical; font-family:var(--mono,ui-monospace,monospace); font-size:12px; line-height:1.5; padding:8px 10px; background:var(--bg-elev,#0e0e0e); color:var(--text,#ddd); border:1px solid var(--border,#333); border-radius:4px;"
+        oninput="updateInstructionsCounter()"></textarea>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px; font-size:11px; color:var(--text-dim,#888);">
+        <span id="na-instructions-path" style="word-break:break-all; opacity:0.8;"></span>
+        <span id="na-instructions-count">0 / 6144</span>
+      </div>
+      <div class="tools-panel-actions" style="margin-top:10px; display:flex; gap:8px;">
+        <button class="settings-action-btn" onclick="saveInstructions()">SAVE</button>
+        <button class="settings-action-btn" onclick="revertInstructions()">REVERT</button>
+      </div>
+      <div id="na-instructions-status" style="margin-top:8px; font-size:11px; min-height:14px;"></div>
+    `;
+  }
+
+  function setInstructionsStatus(msg, kind) {
+    const el = document.getElementById('na-instructions-status');
+    if (!el) return;
+    el.textContent = msg;
+    el.style.color = kind === 'error' ? 'var(--danger,#e66)'
+                   : kind === 'ok'    ? 'var(--accent,#6cf)'
+                   : 'var(--text-dim,#888)';
+  }
+
+  function updateInstructionsCounter() {
+    const ta  = document.getElementById('na-instructions-text');
+    const cEl = document.getElementById('na-instructions-count');
+    if (!ta || !cEl) return;
+    const bytes = new TextEncoder().encode(ta.value).length;
+    cEl.textContent = bytes + ' / ' + NA_INSTR_MAX;
+    cEl.style.color = bytes > NA_INSTR_MAX ? 'var(--danger,#e66)' : 'var(--text-dim,#888)';
+  }
+
+  async function loadInstructionsPanel() {
+    const ta = document.getElementById('na-instructions-text');
+    try {
+      const res  = await fetch(`${BASE_URL}/api/instructions`, {
+        headers: { 'Authorization': `Bearer ${CFG.token}` },
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'load failed');
+      NA_INSTR_MAX = data.maxBytes || NA_INSTR_MAX;
+      if (ta) ta.value = data.content || '';
+      const pathEl = document.getElementById('na-instructions-path');
+      if (pathEl) pathEl.textContent = data.path || '';
+      setInstructionsStatus(data.exists ? 'Loaded.' : 'No instructions set (feature off).', 'dim');
+      updateInstructionsCounter();
+    } catch (err) {
+      console.warn('[Instructions Panel] load failed:', err);
+      setInstructionsStatus('Failed to load instructions.', 'error');
+    }
+  }
+
+  async function saveInstructions() {
+    const ta = document.getElementById('na-instructions-text');
+    if (!ta) return;
+    const content = ta.value;
+    const bytes   = new TextEncoder().encode(content).length;
+    if (bytes > NA_INSTR_MAX) {
+      setInstructionsStatus('Too long: ' + bytes + ' / ' + NA_INSTR_MAX + ' bytes. Trim and save again.', 'error');
+      return;
+    }
+    setInstructionsStatus('Saving...', 'dim');
+    try {
+      const res  = await fetch(`${BASE_URL}/api/instructions`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${CFG.token}` },
+        body:    JSON.stringify({ content }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || ('save failed (' + res.status + ')'));
+      setInstructionsStatus(data.exists ? 'Saved. Live on your next message.' : 'Cleared. Feature off.',
+                            data.exists ? 'ok' : 'dim');
+      updateInstructionsCounter();
+    } catch (err) {
+      console.warn('[Instructions Panel] save failed:', err);
+      setInstructionsStatus('Save failed: ' + err.message, 'error');
+    }
+  }
+
+  function revertInstructions() {
+    loadInstructionsPanel();
+  }
 
   // ============================================================
   // PANEL MANAGEMENT
@@ -5347,6 +5457,10 @@
       body.innerHTML = getModelVisibilityPanelHTML();
       loadModelVisibilityPanel();
       onAddModelProviderChange();   // init the add-model form's hint/placeholder
+    } else if (type === 'instructions') {
+      title.textContent = 'INSTRUCTIONS';
+      body.innerHTML = getInstructionsPanelHTML();
+      loadInstructionsPanel();
     } else if (type === 'render') {
       title.textContent = 'RENDER';
       loadRenderPanel();
