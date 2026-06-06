@@ -6,17 +6,29 @@ is the equivalent of a project-instructions / agent.md file: a persistent place
 for "how I want you to behave" directives that should hold across all
 conversations.
 
-## Setup
+## Setup (the easy way: the Instructions panel)
 
-There is nothing to enable --- the feature is presence-based:
+Click the **pencil (Instructions) icon** in the dock. It opens an editor showing
+the current instructions (empty by default), the file path, and a byte counter.
+Type your directives, click **SAVE**, and they take effect on your next message
+(no restart needed). Clearing the box and saving turns the feature off (the file
+is deleted). The editor is capped at ~6KB and rejects an over-cap save rather than
+truncating your text.
+
+The panel writes the file through a direct, loopback-only route that bypasses the
+agent entirely --- the same discipline as the credential and tool-toggle panels.
+The agent has no way to edit its own standing instructions.
+
+## Setup (the manual way)
+
+The feature is presence-based, so you can also just create the file yourself:
 
 ```
 $EDITOR ~/.nerdalert/instructions.md
 ```
 
-Write plain markdown / bullet points. Edits take effect on your next message (no
-restart needed). The file is capped at ~6KB. To turn it off, delete or empty the
-file.
+Write plain markdown / bullet points. Same behavior: edits take effect on your
+next message, and deleting or emptying the file turns it off.
 
 ## What to put in it
 
