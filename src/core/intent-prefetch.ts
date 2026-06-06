@@ -123,6 +123,13 @@ interface IntentGroup {
   // free-tier model gets a file listing instead of file content and
   // leaks reasoning trying to figure out what to do.
   paramExtractor?: (message: string, history?: HistoryTurn[]) => Record<string, unknown> | undefined;
+  // When true, this group feeds the tool-selector recall net (via
+  // intentToolNames) so a freeze-prone weak model SEES these tools in its
+  // narrowed list, but prefetchTools SKIPS it. The tools here are
+  // interactive actions (browser/browser_act, ssh_exec, shell_exec), NOT
+  // prefetchable data sources — executing them as a prefetch would be
+  // wrong (auto-navigate / preview an L5 action). Recall-net only.
+  selectionOnly?: boolean;
 }
 
 // ── pickSubjectForCapture ────────────────────────────
@@ -1040,6 +1047,50 @@ const INTENT_MAP: Record<string, IntentGroup> = {
     tools:         ['web'],
     defaultParams: { action: 'search' },
     queryParam:    'query',  // user message injected as the search query
+  },
+
+  // ── Browser / SSH / Shell (selection-only action tools) ───────────
+  // These three groups exist ONLY to feed the weak-model tool-selector
+  // recall net (intentToolNames): without an intent group, browser /
+  // ssh_exec / shell_exec never clear the semantic floor on a browse /
+  // remote-command query, so a freeze-prone model (Mistral, Nemotron)
+  // never SEES them and returns an empty turn. selectionOnly=true means
+  // prefetchTools skips them (interactive actions, not data sources); the
+  // Anthropic ReAct path is unaffected (it never narrows). Keywords are
+  // compound/anchored to dodge the bare-substring trap (Pattern 30). The
+  // universal web-demotion below drops 'web' whenever one of these also
+  // matches, so an explicit browse verb beats a generic web keyword for
+  // free. Sweep-tunable.
+  browser: {
+    keywords: [
+      'browser', 'browse to', 'navigate to',
+      'go to the site', 'go to the page', 'go to the website',
+      'open the site', 'open the page', 'open the website', 'open the url',
+      'web page', 'webpage', 'website',
+      'click the', 'click on',
+      'scroll down', 'scroll up',
+      'type into', 'fill in the', 'fill out the', 'submit the form',
+      'select the option', 'press enter',
+    ],
+    tools:         ['browser', 'browser_act'],
+    selectionOnly: true,
+  },
+  ssh: {
+    keywords: [
+      'ssh', 'ssh into', 'over ssh',
+      'on the remote host', 'remote host', 'run remotely',
+    ],
+    tools:         ['ssh_exec'],
+    selectionOnly: true,
+  },
+  shell: {
+    keywords: [
+      'shell command', 'bash command', 'terminal command',
+      'run a command', 'run the command', 'execute a command',
+      'run locally',
+    ],
+    tools:         ['shell_exec'],
+    selectionOnly: true,
   },
 
   // ── Memory engine (read/write) ──────────────────────────
@@ -2114,9 +2165,14 @@ export async function prefetchTools(
 ): Promise<PrefetchResult[]> {
   const results: PrefetchResult[] = [];
 
-  // Collect tool names from matched groups, deduplicate
+  // Collect tool names from matched groups, deduplicate. selectionOnly
+  // groups (browser/ssh/shell) feed the tool-selector recall net via
+  // intentToolNames but are NOT prefetchable — they are interactive
+  // actions, not data sources — so they are skipped here.
   const toolNames = [...new Set(
-    groupNames.flatMap(g => INTENT_MAP[g]?.tools ?? [])
+    groupNames
+      .filter(g => !INTENT_MAP[g]?.selectionOnly)
+      .flatMap(g => INTENT_MAP[g]?.tools ?? [])
   )];
 
   for (const toolName of toolNames) {
