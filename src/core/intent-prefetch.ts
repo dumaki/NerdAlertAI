@@ -1924,6 +1924,72 @@ function hasDocumentsIndexShape(message: string): boolean {
   return /\bindex\b/i.test(message) && hasColloquialFileReference(message);
 }
 
+// ── Browser navigation signal (v0.11.x nav-gate) ─────────────
+//
+// Bare-domain browse queries ("open kotaku.com") match NO browser
+// keyword, so without this the browser group only reaches the weak-
+// model recall net via inconsistent semantic ranking. These helpers
+// add a navigation signal so an "open <domain>" turn surfaces browser
+// reliably.
+//
+// Two strengths, used at two different points:
+//   hasBrowseNavSignal   — liberal; MATCHES the browser group so it
+//                          rides the recall net. Harmless: browser is
+//                          selectionOnly (never prefetched).
+//   hasHardBrowseIntent  — tight; drives the DEMOTION (browser wins,
+//                          drop gmail/github/video). Adjacency-gated, so
+//                          "open a ticket and email ben@gmail.com" does
+//                          NOT count, and a bare URL alone does NOT count
+//                          ("play this <youtu.be url>" keeps its embed).
+//
+// All three lists below are sweep-tunable.
+
+// Navigation verbs (open/read a page). Deliberately EXCLUDES play/
+// watch/embed (video group) and fetch (web group) so those keep their
+// own turns. Longest-first so the alternation prefers multi-word forms.
+const NAV_BROWSE_VERBS = [
+  'navigate to', 'browse to', 'go to', 'head to', 'pull up',
+  'open', 'visit', 'load', 'browse',
+];
+
+// TLDs accepted in a domain-like token. Lean first pass; sweep-tunable.
+const NAV_TLDS = [
+  'com', 'org', 'net', 'io', 'gov', 'edu', 'co',
+  'dev', 'app', 'ai', 'me', 'tv', 'gg', 'xyz',
+];
+
+// label(.label)*.tld — e.g. kotaku.com, mail.google.com. Lowercased
+// source; the consuming regexes carry the 'i' flag.
+const NAV_DOMAIN_SRC =
+  '[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9-]+)*\\.(?:' + NAV_TLDS.join('|') + ')';
+
+// Hard browse intent: a navigation verb adjacent to a domain. Optional
+// fillers (the/a/up/to/scheme) sit between the verb and the domain so
+// "open up the kotaku.com" / "go to https://kotaku.com" still match.
+const HARD_BROWSE_RE = new RegExp(
+  '\\b(?:' + NAV_BROWSE_VERBS.map(escapeForRegex).join('|') + ')\\s+' +
+  '(?:(?:the|a|up|to)\\s+|https?:\\/\\/)*' +
+  '(?:' + NAV_DOMAIN_SRC + ')\\b',
+  'i',
+);
+
+// Any explicit URL anywhere in the message.
+const NAV_URL_RE = /https?:\/\/\S+/i;
+
+// Web-fetch / media-embed phrasings that keep their own turn even when a
+// URL is present — a bare URL pulls browser into the recall net, but not
+// when the user explicitly asked to fetch or play it.
+const WEB_FETCH_OR_PLAY_RE = /\b(?:fetch|read this url|open this link|play this|watch this|embed this)\b/i;
+
+function hasBrowseNavSignal(message: string): boolean {
+  if (HARD_BROWSE_RE.test(message)) return true;
+  return NAV_URL_RE.test(message) && !WEB_FETCH_OR_PLAY_RE.test(message);
+}
+
+function hasHardBrowseIntent(message: string): boolean {
+  return HARD_BROWSE_RE.test(message);
+}
+
 export function detectIntent(message: string, agentName?: string): string[] {
   const lower = message.toLowerCase();
   // v0.6.3.4 (Q4): per-turn agent name suffix appended to every
@@ -2019,6 +2085,16 @@ export function detectIntent(message: string, agentName?: string): string[] {
         // documents into `matched`; the demotion then drops project.
         return hasDocumentsIndexShape(message);
       }
+      if (groupName === 'browser') {
+        // v0.11.x nav-gate: fire on keyword OR a navigation signal (a
+        // bare URL, or a browse verb adjacent to a domain). Bare-domain
+        // queries ("open kotaku.com") match no keyword, so without this
+        // browser only reaches the weak-model recall net via inconsistent
+        // semantic ranking. Matching is harmless — browser is selectionOnly
+        // (never prefetched); the demotion below is what makes it WIN a turn.
+        if (group.keywords.some(k => lower.includes(k))) return true;
+        return hasBrowseNavSignal(message);
+      }
       if (groupName === 'project') {
         // v0.6.3.5: project fires on its keyword list OR on a colloquial
         // file reference ("goodnerds pdf") with no dotted extension.
@@ -2057,6 +2133,25 @@ export function detectIntent(message: string, agentName?: string): string[] {
     const kept = matched.filter(g => g !== 'web');
     console.log(`[NerdAlert] Intent demoted web (more specific match): ${kept.join(', ')}${viaSuffix}`);
     matched = kept;
+  }
+
+  // ── browser wins on a hard navigation signal (v0.11.x nav-gate) ──
+  // Hard browse intent = a navigation verb adjacent to a domain
+  // ("open gmail.com", "go to youtube.com"): the user wants to NAVIGATE
+  // there, not query the service. Drop the data groups that collide via
+  // service-name-in-domain (gmail/github/video) so browser owns the turn.
+  // Mirror of the web-demotion shape, inverted: there the generic group
+  // loses; here the specific data groups lose to an explicit navigation.
+  // A bare URL is NOT a hard signal (hasHardBrowseIntent excludes it), so
+  // "play this <youtu.be url>" keeps its video-embed turn.
+  if (matched.includes('browser') && hasHardBrowseIntent(message)) {
+    const navCollisionGroups = ['gmail', 'github', 'video'];
+    const dropped = navCollisionGroups.filter(g => matched.includes(g));
+    if (dropped.length > 0) {
+      const kept = matched.filter(g => !dropped.includes(g));
+      console.log(`[NerdAlert] Intent demoted ${dropped.join(', ')} (navigation signal -> browser): ${kept.join(', ')}${viaSuffix}`);
+      matched = kept;
+    }
   }
 
   // ── project beats gmail when file-scope vocabulary is present ────

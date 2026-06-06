@@ -88,3 +88,68 @@ describe('prefetchTools -- selectionOnly groups are not executed', () => {
     expect(results.map(r => r.toolName)).toEqual(['weather']);
   });
 });
+
+// ── nav-gate: bare domains, hard-intent demotion, guards (v0.11.x) ──
+//
+// The nav-gate gets the browser group onto a bare-domain turn ("open
+// kotaku.com") that matches no keyword, and lets an explicit navigation
+// beat the data groups that collide via a service name in the domain
+// (gmail/github/video). hasHardBrowseIntent is adjacency-gated, so a
+// non-adjacent verb (the email guard) and a bare media URL (the video
+// embed) do NOT trigger the demotion.
+
+describe('detectIntent -- nav-gate matching', () => {
+  it('matches browser on a bare domain with a browse verb (issue #1)', () => {
+    expect(detectIntent('open kotaku.com')).toContain('browser');
+  });
+  it('matches browser on an explicit URL with a browse verb', () => {
+    expect(detectIntent('go to https://kotaku.com/news')).toContain('browser');
+  });
+  it('matches browser on a bare pasted URL (recall net)', () => {
+    expect(detectIntent('https://kotaku.com')).toContain('browser');
+  });
+});
+
+describe('detectIntent -- nav-gate demotion (browser wins the turn)', () => {
+  it('browser beats gmail on "open gmail.com" (issue #2)', () => {
+    const matched = detectIntent('open gmail.com');
+    expect(matched).toContain('browser');
+    expect(matched).not.toContain('gmail');
+  });
+  it('browser beats video on "go to youtube.com"', () => {
+    const matched = detectIntent('go to youtube.com');
+    expect(matched).toContain('browser');
+    expect(matched).not.toContain('video');
+  });
+  it('browser beats github on "open github.com"', () => {
+    const matched = detectIntent('open github.com');
+    expect(matched).toContain('browser');
+    expect(matched).not.toContain('github');
+  });
+});
+
+describe('detectIntent -- nav-gate guards (the demotion must NOT overreach)', () => {
+  it('video keeps its embed turn on a bare media URL', () => {
+    // 'play this' is a media-embed phrase, so the bare-URL signal is
+    // suppressed (WEB_FETCH_OR_PLAY) and there is no browse verb -> no
+    // hard intent -> video keeps its embed turn.
+    const matched = detectIntent('play this https://youtu.be/dQw4w9WgXcQ');
+    expect(matched).toContain('video');
+    expect(matched).not.toContain('browser');
+  });
+  it('a non-adjacent verb does not steal the turn (email guard)', () => {
+    const matched = detectIntent('open a ticket and email ben@gmail.com about it');
+    expect(matched).not.toContain('browser');
+    expect(matched).toContain('gmail');
+  });
+  it('"check my gmail" (no domain) still routes to gmail, not browser', () => {
+    const matched = detectIntent('check my gmail');
+    expect(matched).toContain('gmail');
+    expect(matched).not.toContain('browser');
+  });
+  it('a filename is left to project (.xlsx is not a TLD)', () => {
+    const matched = detectIntent('open the budget.xlsx');
+    expect(matched).toContain('project');
+    expect(matched).not.toContain('browser');
+  });
+});
