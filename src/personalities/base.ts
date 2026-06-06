@@ -145,7 +145,7 @@ const TRUST_DESCRIPTORS = [
   'Draft and suggest. Nothing sent without approval.',
   'Act with approval. All actions logged.',
   'Autonomous on pre-approved routine tasks.',
-  'Elevated access. SSH and exec available this session.',
+  'Elevated access. SSH, local command execution, and browser automation, unlocked per session. Highest audit requirement.',
 ];
 
 export function buildClearanceDescriptor(
