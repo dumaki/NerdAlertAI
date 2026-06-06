@@ -11,6 +11,7 @@
 // ============================================================
 
 import { Personality, CREDENTIAL_REFUSAL_RULES, TOOL_BEHAVIOUR_RULES, FILE_HANDLING_RULES } from './base';
+import { getOperatorInstructionsBlock } from './instructions';
 import sherman from './sherman';
 import kenny   from './kenny';
 import brett   from './brett';
@@ -74,7 +75,11 @@ function wrapWithSecurityRules(p: Personality): Personality {
       p.buildSystemPrompt(params) +
       '\n\n' + CREDENTIAL_REFUSAL_RULES +
       '\n\n' + TOOL_BEHAVIOUR_RULES +
-      '\n\n' + FILE_HANDLING_RULES,
+      '\n\n' + FILE_HANDLING_RULES +
+      // 4th block: optional operator standing instructions (instructions.md).
+      // Returns '' when ~/.nerdalert/instructions.md is absent, so this is
+      // dormant-by-default and the prompt stays byte-identical when off.
+      getOperatorInstructionsBlock(),
   };
 }
 
