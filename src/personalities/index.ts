@@ -10,7 +10,8 @@
 //   Done.
 // ============================================================
 
-import { Personality, CREDENTIAL_REFUSAL_RULES, TOOL_BEHAVIOUR_RULES, FILE_HANDLING_RULES } from './base';
+import { Personality, CREDENTIAL_REFUSAL_RULES, TOOL_BEHAVIOUR_RULES, FILE_HANDLING_RULES, BROWSER_CONTENT_RULES } from './base';
+import { isBrowserEnabled } from '../core/browser-config';
 import { getOperatorInstructionsBlock } from './instructions';
 import sherman from './sherman';
 import kenny   from './kenny';
@@ -79,7 +80,11 @@ function wrapWithSecurityRules(p: Personality): Personality {
       // 4th block: optional operator standing instructions (instructions.md).
       // Returns '' when ~/.nerdalert/instructions.md is absent, so this is
       // dormant-by-default and the prompt stays byte-identical when off.
-      getOperatorInstructionsBlock(),
+      getOperatorInstructionsBlock() +
+      // 5th block: browser-content rules. Self-gated on the browser module --
+      // appended only when browser.enabled, so the prompt is byte-identical when
+      // the module is off (same dormant posture as the instructions block).
+      (isBrowserEnabled() ? '\n\n' + BROWSER_CONTENT_RULES : ''),
   };
 }
 
