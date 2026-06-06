@@ -398,6 +398,7 @@ export interface AgentConfig {
   safety?: SafetyConfig;       // optional: absent/disabled = no snapshots; destructive ops unchanged
   render_window?: RenderWindowConfig; // optional: absent/disabled = no /api/render/get route, no viewer
   ssh?: SshConfig;           // v0.10 L5 Phase 2a: optional ssh module config (hosts + network policy). Absent/disabled => ssh tool unbuilt/hidden, boot byte-identical.
+  shell?: ShellConfig;       // v0.10.x L5: optional local-exec module config (cwd + timeout). Absent/disabled => shell_exec hidden, boot byte-identical.
   models?: ModelEntry[];     // v0.7 Slice 5a: declarative model registry (below).
                              // Absent = empty registry, so model-switching has
                              // nothing to allow. Core config, not a removable
@@ -638,4 +639,18 @@ export interface SshConfig {
   network_policy?: SshNetworkPolicy;     // default 'mesh_only'
   command_timeout_seconds?: number;      // default 30
   hosts?: SshHostConfig[];               // operator allow-list; only these are dialable
+}
+
+// --- SHELL MODULE CONFIG (v0.10.x L5 - local exec) ---
+// Operator config for the highest-risk (L5) shell_exec tool: run one command on
+// the host NerdAlert itself runs on. Absent OR enabled:false => the shell_exec
+// tool is hidden and nothing here is read (byte-identical boot). There is NO
+// sandbox and NO command allow-list (decision (b)): the L5 human approval card
+// is the control. A card-approved command runs with the service user's full
+// reach, so unlike every other local writer this tool is NOT bounded by the
+// section-14 write-root invariant - documented in the spec amendment.
+export interface ShellConfig {
+  enabled: boolean;
+  cwd?: string;                     // working dir for commands; ~ expanded; default os.homedir()
+  command_timeout_seconds?: number; // default 30
 }
