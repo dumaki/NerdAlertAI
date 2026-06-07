@@ -65,9 +65,9 @@ import type { ModelEntry }                 from '../types/response.types';
 // must NOT type: the credential-store name, the canonical base_url, and the
 // read-only probe (auth check) for that provider. The probe URLs MIRROR
 // security-routes.ts's PROVIDER_PROBES — if a provider ever changes its
-// endpoint, update BOTH. All four use Bearer auth. Anthropic is absent on
+// endpoint, update BOTH. All five use Bearer auth. Anthropic is absent on
 // purpose: transport 'anthropic' is special-cased and not user-authored.
-type ProviderKey = 'openai' | 'groq' | 'openrouter' | 'xai';
+type ProviderKey = 'openai' | 'groq' | 'openrouter' | 'xai' | 'google';
 
 interface ProviderSpec {
   credential: string;   // → ModelEntry.requires_secret (already in ALLOWED)
@@ -80,10 +80,11 @@ const PROVIDERS: Record<ProviderKey, ProviderSpec> = {
   groq:       { credential: 'groq-key',       baseUrl: 'https://api.groq.com/openai/v1', probeUrl: 'https://api.groq.com/openai/v1/models' },
   openrouter: { credential: 'openrouter-key', baseUrl: 'https://openrouter.ai/api/v1',   probeUrl: 'https://openrouter.ai/api/v1/auth/key' },
   xai:        { credential: 'xai-key',        baseUrl: 'https://api.x.ai/v1',            probeUrl: 'https://api.x.ai/v1/models' },
+  google:     { credential: 'google-key',     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', probeUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/models' },
 };
 
 function isProviderKey(v: unknown): v is ProviderKey {
-  return v === 'openai' || v === 'groq' || v === 'openrouter' || v === 'xai';
+  return v === 'openai' || v === 'groq' || v === 'openrouter' || v === 'xai' || v === 'google';
 }
 
 // ── Input validation ──────────────────────────────────────
@@ -270,7 +271,7 @@ export function mountModelAddRoute(app: Express): void {
 
     // 1. Validate inputs.
     if (!isProviderKey(provider)) {
-      res.status(400).json({ ok: false, error: 'provider must be one of: openai, groq, openrouter' });
+      res.status(400).json({ ok: false, error: 'provider must be one of: openai, groq, openrouter, xai, google' });
       return;
     }
     if (typeof slug !== 'string' || !SLUG_RE.test(slug)) {

@@ -108,6 +108,7 @@ const ALLOWED: Record<string, { description: string; minLen: number; maxLen: num
   'groq-key':               { description: 'Groq API key (BYOK; validate with Test)',           minLen: 30, maxLen: 200, test: 'provider' },
   'openai-key':             { description: 'OpenAI API key (BYOK; validate with Test)',          minLen: 40, maxLen: 300, test: 'provider' },
   'xai-key':                { description: 'xAI (Grok) API key (BYOK; validate with Test)',       minLen: 30, maxLen: 200, test: 'provider' },
+  'google-key':             { description: 'Google AI / Gemini API key (BYOK; validate with Test)', minLen: 30, maxLen: 200, test: 'provider' },
   'server-auth-token':      { description: 'NerdAlert server bearer token (auto-generated on first boot; rotate by entering a new value)', minLen: 16, maxLen: 128 },
   'wazuh-indexer-password':    { description: 'Wazuh Indexer password (OpenSearch on port 9200)',  minLen: 8,  maxLen: 200 },
   'wazuh-manager-password':    { description: 'Wazuh Manager API password (port 55000; paired with WAZUH_MANAGER_USER, readonly role)',  minLen: 8,  maxLen: 200 },
@@ -138,6 +139,7 @@ const PROVIDER_PROBES: Record<string, { url: string; auth: 'bearer' | 'x-api-key
   'groq-key':       { url: 'https://api.groq.com/openai/v1/models',  auth: 'bearer' },
   'openai-key':     { url: 'https://api.openai.com/v1/models',       auth: 'bearer' },
   'xai-key':        { url: 'https://api.x.ai/v1/models',             auth: 'bearer' },
+  'google-key':     { url: 'https://generativelanguage.googleapis.com/v1beta/openai/models', auth: 'bearer' },
   'openrouter-key': { url: 'https://openrouter.ai/api/v1/auth/key',  auth: 'bearer' },
   'anthropic-key':  { url: 'https://api.anthropic.com/v1/models',    auth: 'x-api-key', extraHeaders: { 'anthropic-version': '2023-06-01' } },
 };
@@ -286,7 +288,7 @@ export function mountSecurityRoutes(app: Express): void {
       // share one name-keyed cache in llm-client. initProviderKey is
       // name-parameterized, so adding the next provider only needs another
       // name in this OR-list — no new import, no new block.
-      if (name === 'groq-key' || name === 'openai-key' || name === 'xai-key') {
+      if (name === 'groq-key' || name === 'openai-key' || name === 'xai-key' || name === 'google-key') {
         try {
           const { initProviderKey } = require('../core/llm-client');
           await initProviderKey(name);
