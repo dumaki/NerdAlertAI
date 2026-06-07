@@ -826,6 +826,23 @@ const INTENT_MAP: Record<string, IntentGroup> = {
     defaultParams: { action: 'list', max_results: 5 },
   },
 
+  // -- gmail SEND (compose-and-send -- selection-only action group) --
+  // Read/write split mirrors fail2ban: the `gmail` group above owns the L2
+  // inbox reads; the L3 send lives here. selectionOnly (never prefetched -- a
+  // send is an L3 approval-carded action, not a data source) but fed to the
+  // weak-model tool-selector recall net via intentToolNames so Mistral reliably
+  // SEES gmail_send in the loop. Without this, a send command matches the read
+  // group via 'email'/'mail', gets the inbox prefetched, and is captured into
+  // narration where the send tool is unreachable (the model writes the email in
+  // chat and calls nothing -- the 0% gmail_send sweep result). Keywords are
+  // documentation; hasGmailSendIntent (the regex gate in detectIntent) is the
+  // real guard. The demotion below drops the read group on a send.
+  gmail_send: {
+    keywords:      ['send', 'compose', 'email to'],
+    tools:         ['gmail_send'],
+    selectionOnly: true,
+  },
+
   // ── GitHub (repos / issues / PRs / notifications, read-only) ──
   //
   // Owns the github tool from the prefetch path. Without this group,
@@ -2061,6 +2078,44 @@ function hasFail2banWriteIntent(message: string): boolean {
   return false;
 }
 
+// -- gmail SEND-intent gate --
+// Separates a compose-and-send COMMAND ("send an email to rob@x.com ...") from
+// an inbox READ ("any new email", "check my mail", "delete that email"): a send
+// needs a recipient signal AND an imperative send verb NOT used as a noun ("the
+// email" / "that message" is the NOUN -- a read). Mirrors hasFail2banWriteIntent.
+// Recipient = an email address (the unambiguous signal, like fail2ban's IPv4) OR
+// a "to <name>" object for the name-only "email Rob about X" case. 'email'/
+// 'compose' are email-specific verbs (imperative use IS a send); 'send'/'message'
+// are generic and require email context. selectionOnly bounds a false match to a
+// visibility slot; the demotion drops the read group only when BOTH groups match.
+// Accepted miss: "shoot Rob a note about X" (no address, no 'to') stays a read.
+const GMAIL_EMAIL_ADDR_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/;
+const GMAIL_SEND_DETERMINERS = new Set<string>([
+  'the', 'a', 'an', 'this', 'that', 'my', 'your', 'his', 'her', 'their',
+  'any', 'some', 'no', 'last', 'first', 'latest', 'recent', 'new', 'old',
+  'another', 'each', 'every', 'which', 'what', 'whose', 'those', 'these',
+]);
+
+function hasGmailSendIntent(message: string): boolean {
+  // Factor 1: a recipient. An email address, OR a "to <name>" object.
+  const hasAddr   = GMAIL_EMAIL_ADDR_RE.test(message);
+  const hasToName = /\bto\s+[A-Za-z@]/i.test(message);
+  // Factor 2: walk send-flavored verbs; only an IMPERATIVE use (not preceded by
+  // a determiner -- i.e. not the noun "the email"/"a message") counts.
+  const re = /\b(send|sending|e-?mail|e-?mailing|message|messaging|compose|composing)\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(message)) !== null) {
+    const verb = m[1].toLowerCase().replace('-', '');
+    const prev = message.slice(0, m.index).trim().split(/\s+/).pop()?.toLowerCase() ?? '';
+    if (GMAIL_SEND_DETERMINERS.has(prev)) continue;            // noun use -> skip
+    // 'email'/'compose' are email-specific: an imperative use IS a send.
+    if (verb === 'email' || verb === 'emailing' || verb === 'compose' || verb === 'composing') return true;
+    // 'send'/'message' are generic: require an email recipient context.
+    if (hasAddr || hasToName) return true;
+  }
+  return false;
+}
+
 export function detectIntent(message: string, agentName?: string): string[] {
   const lower = message.toLowerCase();
   // v0.6.3.4 (Q4): per-turn agent name suffix appended to every
@@ -2161,6 +2216,11 @@ export function detectIntent(message: string, agentName?: string): string[] {
         // ban/unban COMMAND with an IPv4 target, never a status read.
         return hasFail2banWriteIntent(message);
       }
+      if (groupName === 'gmail_send') {
+        // Regex gate (keywords are documentation only) -- fires only on a
+        // compose-and-send COMMAND with a recipient, never an inbox read.
+        return hasGmailSendIntent(message);
+      }
       if (groupName === 'browser') {
         // v0.11.x nav-gate: fire on keyword OR a navigation signal (a
         // bare URL, or a browse verb adjacent to a domain). Bare-domain
@@ -2220,6 +2280,18 @@ export function detectIntent(message: string, agentName?: string): string[] {
   if (matched.includes('fail2ban_write') && matched.includes('fail2ban')) {
     const kept = matched.filter(g => g !== 'fail2ban');
     console.log(`[NerdAlert] Intent demoted fail2ban read (ban/unban command -> fail2ban_write): ${kept.join(', ')}${viaSuffix}`);
+    matched = kept;
+  }
+
+  // -- gmail send beats gmail read on a compose-and-send command --
+  // A send command matches BOTH the read `gmail` group (via 'email'/'mail') and
+  // `gmail_send` (via the regex gate). Drop the read group so the inbox isn't
+  // prefetched and the turn isn't captured into narration -- the command must
+  // reach the tool loop where gmail_send + the L3 card live. Same shape as the
+  // fail2ban write/read demotion.
+  if (matched.includes('gmail_send') && matched.includes('gmail')) {
+    const kept = matched.filter(g => g !== 'gmail');
+    console.log(`[NerdAlert] Intent demoted gmail read (send command -> gmail_send): ${kept.join(', ')}${viaSuffix}`);
     matched = kept;
   }
 

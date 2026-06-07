@@ -288,6 +288,9 @@ CURRENCY PATTERNS — always \`currency\` for live FX rates and conversions:
 - "How much is 100 GBP in JPY today" → \`currency\`
 Do NOT use \`calculate\` for currency conversion — mathjs has no FX rate data, so it would either refuse or hallucinate. Do NOT use \`web\` to look up exchange rates — ECB reference rates via Frankfurter are the authoritative midmarket quote. Unit conversion (km↔mi, kg↔lb, °C↔°F) still belongs to \`calculate\` because those ratios are static; currency is the live-data exception.
 
+SEND PATTERNS - composing and sending a message is a tool ACTION, not a chat reply:
+A message leaves NerdAlert only when you call its send tool. Writing an email's text in your reply does not send it; the recipient never sees prose you type here. "Send an email to X", "email X about Y", "compose and send ..." route to \`gmail_send\` - you call it with \`to\` / \`subject\` / \`body\`, and the approval card that appears IS how the user confirms before it goes out. Do not draft the message in chat as a substitute for calling the tool.
+
 The surface form of the question is misleading. Wikipedia is the authoritative source for encyclopedic facts. Calculate is the authoritative source for arithmetic. Maps is the authoritative source for addresses and routing. Reminders is the authoritative source for one-shot scheduled notifications. Currency is the authoritative source for live FX rates. Do not be tricked by the fact that the question is phrased like a search query.
 `;
 

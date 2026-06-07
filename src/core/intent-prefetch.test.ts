@@ -141,10 +141,10 @@ describe('detectIntent -- nav-gate guards (the demotion must NOT overreach)', ()
     expect(matched).toContain('video');
     expect(matched).not.toContain('browser');
   });
-  it('a non-adjacent verb does not steal the turn (email guard)', () => {
+  it('an embedded send command routes to gmail_send without browser stealing the turn', () => {
     const matched = detectIntent('open a ticket and email ben@gmail.com about it');
     expect(matched).not.toContain('browser');
-    expect(matched).toContain('gmail');
+    expect(matched).toContain('gmail_send');
   });
   it('"check my gmail" (no domain) still routes to gmail, not browser', () => {
     const matched = detectIntent('check my gmail');
@@ -277,6 +277,55 @@ describe('prefetchTools -- fail2ban_write is never executed (selectionOnly)', ()
   beforeEach(() => h.executeTool.mockReset());
   it('skips a ban-command turn entirely (no execution, empty results)', async () => {
     const results = await prefetchTools(['fail2ban_write'], CTX, 'ban 203.0.113.5 in sshd');
+    expect(h.executeTool).not.toHaveBeenCalled();
+    expect(results).toEqual([]);
+  });
+});
+
+// -- gmail send/read split (compose-and-send command vs inbox read) --
+//
+// A compose-and-send COMMAND ("send an email to rob@x.com ...") must route to
+// gmail_send (selectionOnly -> tool loop, where gmail_send + the L3 card live),
+// NOT the read `gmail` group whose inbox would be prefetched and capture the
+// turn into narration (where the send tool is unreachable -- the observed 0%
+// gmail_send narrate-only failure). An inbox READ must keep matching only the
+// read group.
+
+describe('detectIntent -- gmail send/read split', () => {
+  it('routes a send-with-address command to gmail_send and demotes the read group (the failure case)', () => {
+    const matched = detectIntent("Send an email to rob@example.com with the subject 'Deploy done' telling him the deploy finished.");
+    expect(matched).toContain('gmail_send');
+    expect(matched).not.toContain('gmail');
+  });
+  it('routes a name-only send command to gmail_send (email-specific verb)', () => {
+    expect(detectIntent('email Rob about the deploy')).toContain('gmail_send');
+  });
+  it('routes a compose-and-send command to gmail_send', () => {
+    expect(detectIntent('compose and send an email to jung@example.com')).toContain('gmail_send');
+  });
+  it('leaves an inbox read on the read group only', () => {
+    const matched = detectIntent('any new email in my inbox');
+    expect(matched).toContain('gmail');
+    expect(matched).not.toContain('gmail_send');
+  });
+  it('does not treat "delete that email" as a send (noun use, not a command)', () => {
+    expect(detectIntent('delete that email')).not.toContain('gmail_send');
+  });
+  it('does not treat "send me the code" as a gmail send (no email recipient)', () => {
+    expect(detectIntent('send me the python code')).not.toContain('gmail_send');
+  });
+});
+
+describe('intentToolNames -- gmail_send tool mapping', () => {
+  it('surfaces the send tool into the recall net', () => {
+    expect(intentToolNames(['gmail_send'])).toEqual(['gmail_send']);
+  });
+});
+
+describe('prefetchTools -- gmail_send is never executed (selectionOnly)', () => {
+  beforeEach(() => h.executeTool.mockReset());
+  it('skips a send-command turn entirely (no execution, empty results)', async () => {
+    const results = await prefetchTools(['gmail_send'], CTX, 'send an email to rob@example.com');
     expect(h.executeTool).not.toHaveBeenCalled();
     expect(results).toEqual([]);
   });
