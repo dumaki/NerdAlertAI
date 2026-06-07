@@ -76,7 +76,9 @@ import {
 } from './agent-events';
 import {
   type BrokerContext,
+  type BrokerResult,
   executeTool,
+  executeOrPropose,
 } from './permission-broker';
 import { WebSuppressionTracker } from './web-suppression';
 import type { ORMessage, OpenAIContentPart } from './llm-client';
@@ -546,7 +548,7 @@ export async function runOpenAIAdapter(
         // ── Web suppression interception ────────────────────
         // See src/core/web-suppression.ts. Mistral via Ollama is
         // the entrenched failure case this protects against.
-        let result: { output: string; error: boolean; sources: Source[]; typed?: NerdAlertResponse };
+        let result: { output: string; error: boolean; sources: Source[]; typed?: NerdAlertResponse; approval?: BrokerResult['approval'] };
         if (suppressionTracker.shouldSuppress(call.function.name)) {
           const triggeredBy = suppressionTracker.succeededList();
           console.log(
@@ -563,9 +565,15 @@ export async function runOpenAIAdapter(
             sources: [],
           };
         } else {
-          result = await executeTool(
+          // Approval-aware front door (mirrors event-adapter-anthropic). A
+          // requiresApproval tool on this card-capable SSE transport runs the
+          // side-effect-free preview and PARKS the approved variant — returning
+          // result.approval instead of executing. Every other tool is a straight
+          // passthrough to executeTool, byte-identical.
+          result = await executeOrPropose(
             { id: call.id, name: call.function.name, args: parsedArgs },
             brokerContext,
+            { canApprovalCard: true },
           );
         }
 
@@ -577,14 +585,29 @@ export async function runOpenAIAdapter(
         );
 
         if (result.sources.length) sourceSink.push(...result.sources);
-        emit(toolResult(
-          call.id,
-          call.function.name,
-          result.output,
-          result.error,
-          result.sources.length ? result.sources : undefined,
-          result.typed,   // v0.10.x typed-content (map/image) -> typed_content SSE
-        ));
+
+        if (result.approval) {
+          // Parked for human sign-off: surface the card and resolve the spinner
+          // with a short note. The real outcome renders when the user approves
+          // (resolveApproval -> executeTool with cardApproved).
+          emit({
+            kind:        'approval_request',
+            id:          result.approval.id,
+            title:       result.approval.title,
+            description: result.approval.description,
+            toolName:    result.approval.toolName,
+          });
+          emit(toolResult(call.id, call.function.name, 'Awaiting your approval — see the card.', false));
+        } else {
+          emit(toolResult(
+            call.id,
+            call.function.name,
+            result.output,
+            result.error,
+            result.sources.length ? result.sources : undefined,
+            result.typed,   // v0.10.x typed-content (map/image) -> typed_content SSE
+          ));
+        }
 
         // Push the tool result turn. tool_call_id correlates this
         // with the assistant's emitted call so the next iteration

@@ -38,7 +38,9 @@ import {
 } from './agent-events';
 import {
   type BrokerContext,
+  type BrokerResult,
   executeTool,
+  executeOrPropose,
   proposeAction,
 } from './permission-broker';
 import {
@@ -655,7 +657,7 @@ export async function runPseudoToolAdapter(
       // See src/core/web-suppression.ts. Free-tier Nemotron and
       // Mistral-fallback both land here; both have shown the
       // "specialized tool then web" stacking pattern.
-      let result: { output: string; error: boolean; sources: Source[]; typed?: NerdAlertResponse };
+      let result: { output: string; error: boolean; sources: Source[]; typed?: NerdAlertResponse; approval?: BrokerResult['approval'] };
       if (suppressionTracker.shouldSuppress(call.name)) {
         const triggeredBy = suppressionTracker.succeededList();
         console.log(
@@ -672,21 +674,40 @@ export async function runPseudoToolAdapter(
           sources: [],
         };
       } else {
-        result = await executeTool(call, brokerContext);
+        // Approval-aware front door (mirrors the other two adapters). A
+        // requiresApproval tool emitted as a <tool_call> on this card-capable
+        // transport runs the preview and PARKS the approved variant; everything
+        // else is a passthrough to executeTool. The separate <approval_request>
+        // path above is unchanged.
+        result = await executeOrPropose(call, brokerContext, { canApprovalCard: true });
       }
 
       // Record for future suppression decisions in this turn.
       suppressionTracker.recordResult(call.name, result.output, result.error);
 
       if (result.sources.length) sourceSink.push(...result.sources);
-      emit(toolResult(
-        call.id,
-        call.name,
-        result.output,
-        result.error,
-        result.sources.length ? result.sources : undefined,
-        result.typed,   // v0.10.x typed-content (map/image) -> typed_content SSE
-      ));
+
+      if (result.approval) {
+        emit({
+          kind:        'approval_request',
+          id:          result.approval.id,
+          title:       result.approval.title,
+          description: result.approval.description,
+          toolName:    result.approval.toolName,
+        });
+        emit(toolResult(call.id, call.name, 'Awaiting your approval — see the card.', false));
+      } else {
+        emit(toolResult(
+          call.id,
+          call.name,
+          result.output,
+          result.error,
+          result.sources.length ? result.sources : undefined,
+          result.typed,   // v0.10.x typed-content (map/image) -> typed_content SSE
+        ));
+      }
+      // In the parked case result.output carries the "awaiting approval — do
+      // not retry" instruction, so the model stops instead of re-calling.
       resultBlocks.push(`<tool_result name="${call.name}">${result.output}</tool_result>`);
     }
 
