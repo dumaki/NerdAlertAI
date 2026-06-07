@@ -7417,7 +7417,6 @@
   const cards   = document.getElementById('tray-cards');
   const countEl = document.getElementById('tray-count');
   const active  = pendingApprovals.filter(a => !a.resolved);
-  const isFree  = !currentModel.startsWith('anthropic/');
 
   countEl.textContent = active.length;
   cards.innerHTML = '';
@@ -7428,13 +7427,9 @@
     card.innerHTML = `
       <div class="card-action">${item.action}</div>
       <div class="card-desc">${item.description}</div>
-      ${(isFree && !item.queueId) ? `<div style="font-size:9px;color:var(--amber);letter-spacing:1px;margin-bottom:8px;line-height:1.5">
-        ⚠ Free tier — ${activeAgentName} will describe this action but not execute it.<br>
-        Switch to Claude in Settings for full execution.
-      </div>` : ''}
       <div class="card-buttons">
         <button class="card-btn approve" onclick="resolveCard(${idx}, true)">
-          ${(isFree && !item.queueId) ? 'PROCEED ANYWAY' : 'APPROVE'}
+          APPROVE
         </button>
         <button class="card-btn deny" onclick="resolveCard(${idx}, false)">DENY</button>
       </div>
