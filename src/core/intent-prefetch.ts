@@ -783,6 +783,24 @@ const INTENT_MAP: Record<string, IntentGroup> = {
     keywords: ['fail2ban', 'jail', 'ssh ban', 'brute force', 'banned ip'],
     tools:    ['fail2ban_status', 'fail2ban_recent_bans'],
   },
+
+  // -- fail2ban WRITE (ban/unban -- selection-only action group) --
+  // Read/write split mirrors the tool files: soc-network.ts owns the L1
+  // reads (the `fail2ban` group above); the L3 writes live here. selectionOnly
+  // (like browser/ssh/shell): NEVER prefetched -- a ban is an L3 approval-carded
+  // action, not a data source -- but fed to the weak-model tool-selector recall
+  // net via intentToolNames so Mistral reliably SEES the write tool in the loop.
+  // Without this, a ban command matches the read group via 'jail'/'banned ip',
+  // gets status prefetched, and is captured into narration where the write tool
+  // is unreachable (the model truthfully reports it "has no tool"). Keywords are
+  // documentation; hasFail2banWriteIntent (the regex gate in detectIntent) is the
+  // real guard, same pattern as calculate/browser. The demotion below drops the
+  // read group on a write.
+  fail2ban_write: {
+    keywords:      ['ban', 'unban'],
+    tools:         ['fail2ban_ban_ip', 'fail2ban_unban_ip'],
+    selectionOnly: true,
+  },
   ntopng: {
     keywords: ['ntopng', 'network traffic', 'top hosts', 'bandwidth usage', 'flow'],
     tools:    ['ntopng_interface_stats', 'ntopng_top_hosts'],
@@ -2016,6 +2034,33 @@ export function extractNavUrl(message: string): string | null {
   return m && m[1] ? m[1] : null;
 }
 
+// -- fail2ban WRITE-intent gate --
+// Separates a ban/unban COMMAND ("ban 203.0.113.5 in sshd jail") from a
+// status READ ("recent bans", "is X banned", "what's in the sshd jail"): a
+// write needs BOTH an IPv4 target AND an imperative ban/unban verb NOT
+// preceded by a determiner ("the ban on X" / "a ban" is the NOUN -- a read).
+// Drives the demotion that routes a ban command to the tool loop (where the
+// L3 write tool + approval card live) instead of read-only prefetch/narration.
+// Validated against a read/write battery (0 misclassifications). Accepted miss:
+// "remove the ban on <ip>" stays read; canonical "unban <ip>" is covered.
+// IPv4-only for now; IPv6 + "block <ip>" are sweep-tunable follow-ups.
+const FAIL2BAN_IPV4_RE = /\b(?:\d{1,3}\.){3}\d{1,3}\b/;
+const FAIL2BAN_WRITE_DETERMINERS = new Set<string>([
+  'the', 'a', 'an', 'this', 'that', 'any', 'recent', 'active',
+  'current', 'existing', 'all', 'those', 'these', 'no',
+]);
+
+function hasFail2banWriteIntent(message: string): boolean {
+  if (!FAIL2BAN_IPV4_RE.test(message)) return false;
+  const re = /\b(?:un)?ban\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(message)) !== null) {
+    const prev = message.slice(0, m.index).trim().split(/\s+/).pop()?.toLowerCase() ?? '';
+    if (!FAIL2BAN_WRITE_DETERMINERS.has(prev)) return true;
+  }
+  return false;
+}
+
 export function detectIntent(message: string, agentName?: string): string[] {
   const lower = message.toLowerCase();
   // v0.6.3.4 (Q4): per-turn agent name suffix appended to every
@@ -2111,6 +2156,11 @@ export function detectIntent(message: string, agentName?: string): string[] {
         // documents into `matched`; the demotion then drops project.
         return hasDocumentsIndexShape(message);
       }
+      if (groupName === 'fail2ban_write') {
+        // Regex gate (keywords are documentation only) -- fires only on a
+        // ban/unban COMMAND with an IPv4 target, never a status read.
+        return hasFail2banWriteIntent(message);
+      }
       if (groupName === 'browser') {
         // v0.11.x nav-gate: fire on keyword OR a navigation signal (a
         // bare URL, or a browse verb adjacent to a domain). Bare-domain
@@ -2158,6 +2208,18 @@ export function detectIntent(message: string, agentName?: string): string[] {
   if (matched.includes('web') && matched.length > 1) {
     const kept = matched.filter(g => g !== 'web');
     console.log(`[NerdAlert] Intent demoted web (more specific match): ${kept.join(', ')}${viaSuffix}`);
+    matched = kept;
+  }
+
+  // -- fail2ban write beats fail2ban read on a ban/unban command --
+  // A ban/unban command with an IP matches BOTH the read `fail2ban` group
+  // (via 'jail'/'banned ip') and `fail2ban_write` (via the regex gate). Drop
+  // the read group so its status tools aren't prefetched and the turn isn't
+  // captured into narration -- the command must reach the tool loop where
+  // fail2ban_ban_ip + the L3 card live. Same shape as the web/gmail demotions.
+  if (matched.includes('fail2ban_write') && matched.includes('fail2ban')) {
+    const kept = matched.filter(g => g !== 'fail2ban');
+    console.log(`[NerdAlert] Intent demoted fail2ban read (ban/unban command -> fail2ban_write): ${kept.join(', ')}${viaSuffix}`);
     matched = kept;
   }
 

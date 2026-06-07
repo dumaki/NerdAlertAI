@@ -235,3 +235,49 @@ describe('evaluatePrefetchRelevance -- exempt tools bypass the cosine gate', () 
     h.cap = { available: false };
   });
 });
+
+// -- fail2ban write/read split (ban command vs status read) --
+//
+// A ban/unban COMMAND with an IP ("ban 203.0.113.5 in sshd jail") must route
+// to fail2ban_write (selectionOnly -> tool loop, where fail2ban_ban_ip + the
+// L3 card live), NOT the read `fail2ban` group whose status tools would be
+// prefetched and capture the turn into narration (where the write tool is
+// unreachable -- the observed "I don't have the tools" failure). A status
+// READ must keep matching only the read group.
+
+describe('detectIntent -- fail2ban write/read split', () => {
+  it('routes a ban command to fail2ban_write and demotes the read group (the failure case)', () => {
+    const matched = detectIntent('Can you ban 203.0.113.5 in sshd jail');
+    expect(matched).toContain('fail2ban_write');
+    expect(matched).not.toContain('fail2ban');
+  });
+  it('routes an unban command to fail2ban_write', () => {
+    expect(detectIntent('unban 1.2.3.4 from sshd')).toContain('fail2ban_write');
+  });
+  it('matches a bare "ban <ip>" with no jail keyword', () => {
+    expect(detectIntent('ban 8.8.8.8')).toContain('fail2ban_write');
+  });
+  it('leaves a status read on the read group only', () => {
+    const matched = detectIntent('show me the recent bans in the sshd jail');
+    expect(matched).toContain('fail2ban');
+    expect(matched).not.toContain('fail2ban_write');
+  });
+  it('does not treat "is <ip> banned" as a write (status reference, not a command)', () => {
+    expect(detectIntent('is 203.0.113.5 banned')).not.toContain('fail2ban_write');
+  });
+});
+
+describe('intentToolNames -- fail2ban_write tool mapping', () => {
+  it('surfaces both write tools into the recall net', () => {
+    expect(intentToolNames(['fail2ban_write'])).toEqual(['fail2ban_ban_ip', 'fail2ban_unban_ip']);
+  });
+});
+
+describe('prefetchTools -- fail2ban_write is never executed (selectionOnly)', () => {
+  beforeEach(() => h.executeTool.mockReset());
+  it('skips a ban-command turn entirely (no execution, empty results)', async () => {
+    const results = await prefetchTools(['fail2ban_write'], CTX, 'ban 203.0.113.5 in sshd');
+    expect(h.executeTool).not.toHaveBeenCalled();
+    expect(results).toEqual([]);
+  });
+});
