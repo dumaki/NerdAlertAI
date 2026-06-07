@@ -40,6 +40,7 @@
 import { randomUUID } from 'crypto';
 
 import { findTool, effectiveTrustLevelOf, isToolEnabled } from '../tools/registry';
+import { validateToolArgs, formatValidationFeedback } from './arg-validator';
 import { config } from '../config/loader';
 import type { NerdAlertResponse, Source, NerdAlertTool, AutonomousGrant } from '../types/response.types';
 import { recordIntent, recordOutcome } from '../audit/logger';
@@ -659,6 +660,32 @@ export async function executeTool(
   // blocks) for the audit record; checkTrust gives the exact denial message.
   const evalT = evaluateTrust(call, ctx);
 
+  // -- Argument shape validation (pre-gate shape guard) --
+  // Reject a call whose args do not match the tool's declared JSON Schema
+  // (missing required / wrong primitive type / out-of-enum) before it can
+  // execute, before the autonomous floor's grant/queue logic, and before the
+  // autoApprove path below. Guarded on found+enabled+within-ceiling so a
+  // not-found / disabled / over-ceiling call still gets its existing trust
+  // denial (those take priority); only a structurally-callable tool is shape-
+  // checked. The validator can ONLY reject a genuine violation and never blocks
+  // a valid call, so a conforming call is byte-identical to before.
+  if (evalT.found && evalT.enabled && !evalT.overModelCeiling) {
+    const vTool = findTool(call.name);
+    if (vTool) {
+      const validation = validateToolArgs(vTool.parameters, call.args);
+      if (!validation.ok) {
+        console.log(`[NerdAlert] arg validation: rejected ${call.name} - fields: ${validation.errors.map(e => e.field).join(', ')}`);
+        return {
+          id: call.id,
+          name: call.name,
+          output: formatValidationFeedback(call.name, validation),
+          error: true,
+          sources: [],
+        };
+      }
+    }
+  }
+
   // ── Autonomous floor (v0.10 Phase 2) ──────────────────────
   // For an autonomous trigger (cron/heartbeat), refuse any action that would
   // need a human — a requiresApproval tool/target, or anything above the
@@ -1053,6 +1080,23 @@ export async function executeOrPropose(
   const effectiveTrustCeiling = userGateElevation
     ? evalT.required
     : Math.min(ctx.userTrustLevel, ctx.maxModelTrustLevel ?? Number.POSITIVE_INFINITY);
+
+  // -- Argument shape validation (pre-preview shape guard) --
+  // Validate the model's args against the tool's declared schema BEFORE the
+  // side-effect-free preview runs and BEFORE any card is parked, so a malformed
+  // call (missing required / wrong type / out-of-enum) is never previewed and
+  // never raised as an Approve/Deny card. Trust has already passed at this point.
+  const previewValidation = validateToolArgs(tool!.parameters, call.args);
+  if (!previewValidation.ok) {
+    console.log(`[NerdAlert] arg validation: rejected ${call.name} (approval-card path)`);
+    return {
+      id: call.id,
+      name: call.name,
+      output: formatValidationFeedback(call.name, previewValidation),
+      error: true,
+      sources: [],
+    };
+  }
 
   // Side-effect-free preview. Force approved:false so the tool takes its
   // preview branch regardless of what the model sent. previewForApproval:true
