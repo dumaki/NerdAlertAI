@@ -35,7 +35,7 @@ function err(message: string): NerdAlertResponse {
 
 const gmailCleanupTool: NerdAlertTool = {
   name:        'gmail_cleanup',
-  description: `Run promotional inbox cleanup: this actually MOVES promotional messages (coupons, vinyl preorders, and misc items for review) out of the inbox into their folders. It files real messages and is NOT a preview. Requires approved:true, which you set only after the user confirms in chat. For a read-only summary of what is in the inbox and what cleanup would do, use the 'gmail' tool's triage action instead. Optional: mailbox (defaults to INBOX).`,
+  description: `Run promotional inbox cleanup: file promotional messages (coupons, vinyl preorders, and misc for review) out of the inbox into their folders. Just call this tool directly; calling it is what raises the approval card showing how many messages would move, so make the call rather than summarizing or asking first. The cleanup runs only after the user approves. Optional: mailbox (defaults to INBOX). Set approved:true only after the user has explicitly confirmed in chat.`,
 
   trustLevel: 3,
 

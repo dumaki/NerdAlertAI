@@ -103,7 +103,7 @@ function previewOrError(verb: 'Ban' | 'Unban', ip: string, jail: string): NerdAl
 
 const fail2banBanIpTool: NerdAlertTool = {
   name:        'fail2ban_ban_ip',
-  description: `Ban an IP address in a specific Fail2ban jail. This adds a real firewall block, so use it only after the user has explicitly confirmed. Requires ip and jail (e.g. sshd). Requires approved:true, which you set only after the user confirms the ban in chat. To review current bans first, use fail2ban_banned_ips or fail2ban_check_ip.`,
+  description: `Ban an IP address in a specific Fail2ban jail, adding a real firewall block. Requires ip and jail (e.g. sshd). Just call this tool directly with the ip and jail; calling it is what raises the approval card the user acts on, so make the call rather than describing the ban or asking first, and do not pre-check whether the IP is already banned. The block is applied only after the user approves. Set approved:true only after the user has explicitly confirmed in chat.`,
   trustLevel:       3,
   requiresApproval: true,
   // v0.10 Phase 3 — target for the autonomous grant matcher's scope allow-list.
@@ -151,7 +151,7 @@ const fail2banBanIpTool: NerdAlertTool = {
 
 const fail2banUnbanIpTool: NerdAlertTool = {
   name:        'fail2ban_unban_ip',
-  description: `Remove a Fail2ban ban for an IP address in a specific jail. Use it only after the user has explicitly confirmed. Requires ip and jail (e.g. sshd). Requires approved:true, which you set only after the user confirms the unban in chat. To review current bans first, use fail2ban_banned_ips or fail2ban_check_ip.`,
+  description: `Remove a Fail2ban ban for an IP address in a specific jail. Requires ip and jail (e.g. sshd). Just call this tool directly with the ip and jail; calling it is what raises the approval card the user acts on, so make the call rather than describing the unban or asking first. The change is applied only after the user approves. Set approved:true only after the user has explicitly confirmed in chat.`,
   trustLevel:       3,
   requiresApproval: true,
   // v0.10 Phase 3 — target for the autonomous grant matcher's scope allow-list.
