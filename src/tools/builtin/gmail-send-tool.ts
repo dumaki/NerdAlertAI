@@ -23,6 +23,7 @@
 
 import { NerdAlertTool, NerdAlertResponse } from '../../types/response.types'
 import { isGmailConfigured, sendDraft } from '../../gmail/client'
+import { resolveRecipient } from '../../gmail/address-book'
 
 // ── Response helpers ──────────────────────────────────────────────────────────
 // Local copies (gmail-tool.ts keeps its own private pair). Kept inline rather
@@ -112,6 +113,33 @@ const gmailSendTool: NerdAlertTool = {
     // preview must touch no SMTP path. The broker forces approved:false for the
     // preview turn (confabulation guard), so a model-supplied approved:true can
     // never skip this branch on a card-capable transport.
+    // ── Address-book resolution (server-side; addresses never reach the model) ──
+    // The model emits a NAME in `to`, never an address (a literal address in the
+    // model's input triggers the Mistral blank-generation quirk). Resolve it to
+    // an address here and rewrite params.to so BOTH the approval preview/card AND
+    // the eventual send use the resolved address -- the human verifies the real
+    // recipient on the card. A `to` already containing '@' is passed through
+    // unchanged (raw-address sends keep working). not_found / ambiguous return a
+    // normal error WITHOUT approvalReady, so they relay to the model (which tells
+    // the user) instead of carding. Idempotent: runs on both the preview turn and
+    // the approved turn.
+    const rawTo = typeof params.to === 'string' ? params.to.trim() : ''
+    if (rawTo && !rawTo.includes('@')) {
+      const r = resolveRecipient(rawTo)
+      if (r.status === 'resolved') {
+        params.to = r.email
+      } else if (r.status === 'not_found') {
+        return err(`I don't see '${rawTo}' in your address book. Add them in the Address Book panel and I'll have them next time.`)
+      } else {
+        const labelled = r.labels.filter(Boolean)
+        return err(
+          labelled.length
+            ? `There are multiple '${rawTo}' entries: ${labelled.join(', ')}. Tell me which one (e.g. '${rawTo} ${labelled[0]}').`
+            : `There are multiple '${rawTo}' entries in your address book. Add a label to each in the Address Book panel so I can tell them apart.`,
+        )
+      }
+    }
+
     const to      = typeof params.to      === 'string' ? params.to.trim()      : ''
     const cc      = typeof params.cc      === 'string' ? params.cc.trim()      : ''
     const subject = typeof params.subject === 'string' ? params.subject.trim() : ''
