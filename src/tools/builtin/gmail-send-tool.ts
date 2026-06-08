@@ -40,7 +40,7 @@ function err(message: string): NerdAlertResponse {
 
 const gmailSendTool: NerdAlertTool = {
   name:        'gmail_send',
-  description: `Send an email over SMTP. This is irreversible. Requires to, subject, and body. Just call this tool directly with the recipient, subject, and body; calling it is what raises the approval card the user acts on, so make the call rather than drafting first or asking first. The message is sent only after the user approves. Set approved:true only after the user has explicitly confirmed in chat.`,
+  description: `Draft and send an email. Use for any request to email, draft, compose, write, or send a message to someone (e.g. 'email Ben', 'draft an email to Ben'). Requires to, subject, and body. Calling this tool IS how you draft -- it produces an approval card the user reviews; never write the email as a chat reply instead. Sending is irreversible and happens only after the user approves. Set approved:true only after explicit user confirmation in chat.`,
 
   trustLevel: 3,
 
