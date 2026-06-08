@@ -31,6 +31,11 @@ import { getCalendarContext, createCalendarEvent, CreateEventInput } from '../..
 import { CalendarEvent } from '../../types/gmail.types'
 import { config } from '../../config/loader'
 
+// Exact text returned when the calendar has no upcoming events. Exported so
+// the prefetch empty-result detector (core/intent-prefetch) recognises an empty
+// calendar read without duplicating the literal -- single source of truth.
+export const CALENDAR_EMPTY_MESSAGE = 'No upcoming events on your calendar.'
+
 const googleCalendarTool: NerdAlertTool = {
   name: 'google_calendar',
 
@@ -161,7 +166,7 @@ const googleCalendarTool: NerdAlertTool = {
 
       // ── No events ───────────────────────────────────────────────────────────
       if (events.length === 0) {
-        return ok('Upcoming events', 'No upcoming events on your calendar.')
+        return ok('Upcoming events', CALENDAR_EMPTY_MESSAGE)
       }
 
       // ── Events ──────────────────────────────────────────────────────────────

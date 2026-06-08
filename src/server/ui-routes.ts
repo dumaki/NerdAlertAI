@@ -29,6 +29,7 @@ import { getServerAuthToken }                    from './auth';
 import { getBootId }                            from './boot-id';
 import { getPersonality }                        from '../personalities';
 import { getActivePersonality, setActivePersonality } from '../personalities/active';
+import { formatEmptyState } from '../personalities/empty-state';
 import { getAvailableTools, getModelVisibleTools, toAnthropicFormat, toOpenAIFormat, findEnabledTool } from '../tools/registry';
 import { buildActiveProjectContext }              from '../projects/active';
 import {
@@ -822,10 +823,39 @@ async function handleNarrationStream(
   prefetchSources: Source[],
   prefetchResults: PrefetchResult[],
   transport:       'openrouter' | 'ollama',
+  agentId:         string,
 ): Promise<NarrationOutcome> {
 
   const llm = getLLMConfig();
   const bareModel = llm.model.replace(/^ollama\//, '');
+
+  // ── Empty-result deterministic emit ─────────────────────
+  // If every available prefetched READ came back empty, narrating it
+  // risks the model ignoring the empty data block and confabulating a
+  // plausible result (the live 'No upcoming events' -> invented calendar
+  // event bug, 2026-06-07). An empty result's only salient tokens are
+  // boilerplate the narration-postcheck cannot gate on, so a confabulation
+  // would pass. We emit the empty state ourselves, in the active
+  // personality's voice (formatEmptyState keeps the factual tool text
+  // verbatim, so it stays confab-safe), and bypass the model entirely --
+  // confabulation is impossible by construction. Same model-bypass move as
+  // the verbatim branch below. Strict-superset: any non-empty available
+  // result makes the condition false and normal narration runs unchanged.
+  const availableResults = prefetchResults.filter(r => r.available);
+  if (availableResults.length > 0 && availableResults.every(r => r.isEmpty)) {
+    for (const r of availableResults) {
+      const id = `prefetch_${r.toolName}`;
+      sseEvent(res, 'tool_start',  { id, name: r.toolName });
+      sseEvent(res, 'tool_result', { id, name: r.toolName, output: r.data });
+    }
+    const factual = availableResults.map(r => r.data).join('\n\n');
+    const voiced  = formatEmptyState(agentId, factual);
+    sseEvent(res, 'token', { text: voiced });
+    sseEvent(res, 'done',  { text: voiced, sources: dedupSources(prefetchSources) });
+    res.end();
+    console.log(`[narration] empty-state emit (${availableResults.map(r => r.toolName).join(',')}) model bypassed`);
+    return { kind: 'streamed' };
+  }
 
   // ── v0.6.3.9: mechanical verbatim render ────────────────────
   // Deterministic, display-only prefetch data (project listing /
@@ -1369,6 +1399,7 @@ export function mountUIRoutes(app: Express): void {
           prefetchSources,
           prefetchResults,
           llm.provider,
+          agentId,
         );
         // v0.5.28 Approach C: if the post-check detected confabulation,
         // narration returned 'bail' without writing anything to the

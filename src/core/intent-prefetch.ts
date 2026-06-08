@@ -53,6 +53,7 @@
 
 import { Source, NerdAlertResponse } from '../types/response.types';
 import { executeTool, type BrokerContext } from './permission-broker';
+import { CALENDAR_EMPTY_MESSAGE } from '../tools/builtin/google-calendar-tool';
 import * as chrono from 'chrono-node';
 import {
   normalizeCurrencyCode,
@@ -96,6 +97,13 @@ export interface PrefetchResult {
   // handler emits it directly and skips model generation, killing the
   // list-fabrication failure mode. Absent/false = narrate as before.
   renderVerbatim?: boolean;
+  // Empty-result marker. Set true when this prefetched READ returned a
+  // recognised empty result (e.g. calendar with no upcoming events). The
+  // narration handler uses it to detect an all-empty turn and emit a
+  // deterministic, in-voice empty state instead of letting the model narrate
+  // (and risk confabulating) an empty data block. Absent/false = narrate as
+  // before. See ui-routes handleNarrationStream.
+  isEmpty?: boolean;
   // v0.11.x: skip the prefetch relevance gate for this result. Set for the
   // browser navigate prefetch -- the user NAMED the destination, so cosine
   // similarity between the question and the page text is the wrong test and
@@ -2537,6 +2545,15 @@ export async function prefetchTools(
     const isMechanicalProjectList =
       toolName === 'project' && (action === 'list' || action === 'projects');
 
+    // Empty-result detection (mirrors the per-tool verbatim rule above): a
+    // recognised empty READ result is flagged so the narration handler can emit
+    // a deterministic empty state and bypass the model, rather than narrating an
+    // empty data block the model may ignore and confabulate over. Scoped by tool
+    // + exact message (single source of truth: CALENDAR_EMPTY_MESSAGE) so
+    // nothing else is affected; extend coverage by adding a clause here.
+    const isEmptyRead =
+      toolName === 'google_calendar' && result.output.trim() === CALENDAR_EMPTY_MESSAGE;
+
     // Treat empty string as unavailable — no point narrating nothing.
     results.push({
       toolName,
@@ -2545,6 +2562,7 @@ export async function prefetchTools(
       available: result.output.length > 0,
       sources:   result.sources,
       renderVerbatim: isMechanicalProjectList || undefined,
+      isEmpty:        isEmptyRead || undefined,
       typed:     result.typed,   // v0.10.x typed-content (map/image) -> narration typed_content SSE
     });
   }
