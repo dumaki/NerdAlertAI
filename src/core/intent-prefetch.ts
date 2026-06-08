@@ -843,6 +843,55 @@ const INTENT_MAP: Record<string, IntentGroup> = {
     selectionOnly: true,
   },
 
+  // ── Google Calendar (read-only prefetch) ─────────────────
+  // Brings calendar reads onto the prefetch path. Without this group a
+  // calendar query ("what's on my calendar today") matched NO group, fell
+  // through to the native Ollama tool loop, and Mistral -- which freezes on
+  // tool discovery under the full tool list -- narrated a hallucinated
+  // calendar instead of calling the tool (observed in live UI testing,
+  // 2026-06-07). Same failure class that motivated the cron / memory / maps
+  // groups: prefetch the answer server-side so the model narrates real data.
+  // Adding the group also pulls calendar narration under narration-postcheck
+  // for free -- the postcheck only guards turns that have prefetched data.
+  //
+  // READ-ONLY POLICY
+  // ─────────────────────────────────────────────────────────
+  // defaultParams pins action=list (an L1 read) and there is deliberately NO
+  // paramExtractor, so prefetch can ONLY ever issue the read -- the L2
+  // add_event WRITE is never reachable from here and stays on the tool-loop /
+  // gate path. Mirrors cron's read-only-prefetch policy exactly. Documented
+  // trade-off: on Mistral, "add an event to my calendar" prefetches the event
+  // list (a benign no-op for the create) rather than creating it -- identical
+  // to how "create a cron job" behaves today. The read itself
+  // (getCalendarContext) is a pure read, safe to commit on prefetch like
+  // gmail-list / host_metrics.
+  //
+  // KEYWORD COLLISION RULES
+  // ─────────────────────────────────────────────────────────
+  // Matching is substring .includes(), so the risk is a calendar keyword
+  // living INSIDE another group's vocabulary:
+  //   - NOT bare 'schedule': "scheduled" contains "schedule", which would
+  //     collide with the cron group ("what scheduled jobs do I have") and
+  //     double-prefetch. 'my schedule' is anchored and is not a substring of
+  //     "scheduled"/"scheduler".
+  //   - NOT bare 'event': too common in general English; over-fires.
+  //     'upcoming events' is the safe compound.
+  // 'calendar'/'agenda'/'meeting(s)'/'appointment(s)' are distinctive and
+  // collide with no existing group's keywords. A spurious fire is caught by
+  // the v0.5.28 dissonance clause (model says so plainly) and, on a genuine
+  // data/question mismatch, by narration-postcheck (bails to the tool loop) --
+  // a false positive costs one round-trip, never a wrong answer. No demotion
+  // rule is needed: calendar shares no keyword with another group (unlike the
+  // project/gmail 'inbox' overlap), so "check my email and calendar" correctly
+  // fires both and narrates both. Sweep-tunable.
+  google_calendar: {
+    keywords:      ['calendar', 'my schedule', 'agenda',
+                    'meeting', 'meetings', 'appointment', 'appointments',
+                    'upcoming events'],
+    tools:         ['google_calendar'],
+    defaultParams: { action: 'list' },
+  },
+
   // ── GitHub (repos / issues / PRs / notifications, read-only) ──
   //
   // Owns the github tool from the prefetch path. Without this group,
