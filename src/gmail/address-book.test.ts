@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs   from 'fs';
 import * as os   from 'os';
 import * as path from 'path';
-import { saveEntries, resolveRecipient, loadEntries, AddressBookEntry } from './address-book';
+import { saveEntries, resolveRecipient, loadEntries, upsertEntry, removeEntry, AddressBookEntry } from './address-book';
 
 let tmpFile: string;
 
@@ -64,5 +64,38 @@ describe('resolveRecipient', () => {
     fs.writeFileSync(tmpFile, '{ not valid json', 'utf8');
     expect(() => resolveRecipient('Jung')).not.toThrow();
     expect(loadEntries()).toEqual([]);
+  });
+});
+
+describe('upsertEntry / removeEntry', () => {
+  it('adds a new entry and resolves it', () => {
+    upsertEntry({ name: 'Rob', email: 'rob@example.com' });
+    expect(resolveRecipient('Rob')).toEqual({ status: 'resolved', email: 'rob@example.com' });
+  });
+
+  it('replaces the email of an existing (name,label) rather than duplicating', () => {
+    upsertEntry({ name: 'Rob', email: 'old@example.com' });
+    upsertEntry({ name: 'Rob', email: 'new@example.com' });
+    expect(loadEntries()).toHaveLength(1);
+    expect(resolveRecipient('Rob')).toEqual({ status: 'resolved', email: 'new@example.com' });
+  });
+
+  it('treats different labels as distinct entries', () => {
+    upsertEntry({ name: 'Jung', email: 'w@example.com', label: 'work' });
+    upsertEntry({ name: 'Jung', email: 'p@example.com', label: 'personal' });
+    expect(loadEntries()).toHaveLength(2);
+    expect(resolveRecipient('Jung work')).toEqual({ status: 'resolved', email: 'w@example.com' });
+  });
+
+  it('rejects an invalid email', () => {
+    expect(() => upsertEntry({ name: 'Bad', email: 'not-an-email' })).toThrow();
+  });
+
+  it('removes by (name,label)', () => {
+    upsertEntry({ name: 'Jung', email: 'w@example.com', label: 'work' });
+    upsertEntry({ name: 'Jung', email: 'p@example.com', label: 'personal' });
+    removeEntry('Jung', 'work');
+    expect(loadEntries()).toHaveLength(1);
+    expect(resolveRecipient('Jung')).toEqual({ status: 'resolved', email: 'p@example.com' });
   });
 });

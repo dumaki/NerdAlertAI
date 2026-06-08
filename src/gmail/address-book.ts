@@ -110,3 +110,45 @@ export function resolveRecipient(name: string): ResolveResult {
   // C. nothing matched
   return { status: 'not_found' };
 }
+
+// ── Mutations (used by the management route only; never the resolver/model) ──
+// An entry's identity is its (name, label) pair, compared case-insensitively
+// with an absent label treated as ''. These persist via saveEntries.
+
+// Minimal shape check -- not full RFC validation, just enough to reject obvious
+// mistakes before storing. A human typed this into the loopback panel.
+export function isLikelyEmail(s: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
+}
+
+function sameIdentity(e: AddressBookEntry, name: string, label?: string): boolean {
+  const n = e.name.trim().toLowerCase();
+  const l = (e.label ?? '').trim().toLowerCase();
+  return n === name.trim().toLowerCase() && l === (label ?? '').trim().toLowerCase();
+}
+
+// Upsert: replace the email of an entry with the same (name, label), else append.
+// Returns the updated list. Throws on invalid input so the route can 400.
+export function upsertEntry(entry: AddressBookEntry): AddressBookEntry[] {
+  const name  = entry.name?.trim()  ?? '';
+  const email = entry.email?.trim() ?? '';
+  const label = entry.label?.trim() || undefined;
+  if (!name)                  throw new Error('name is required');
+  if (!isLikelyEmail(email))  throw new Error('a valid email is required');
+
+  const entries = loadEntries();
+  const idx     = entries.findIndex(e => sameIdentity(e, name, label));
+  const next: AddressBookEntry = label ? { name, email, label } : { name, email };
+  if (idx >= 0) entries[idx] = next;
+  else          entries.push(next);
+  saveEntries(entries);
+  return entries;
+}
+
+// Remove the entry with the given (name, label). No-op if nothing matched.
+// Returns the updated list.
+export function removeEntry(name: string, label?: string): AddressBookEntry[] {
+  const entries = loadEntries().filter(e => !sameIdentity(e, name, label));
+  saveEntries(entries);
+  return entries;
+}

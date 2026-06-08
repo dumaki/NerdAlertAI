@@ -3806,6 +3806,9 @@
       <button class="dock-icon" data-view="instructions" onclick="switchView('instructions', null)" aria-label="Instructions">
         <span class="dock-icon-glyph">✎</span>
       </button>
+      <button class="dock-icon" data-view="addressbook" onclick="switchView('addressbook', null)" aria-label="Address Book">
+        <span class="dock-icon-glyph">@</span>
+      </button>
       <button class="dock-icon" data-view="settings" onclick="switchView('settings', null)" aria-label="Settings">
         <span class="dock-icon-glyph">⚙</span>
       </button>
@@ -5304,6 +5307,7 @@
     if (view === 'models')   { openPanel('models'); return; }
     if (view === 'export')   { openPanel('export');   return; }
     if (view === 'instructions') { openPanel('instructions'); return; }
+    if (view === 'addressbook')  { openPanel('addressbook'); return; }
     if (view === 'settings') { openPanel('settings'); return; }
     if (view === 'chat')     { closePanel(); }
   }
@@ -5414,6 +5418,132 @@
   }
 
   // ============================================================
+  // ADDRESS BOOK PANEL
+  // ============================================================
+  // Operator editor for the name->email address book, backed by the P7
+  // /api/address-book routes. gmail_send resolves a NAME to an address
+  // server-side from this store; the address is shown on the approval card
+  // but never enters the model's context. Direct fetch - never routed through
+  // the agent (which has no tool to read or edit this).
+  function getAddressBookPanelHTML() {
+    return `
+      <div class='tools-panel-intro'>
+        Names you add here let you say 'email Jung' instead of typing an address.
+        The address is resolved on the server and shown on the send approval card
+        for you to verify - it never enters the model's context. Add a label
+        (e.g. work, personal) when two people share a name.
+      </div>
+      <div style='display:flex; gap:6px; margin-top:10px; flex-wrap:wrap;'>
+        <input id='na-ab-name' placeholder='Name (e.g. Jung)' style='flex:1 1 120px; min-width:100px; box-sizing:border-box; font-family:var(--mono,ui-monospace,monospace); font-size:12px; padding:7px 9px; background:var(--bg-elev,#0e0e0e); color:var(--text,#ddd); border:1px solid var(--border,#333); border-radius:4px;'>
+        <input id='na-ab-email' placeholder='Email' style='flex:2 1 200px; min-width:140px; box-sizing:border-box; font-family:var(--mono,ui-monospace,monospace); font-size:12px; padding:7px 9px; background:var(--bg-elev,#0e0e0e); color:var(--text,#ddd); border:1px solid var(--border,#333); border-radius:4px;'>
+        <input id='na-ab-label' placeholder='Label (optional)' style='flex:1 1 120px; min-width:100px; box-sizing:border-box; font-family:var(--mono,ui-monospace,monospace); font-size:12px; padding:7px 9px; background:var(--bg-elev,#0e0e0e); color:var(--text,#ddd); border:1px solid var(--border,#333); border-radius:4px;'>
+        <button class='settings-action-btn' onclick='addAddressBookEntry()'>ADD</button>
+      </div>
+      <div id='na-ab-status' style='margin-top:8px; font-size:11px; min-height:14px;'></div>
+      <div id='na-ab-list' style='margin-top:10px;'></div>
+    `;
+  }
+
+  function setAddressBookStatus(msg, kind) {
+    const el = document.getElementById('na-ab-status');
+    if (!el) return;
+    el.textContent = msg;
+    el.style.color = kind === 'error' ? 'var(--danger,#e66)'
+                   : kind === 'ok'    ? 'var(--accent,#6cf)'
+                   : 'var(--text-dim,#888)';
+  }
+
+  function escAB(s) {
+    return String(s)
+      .split('&').join('&amp;')
+      .split('<').join('&lt;')
+      .split('>').join('&gt;')
+      .split("'").join('&#39;');
+  }
+
+  function renderAddressBookList(entries) {
+    const wrap = document.getElementById('na-ab-list');
+    if (!wrap) return;
+    if (!entries || entries.length === 0) {
+      wrap.innerHTML = `<div style='font-size:11px; color:var(--text-dim,#888);'>No entries yet.</div>`;
+      return;
+    }
+    wrap.innerHTML = entries.map(e => {
+      const label = e.label ? ` <span style='opacity:0.7;'>(${escAB(e.label)})</span>` : '';
+      const ds = `data-name='${escAB(e.name)}' data-label='${escAB(e.label || '')}'`;
+      return `
+        <div style='display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 0; border-bottom:1px solid var(--border,#222); font-size:12px;'>
+          <span style='min-width:0;'><strong>${escAB(e.name)}</strong>${label} <span style='color:var(--text-dim,#888); word-break:break-all;'>${escAB(e.email)}</span></span>
+          <button class='settings-action-btn' ${ds} onclick='removeAddressBookEntry(this)'>REMOVE</button>
+        </div>`;
+    }).join('');
+  }
+
+  async function loadAddressBook() {
+    setAddressBookStatus('Loading...', 'dim');
+    try {
+      const res  = await fetch(`${BASE_URL}/api/address-book`, {
+        headers: { 'Authorization': `Bearer ${CFG.token}` },
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'load failed');
+      renderAddressBookList(data.entries);
+      setAddressBookStatus(data.entries.length + (data.entries.length === 1 ? ' entry.' : ' entries.'), 'dim');
+    } catch (err) {
+      console.warn('[Address Book] load failed:', err);
+      setAddressBookStatus('Failed to load the address book.', 'error');
+    }
+  }
+
+  async function addAddressBookEntry() {
+    const nameEl  = document.getElementById('na-ab-name');
+    const emailEl = document.getElementById('na-ab-email');
+    const labelEl = document.getElementById('na-ab-label');
+    const name  = (nameEl  ? nameEl.value  : '').trim();
+    const email = (emailEl ? emailEl.value : '').trim();
+    const label = (labelEl ? labelEl.value : '').trim();
+    if (!name || !email) { setAddressBookStatus('Name and email are both required.', 'error'); return; }
+    setAddressBookStatus('Saving...', 'dim');
+    try {
+      const res  = await fetch(`${BASE_URL}/api/address-book`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${CFG.token}` },
+        body:    JSON.stringify({ name, email, label: label || undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || ('save failed (' + res.status + ')'));
+      renderAddressBookList(data.entries);
+      if (nameEl)  nameEl.value  = '';
+      if (emailEl) emailEl.value = '';
+      if (labelEl) labelEl.value = '';
+      setAddressBookStatus('Saved.', 'ok');
+    } catch (err) {
+      console.warn('[Address Book] save failed:', err);
+      setAddressBookStatus('Save failed: ' + err.message, 'error');
+    }
+  }
+
+  async function removeAddressBookEntry(btn) {
+    const name  = btn ? (btn.getAttribute('data-name')  || '') : '';
+    const label = btn ? (btn.getAttribute('data-label') || '') : '';
+    setAddressBookStatus('Removing...', 'dim');
+    try {
+      const res  = await fetch(`${BASE_URL}/api/address-book/delete`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${CFG.token}` },
+        body:    JSON.stringify({ name, label: label || undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || ('remove failed (' + res.status + ')'));
+      renderAddressBookList(data.entries);
+      setAddressBookStatus('Removed.', 'ok');
+    } catch (err) {
+      console.warn('[Address Book] remove failed:', err);
+      setAddressBookStatus('Remove failed: ' + err.message, 'error');
+    }
+  }
+
+  // ============================================================
   // PANEL MANAGEMENT
   // ============================================================
 
@@ -5461,6 +5591,10 @@
       title.textContent = 'INSTRUCTIONS';
       body.innerHTML = getInstructionsPanelHTML();
       loadInstructionsPanel();
+    } else if (type === 'addressbook') {
+      title.textContent = 'ADDRESS BOOK';
+      body.innerHTML = getAddressBookPanelHTML();
+      loadAddressBook();
     } else if (type === 'render') {
       title.textContent = 'RENDER';
       loadRenderPanel();

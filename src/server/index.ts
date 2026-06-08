@@ -20,6 +20,7 @@ import { getAuthMiddleware, initServerAuthToken, getServerAuthToken } from './au
 import { mountUIRoutes, broadcastCronStatus } from './ui-routes';
 import { mountSecurityRoutes } from './security-routes';
 import { mountInstructionsRoutes } from './instructions-route';
+import { mountAddressBookRoutes } from './address-book-route';
 import { mountFilesRoutes, ensureProjectsRoot } from './files-routes';
 import { mountVoiceRoutes, ensureVoicesDir, ensureWhisperModelsDir } from './voice-routes';
 import { mountMemoryRoutes, logMemoryBootCapability } from './memory-routes';
@@ -178,6 +179,7 @@ setAutonomousQueueNotifier((card) => {
 // fallback) — they never touch the model, the session store, or the logs.
 mountSecurityRoutes(app);
 mountInstructionsRoutes(app);   // P7 operator instructions panel (read/write instructions.md)
+mountAddressBookRoutes(app);    // P7 address-book panel (manage name->email; resolver-only, no agent path)
 
 // ---- FILES ROUTES ----
 // POST /api/files/upload accepts drag-and-drop / paperclip uploads from
