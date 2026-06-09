@@ -88,7 +88,7 @@ import { getEmbeddingCapability }                   from '../src/memory/capabili
 
 // ── A cell of the matrix ─────────────────────────────────────
 interface Cell {
-  bucket:   1 | 2 | 3 | 4;
+  bucket:   1 | 2 | 3 | 4 | 5;
   prompt:   string;
   expected: string[];   // any-of = a hit. EMPTY = over-call probe (desired = no tool).
 }
@@ -135,6 +135,19 @@ const MATRIX: Cell[] = [
   { bucket: 4, prompt: 'What is 2 + 2?',                                               expected: [] },
   { bucket: 4, prompt: "Thanks, that's everything for now.",                           expected: [] },
   { bucket: 4, prompt: 'Give me a fun fact about computer networking.',                expected: [] },
+
+  // ── Bucket 5: send-phrasing emission (name-based; the VERB is the variable) ──
+  // Constant maintenance content + a NAME recipient (no literal address --
+  // addresses trigger the Mistral blank). Per verb we learn: did the gate
+  // surface gmail_send (expected_offered), did the model emit a real call
+  // (desired), or did it blank / leak a JSON pseudo-call / write a chat draft.
+  // The last cell reproduces the observed vague-content 'ebay sale' prompt.
+  { bucket: 5, prompt: 'Email Ben about the maintenance window tomorrow from 11:30 to 12:00; keep pets crated.',          expected: ['gmail_send'] },
+  { bucket: 5, prompt: 'Draft an email to Ben about the maintenance window tomorrow from 11:30 to 12:00; keep pets crated.', expected: ['gmail_send'] },
+  { bucket: 5, prompt: 'Write Ben an email about the maintenance window tomorrow from 11:30 to 12:00; keep pets crated.',    expected: ['gmail_send'] },
+  { bucket: 5, prompt: 'Compose an email to Ben about the maintenance window tomorrow from 11:30 to 12:00; keep pets crated.', expected: ['gmail_send'] },
+  { bucket: 5, prompt: 'Send Ben an email about the maintenance window tomorrow from 11:30 to 12:00; keep pets crated.',     expected: ['gmail_send'] },
+  { bucket: 5, prompt: 'Draft an email to Ben about the latest ebay sale.',              expected: ['gmail_send'] },
 ];
 
 // ── CLI parsing (tiny, dependency-free) ──────────────────────
@@ -243,6 +256,9 @@ interface CellResult {
   cardedTrials:    number;
   selfConfirmTrials: number;
   appliedAlarm:    number;
+  blankTrials:     number;
+  pseudoCallTrials: number;
+  chatDraftTrials: number;
   unexpectedTally: Record<string, number>;
   note:            string;
 }
@@ -291,6 +307,9 @@ async function runCell(
     cardedTrials:    0,
     selfConfirmTrials: 0,
     appliedAlarm:    0,
+    blankTrials:     0,
+    pseudoCallTrials: 0,
+    chatDraftTrials: 0,
     unexpectedTally: {},
     note:            '',
   };
@@ -355,6 +374,27 @@ async function runCell(
       : announced.length === 0;
     if (desired) res.desiredHits++;
 
+    // ── Failure-shape classification (tool EXPECTED but none emitted) ──
+    // Splits a bare miss into the three weak-model failure modes a desired-
+    // rate hides: blank/degenerate generation, a JSON pseudo-tool-call written
+    // as TEXT, and a plain chat draft. Uses the final assistant text (the
+    // `done` event, else concatenated `text` chunks).
+    if (cell.expected.length > 0 && announced.length === 0) {
+      const doneText  = (events.find(e => e.kind === 'done') as { text?: string } | undefined)?.text ?? '';
+      const chunkText = events.filter(e => e.kind === 'text').map(e => (e as { text: string }).text).join('');
+      const finalText = (doneText || chunkText).trim();
+      const compact   = finalText.toLowerCase().replace(/\s/g, '');
+
+      const looksPseudoCall =
+        finalText.includes('```') ||
+        compact.includes('"action":') ||
+        (compact.includes('"to":') && compact.includes('"subject":'));
+
+      if (finalText.length <= 3)  res.blankTrials++;        // the "I" / blank generation
+      else if (looksPseudoCall)   res.pseudoCallTrials++;   // tool call leaked as text
+      else                        res.chatDraftTrials++;    // plain prose draft, no call
+    }
+
     void offeredSet;   // (kept for clarity; emissions are inherently within it)
     if (delayMs > 0) await sleep(delayMs);
   }
@@ -370,7 +410,7 @@ function toCSV(rows: CellResult[]): string {
   const header = [
     'bucket', 'prompt', 'expected', 'offered_count', 'expected_offered', 'trials',
     'desired_rate', 'overcall_rate', 'mean_unexpected_per_trial',
-    'error_rate', 'carded_rate', 'self_confirm_rate', 'applied_alarm', 'top_unexpected_tools', 'note',
+    'error_rate', 'carded_rate', 'self_confirm_rate', 'blank_rate', 'pseudo_call_rate', 'chat_draft_rate', 'applied_alarm', 'top_unexpected_tools', 'note',
   ].join(',');
 
   const escape = (s: string) => `"${String(s).replace(/"/g, '""')}"`;
@@ -394,6 +434,9 @@ function toCSV(rows: CellResult[]): string {
       pct(r.errorTrials, r.trials),
       pct(r.cardedTrials, r.trials),
       pct(r.selfConfirmTrials, r.trials),
+      pct(r.blankTrials, r.trials),
+      pct(r.pseudoCallTrials, r.trials),
+      pct(r.chatDraftTrials, r.trials),
       r.appliedAlarm,
       escape(topUnexpected),
       escape(r.note),
@@ -526,7 +569,10 @@ async function main() {
     const r = await runCell(p, systemPrompt, brokerContext, model, args.trials, args.maxIterations, args.delayMs);
     results.push(r);
     const alarm = r.appliedAlarm > 0 ? `  *** APPLIED-ALARM ${r.appliedAlarm} ***` : '';
-    console.log(`desired ${pct(r.desiredHits, r.trials)}  overcall ${pct(r.overcallTrials, r.trials)}  carded ${pct(r.cardedTrials, r.trials)}  selfconf ${pct(r.selfConfirmTrials, r.trials)}  err ${pct(r.errorTrials, r.trials)}${alarm}${r.note ? '  [' + r.note + ']' : ''}`);
+    const fail = (r.blankTrials + r.pseudoCallTrials + r.chatDraftTrials) > 0
+      ? `  blank ${pct(r.blankTrials, r.trials)} pseudo ${pct(r.pseudoCallTrials, r.trials)} draft ${pct(r.chatDraftTrials, r.trials)}`
+      : '';
+    console.log(`desired ${pct(r.desiredHits, r.trials)}  overcall ${pct(r.overcallTrials, r.trials)}  carded ${pct(r.cardedTrials, r.trials)}  selfconf ${pct(r.selfConfirmTrials, r.trials)}  err ${pct(r.errorTrials, r.trials)}${alarm}${fail}${r.note ? '  [' + r.note + ']' : ''}`);
   }
 
   // ── Output ─────────────────────────────────────────────────
@@ -537,7 +583,7 @@ async function main() {
   fs.writeFileSync(outPath, toCSV(results));
 
   console.log('\n── Per-bucket summary ──────────────────────────────────');
-  for (const b of [1, 2, 3, 4]) {
+  for (const b of [1, 2, 3, 4, 5]) {
     const br = results.filter(r => r.bucket === b);
     if (!br.length) continue;
     const trials   = br.reduce((s, r) => s + r.trials, 0);
