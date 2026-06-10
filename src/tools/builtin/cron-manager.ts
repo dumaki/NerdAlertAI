@@ -54,8 +54,16 @@ function err(content: string): NerdAlertResponse {
 
 export const cronManagerTool: NerdAlertTool = {
   name:        'cron_manager',
-  description: `Manage scheduled jobs. Use this tool to create recurring tasks, list existing schedules, pause/resume jobs, or read run logs for a specific job. To permanently delete a job and its run history, use the cron_delete tool instead (separate L3 tool — irreversible). Actions: create, list, pause, resume, status, logs.`,
+  description: `Manage scheduled jobs. Use this tool to create recurring tasks, list existing schedules, pause/resume jobs, or read run logs for a specific job. Creating a job requires trust level 2 and human approval -- the create call produces an approval card showing the schedule and prompt; calling create IS how you create the job. To permanently delete a job and its run history, use the cron_delete tool instead (separate L3 tool — irreversible). Actions: create, list, pause, resume, status, logs.`,
   trustLevel:  1,
+
+  // Card the create: a new job is an autonomous trigger (it fires the agent on
+  // a timer), so it gets human sign-off even though it sits at L2. The
+  // predicate cards ONLY create (the project_write/nmap pattern); pause/resume
+  // are reversible toggles on existing jobs and stay uncarded, list/status/
+  // logs are reads. The preview branch in the create case signals readiness
+  // via metadata.approvalReady; the broker parks the approved variant.
+  requiresApproval: (args: Record<string, unknown>) => args.action === 'create',
   parameters: {
     type: 'object',
     properties: {
@@ -91,6 +99,10 @@ export const cronManagerTool: NerdAlertTool = {
       limit: {
         type: 'number',
         description: 'For the logs action: how many recent runs to return. Default 5.'
+      },
+      approved: {
+        type: 'boolean',
+        description: 'create: must be true to actually create the job. Set only after explicit user confirmation; the first call previews and produces an approval card.'
       },
     },
     required: ['action'],
@@ -149,6 +161,50 @@ export const cronManagerTool: NerdAlertTool = {
             `Use standard 5-field format: minute hour day month weekday.\n` +
             `Example: "0 9 * * 1-5" = 9am Monday-Friday.`
           );
+        }
+
+        // -- Side-effect-free preview (approved !== true) --
+        // Mirrors gmail_send / google_calendar add_event: required fields and
+        // the cron expression have validated, so render the job for human
+        // sign-off and signal approvalReady; the broker parks the approved
+        // variant as a card. The err() returns above omit approvalReady and
+        // relay to the model. A created job is an autonomous trigger (it
+        // fires the agent on a timer), which is exactly why a human reads the
+        // schedule and the prompt before it exists. Next-run times use the
+        // same job shape createJob would persist, without persisting it.
+        if (params.approved !== true) {
+          let nextRunsLine = '';
+          try {
+            const previewJob = {
+              id: 'preview', name, expression, prompt, timezone, catch_up, enabled: true,
+            } as Parameters<typeof getNextRuns>[0];
+            const runs = getNextRuns(previewJob, 3).map((d: Date) =>
+              d.toLocaleString('en-US', {
+                timeZone: timezone, weekday: 'short', month: 'short',
+                day: 'numeric', hour: '2-digit', minute: '2-digit',
+              })
+            );
+            nextRunsLine = `\n  Next runs:\n${runs.map((t: string) => `    - ${t}`).join('\n')}`;
+          } catch {
+            // Next-run rendering is preview garnish -- the card still shows
+            // the raw expression if the ephemeral job shape ever stops
+            // satisfying getNextRuns.
+          }
+          return {
+            type: 'text',
+            content:
+              `About to create this scheduled job:\n` +
+              `  Name: ${name}\n` +
+              `  Schedule: ${expression} (${timezone})\n` +
+              `  Prompt: ${prompt}\n` +
+              `  Catch-up on restart: ${catch_up ? 'yes' : 'no'}${nextRunsLine}\n\n` +
+              `This job will run the agent on this schedule until paused or deleted. Confirm to create.`,
+            metadata: {
+              approvalReady: true,
+              approvalTitle: `Create scheduled job: ${name} (${expression})`,
+              sources:       [],
+            },
+          };
         }
 
         const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')

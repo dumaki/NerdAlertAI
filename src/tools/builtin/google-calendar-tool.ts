@@ -39,9 +39,17 @@ export const CALENDAR_EMPTY_MESSAGE = 'No upcoming events on your calendar.'
 const googleCalendarTool: NerdAlertTool = {
   name: 'google_calendar',
 
-  description: `Read your Google Calendar and create new events. Use the 'list' or 'upcoming' action to answer what's on your calendar, what meetings or events are coming up, or whether you're free on a given day — returns upcoming events with their titles, start times, locations, and attendee counts. Use the 'add_event' action to create a new event (provide summary and start; optionally end, location, description). Creating events requires trust level 2. This tool cannot move events; to delete an event use the google_calendar_delete tool. Respond with a concise summary; do not repeat raw details verbatim.`,
+  description: `Read your Google Calendar and create new events. Use the 'list' or 'upcoming' action to answer what's on your calendar, what meetings or events are coming up, or whether you're free on a given day — returns upcoming events with their titles, start times, locations, and attendee counts. Use the 'add_event' action to create a new event (provide summary and start; optionally end, location, description). Creating events requires trust level 2 and human approval -- the add_event call produces an approval card the user confirms; calling add_event IS how you create the event. This tool cannot move events; to delete an event use the google_calendar_delete tool. Respond with a concise summary; do not repeat raw details verbatim.`,
 
   trustLevel: 1,
+
+  // Card the write: add_event is an L2 self-gated action on a read tool, so a
+  // boolean requiresApproval would card the reads too. The predicate cards
+  // ONLY the create (the project_write/nmap pattern -- callNeedsApproval in
+  // the broker resolves a function over the args). The preview branch in
+  // execute() signals readiness via metadata.approvalReady, the broker parks
+  // the approved variant, and the human Approve click commits it.
+  requiresApproval: (args: Record<string, unknown>) => args.action === 'add_event',
 
   parameters: {
     type: 'object',
@@ -78,6 +86,11 @@ const googleCalendarTool: NerdAlertTool = {
         type: 'string',
         description:
           "add_event: optional IANA time zone (e.g. America/Chicago) for a timed start with no explicit offset. Defaults to the server's local zone.",
+      },
+      approved: {
+        type: 'boolean',
+        description:
+          'add_event: must be true to actually create the event. Set only after explicit user confirmation; the first call previews and produces an approval card.',
       },
     },
     required: [],
@@ -129,6 +142,34 @@ const googleCalendarTool: NerdAlertTool = {
       if (typeof params.location    === 'string' && params.location.trim())    input.location    = params.location.trim()
       if (typeof params.description === 'string' && params.description.trim()) input.description = params.description.trim()
       if (typeof params.timeZone    === 'string' && params.timeZone.trim())    input.timeZone    = params.timeZone.trim()
+
+      // -- Side-effect-free preview (approved !== true) --
+      // Mirrors gmail_send: validation and the past-date guard have already
+      // passed, so the call resolved to a single concrete event; render it for
+      // human sign-off and signal approvalReady so the broker parks the
+      // approved variant as a card. The earlier err() returns (missing fields,
+      // past date) omit approvalReady and relay to the model instead. The card
+      // shows the full date INCLUDING THE YEAR -- the human check on the
+      // wrong-year confabulation class, on top of the past-date guard above.
+      if (params.approved !== true) {
+        const endLine  = input.end         ? `\n  End: ${input.end}`           : ''
+        const locLine  = input.location    ? `\n  Location: ${input.location}` : ''
+        const descLine = input.description ? `\n  Notes: ${input.description}` : ''
+        const tzLine   = input.timeZone    ? ` (${input.timeZone})`            : ''
+        return {
+          type: 'text',
+          content:
+            `About to create this calendar event:\n` +
+            `  Title: ${summary}\n` +
+            `  Start: ${start}${tzLine}${endLine}${locLine}${descLine}\n\n` +
+            `Check the date (including the year) before approving. Confirm to create.`,
+          metadata: {
+            approvalReady: true,
+            approvalTitle: `Add calendar event: ${summary} (${start})`,
+            sources:       [],
+          },
+        }
+      }
 
       try {
         const created = await createCalendarEvent(input)
