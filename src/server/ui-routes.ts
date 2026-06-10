@@ -97,6 +97,7 @@ import { type AgentEvent } from '../core/agent-events';
 import { type BrokerContext } from '../core/permission-broker';
 import { runAnthropicAdapter } from '../core/event-adapter-anthropic';
 import { runPseudoToolAdapter } from '../core/event-adapter-pseudo';
+import { deriveArmedGate, type ArmedGate } from '../core/gate-salvage';
 import {
   runOpenAIAdapter,
   buildOllamaTransport,
@@ -472,6 +473,7 @@ async function handleOllamaStream(
   agentName:       string,
   telemetry:       ((event: AgentEvent) => void) | undefined,
   narrowing?:      ToolNarrowing,
+  armedGate?:      ArmedGate,
 ): Promise<void> {
 
   const llm = getLLMConfig();
@@ -519,6 +521,7 @@ async function handleOllamaStream(
         initialMessages: orMessages,
         tools: openAITools,
         brokerContext,
+        armedGate,
       },
       emit,
     );
@@ -1233,6 +1236,16 @@ export function mountUIRoutes(app: Express): void {
         ? { query: safeMessage, intentTools: intentToolNames(detectedGroups) }
         : undefined;
 
+      // Gate-armed corrective input (gate-salvage.ts): defined only when
+      // a write-intent gate fired this turn. Threaded into the Ollama
+      // native adapter so a zero-call terminal finish can spend one
+      // salvage/retry corrective. Undefined on every other turn — the
+      // adapter's corrective block is unreachable and behavior is
+      // byte-identical. Pseudo + hosted threading: follow-up commits.
+      const armedGate: ArmedGate | undefined = needsPrefetch
+        ? (deriveArmedGate(detectedGroups) ?? undefined)
+        : undefined;
+
       const hasNarratablePrefetch = prefetchResults.some(r => r.available);
 
       // ── Prefetch relevance gate (v0.5.28 — Approach B) ─────────────────────────────────────────
@@ -1416,7 +1429,7 @@ export function mountUIRoutes(app: Express): void {
             `[narration] postcheck bail (${outcome.reason}) → tool loop fallback`
           );
           if (llm.provider === 'ollama') {
-            await handleOllamaStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry, narrowing);
+            await handleOllamaStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry, narrowing, armedGate);
           } else {
             await handlePseudoToolStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry, undefined, narrowing);
           }
@@ -1429,7 +1442,7 @@ export function mountUIRoutes(app: Express): void {
         // didn't run; prefetchSources is empty when no tool returned
         // data). In the gate-bail case it strips the misroute data
         // out of the model's input so the tool loop runs clean.
-        await handleOllamaStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry, narrowing);
+        await handleOllamaStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry, narrowing, armedGate);
       } else {
         // OpenRouter — same bail behavior as the Ollama branch.
         await handlePseudoToolStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry, undefined, narrowing);

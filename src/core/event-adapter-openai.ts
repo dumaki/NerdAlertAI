@@ -80,6 +80,12 @@ import {
   executeTool,
   executeOrPropose,
 } from './permission-broker';
+import { randomUUID } from 'crypto';
+import {
+  type ArmedGate,
+  salvageToolCall,
+  buildRetryNudge,
+} from './gate-salvage';
 import { WebSuppressionTracker } from './web-suppression';
 import type { ORMessage, OpenAIContentPart } from './llm-client';
 import { resolveProviderKey } from './llm-client';
@@ -190,6 +196,11 @@ export interface OpenAIAdapterParams {
   /** Empty array = text-only mode (like the old streamOpenRouter). */
   tools: OpenAITool[];
   brokerContext: BrokerContext;
+  /** Write-intent gate armed by the routing layer (gate-salvage.ts).
+   *  Undefined on every turn where no write gate fired — the corrective
+   *  block below is unreachable and the adapter is byte-identical to
+   *  its pre-gate behavior. */
+  armedGate?: ArmedGate;
   maxIterations?: number;
   maxTokens?: number;
 }
@@ -377,6 +388,7 @@ export async function runOpenAIAdapter(
     initialMessages,
     tools,
     brokerContext,
+    armedGate,
     maxIterations = 8,
     maxTokens = 1024,
   } = params;
@@ -420,6 +432,10 @@ export async function runOpenAIAdapter(
   // OpenAI-compatible provider gets the same protection.
   // See src/core/web-suppression.ts.
   const suppressionTracker = new WebSuppressionTracker();
+
+  // One corrective action (salvage OR retry) per request — see the
+  // gate-armed corrective block in the loop below.
+  let correctiveSpent = false;
 
   // ── Pre-flight TPM budget guard (v0.7 5f) ─────────────────
   // Estimate this request up front and hard-block if it can't fit under the
@@ -621,6 +637,133 @@ export async function runOpenAIAdapter(
 
       // Continue the loop: model gets another shot at responding,
       // now with the tool results visible in its context.
+      continue;
+    }
+
+    // ── Gate-armed corrective: salvage, then retry ───────────
+    //
+    // Terminal finish (stop / length / null) with ZERO tool calls
+    // while a write-intent gate is armed: the routing layer already
+    // computed which tool this turn was for, so spend ONE corrective
+    // action before giving up. Salvage first — the model emitted
+    // tool-call-shaped JSON in prose; honor the attempt. Retry
+    // second — one corrective re-prompt naming the expected tool.
+    // finish=length is included deliberately: the blank class is
+    // nondeterministic, so a retry is a free second pull on the
+    // lottery. Both paths `continue`, consuming a normal iteration,
+    // so maxIterations still bounds everything. armedGate undefined
+    // (no gate fired) never reaches this block — those turns are
+    // byte-identical to v0.11.3.
+    if (
+      armedGate &&
+      !correctiveSpent &&
+      (finishReason === 'stop' || finishReason === 'length' || finishReason === null)
+    ) {
+      correctiveSpent = true;
+
+      // Tier 1: salvage. Only tools offered THIS turn are accepted
+      // (hard gate inside salvageToolCall — never a tool the turn
+      // didn't offer).
+      const salvaged = salvageToolCall(
+        textThisIter,
+        tools.map((t) => t.function.name),
+      );
+
+      if (salvaged) {
+        const callId = `salv_${randomUUID()}`;
+        console.log(
+          `[openai-native:salvaged_call] name=${salvaged.name} ` +
+          `gate=${armedGate.groups.join(',')}`,
+        );
+        emit(meta('openai:salvaged_call', {
+          id:   callId,
+          name: salvaged.name,
+          gate: armedGate.groups,
+        }));
+        emit(turnComplete('tool_calls'));
+        emit(toolCallAnnounced(callId, salvaged.name));
+        emit(toolCallComplete(callId, salvaged.name, salvaged.args));
+        emit(toolCallExecuting(callId, salvaged.name));
+
+        // Identical front door to a native call: suppression check,
+        // then executeOrPropose (trust math → arg validator →
+        // approval card). No new execution path — a salvaged cron
+        // create parks a card exactly like a native one.
+        let result: { output: string; error: boolean; sources: Source[]; typed?: NerdAlertResponse; approval?: BrokerResult['approval'] };
+        if (suppressionTracker.shouldSuppress(salvaged.name)) {
+          result = {
+            output:  suppressionTracker.buildSuppressedResult(salvaged.name),
+            error:   false,
+            sources: [],
+          };
+        } else {
+          result = await executeOrPropose(
+            { id: callId, name: salvaged.name, args: salvaged.args },
+            brokerContext,
+            { canApprovalCard: true },
+          );
+        }
+        suppressionTracker.recordResult(salvaged.name, result.output, result.error);
+        if (result.sources.length) sourceSink.push(...result.sources);
+
+        if (result.approval) {
+          emit({
+            kind:        'approval_request',
+            id:          result.approval.id,
+            title:       result.approval.title,
+            description: result.approval.description,
+            toolName:    result.approval.toolName,
+          });
+          emit(toolResult(callId, salvaged.name, 'Awaiting your approval — see the card.', false));
+        } else {
+          emit(toolResult(
+            callId,
+            salvaged.name,
+            result.output,
+            result.error,
+            result.sources.length ? result.sources : undefined,
+            result.typed,
+          ));
+        }
+
+        // Keep the wire coherent: push the assistant turn as if it
+        // had emitted this call natively, then its tool result.
+        messages.push({
+          role:       'assistant',
+          content:    textThisIter,
+          tool_calls: [{
+            id:       callId,
+            type:     'function',
+            function: { name: salvaged.name, arguments: JSON.stringify(salvaged.args) },
+          }],
+        });
+        messages.push({
+          role:         'tool',
+          tool_call_id: callId,
+          content:      result.output,
+        });
+        continue;
+      }
+
+      // Tier 2: retry. One corrective re-prompt, adapter-local only —
+      // pushed into this loop's messages array, never persisted to
+      // conversation history and never emitted as UI text. The
+      // empty-content guard matters on the blank class (length with
+      // zero content).
+      const nudge = buildRetryNudge(armedGate);
+      console.log(
+        `[openai-native:gate_armed_retry] gate=${armedGate.groups.join(',')} ` +
+        `finish=${finishReason} textLen=${textThisIter.length}`,
+      );
+      emit(meta('openai:gate_armed_retry', {
+        gate:         armedGate.groups,
+        finishReason: finishReason,
+        textLen:      textThisIter.length,
+      }));
+      if (textThisIter) {
+        messages.push({ role: 'assistant', content: textThisIter });
+      }
+      messages.push({ role: 'user', content: nudge });
       continue;
     }
 
