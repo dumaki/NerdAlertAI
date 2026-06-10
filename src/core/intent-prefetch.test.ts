@@ -333,6 +333,60 @@ describe('detectIntent -- gmail send/read split', () => {
   });
 });
 
+// -- calendar & cron write/read split (mirrors the gmail split above) --
+//
+// A CREATE command ("add an event to my calendar", "create a cron job") must
+// route to the write selection group and demote the read group, so the turn
+// reaches the tool loop where add_event / create + their approval cards live --
+// NOT the read group whose list prefetch would capture the turn into narration
+// or the empty-state emit (the documented read-only-prefetch trade-off). A
+// schedule READ must keep matching only the read group.
+
+describe('detectIntent -- calendar write/read split', () => {
+  it('routes "add an event" to the write group and demotes the read group', () => {
+    const matched = detectIntent('Add an event to my calendar tomorrow at 3pm called dentist.');
+    expect(matched).toContain('google_calendar_write');
+    expect(matched).not.toContain('google_calendar');
+  });
+  it('routes "schedule a meeting with Rob" to the write group', () => {
+    const matched = detectIntent('Schedule a meeting with Rob on Friday at noon.');
+    expect(matched).toContain('google_calendar_write');
+    expect(matched).not.toContain('google_calendar');
+  });
+  it('routes the put-on-calendar idiom to the write group', () => {
+    const matched = detectIntent('Put the maintenance window on my calendar for tomorrow at 11:30.');
+    expect(matched).toContain('google_calendar_write');
+    expect(matched).not.toContain('google_calendar');
+  });
+  it('keeps a schedule read on the read group only', () => {
+    const matched = detectIntent('what meetings do I have on my calendar this week');
+    expect(matched).toContain('google_calendar');
+    expect(matched).not.toContain('google_calendar_write');
+  });
+  it('keeps "do I have a meeting scheduled" a read (past participle, not a command)', () => {
+    expect(detectIntent('do I have a meeting scheduled tomorrow')).not.toContain('google_calendar_write');
+  });
+});
+
+describe('detectIntent -- cron write/read split', () => {
+  it('routes "create a cron job" to the write group and demotes the read group', () => {
+    const matched = detectIntent('Create a cron job that checks fail2ban every morning at 8am.');
+    expect(matched).toContain('cron_write');
+    expect(matched).not.toContain('cron');
+  });
+  it('routes "set up a recurring task" to the write group', () => {
+    expect(detectIntent('set up a recurring task to summarize my inbox nightly')).toContain('cron_write');
+  });
+  it('keeps a schedule read on the read group only', () => {
+    const matched = detectIntent('what scheduled jobs do I have');
+    expect(matched).toContain('cron');
+    expect(matched).not.toContain('cron_write');
+  });
+  it('does not treat "schedule a meeting" as a cron write (calendar noun, not a job)', () => {
+    expect(detectIntent('schedule a meeting with Rob on Friday')).not.toContain('cron_write');
+  });
+});
+
 describe('intentToolNames -- gmail_send tool mapping', () => {
   it('surfaces the send tool into the recall net', () => {
     expect(intentToolNames(['gmail_send'])).toEqual(['gmail_send']);

@@ -88,7 +88,7 @@ import { getEmbeddingCapability }                   from '../src/memory/capabili
 
 // ── A cell of the matrix ─────────────────────────────────────
 interface Cell {
-  bucket:   1 | 2 | 3 | 4 | 5;
+  bucket:   1 | 2 | 3 | 4 | 5 | 6;
   prompt:   string;
   expected: string[];   // any-of = a hit. EMPTY = over-call probe (desired = no tool).
 }
@@ -148,6 +148,18 @@ const MATRIX: Cell[] = [
   { bucket: 5, prompt: 'Compose an email to Ben about the maintenance window tomorrow from 11:30 to 12:00; keep pets crated.', expected: ['gmail_send'] },
   { bucket: 5, prompt: 'Send Ben an email about the maintenance window tomorrow from 11:30 to 12:00; keep pets crated.',     expected: ['gmail_send'] },
   { bucket: 5, prompt: 'Draft an email to Ben about the latest ebay sale.',              expected: ['gmail_send'] },
+
+  // ── Bucket 6: L2 write-intent routing (calendar add_event / cron create) ─
+  // The write-intent gates must demote the read prefetch group so these
+  // commands reach the tool loop with the multi-action tool offered. desired =
+  // the model emits a real call on the tool (the harness's expected check is
+  // tool-level, so a stray 'list' call would also count -- read the per-trial
+  // args in the CSV when interpreting). carded should track desired once the
+  // requiresApproval predicates land (commit 2 of this slice).
+  { bucket: 6, prompt: 'Add an event to my calendar tomorrow at 3pm called dentist.',       expected: ['google_calendar'] },
+  { bucket: 6, prompt: 'Schedule a meeting with Rob on Friday at noon.',                    expected: ['google_calendar'] },
+  { bucket: 6, prompt: 'Put the maintenance window on my calendar for tomorrow at 11:30.',  expected: ['google_calendar'] },
+  { bucket: 6, prompt: 'Create a cron job that checks fail2ban every morning at 8am.',      expected: ['cron_manager'] },
 ];
 
 // ── CLI parsing (tiny, dependency-free) ──────────────────────

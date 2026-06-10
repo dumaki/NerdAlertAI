@@ -851,6 +851,36 @@ const INTENT_MAP: Record<string, IntentGroup> = {
     selectionOnly: true,
   },
 
+  // -- google_calendar WRITE (add_event -- selection-only action group) --
+  // Same shape as gmail_send: the read `google_calendar` group above owns the
+  // L1 list/upcoming prefetch; the L2 add_event write lives here. selectionOnly
+  // (a create is an approval-carded write, not a data source) but fed to the
+  // recall net via intentToolNames so a weak model SEES google_calendar in the
+  // tool loop on a create command. Without this, "add an event to my calendar"
+  // matches the read group via 'calendar', prefetches the event list, and the
+  // turn is captured into narration (or the empty-state emit) where add_event
+  // is unreachable -- the documented read-only-prefetch trade-off. Keywords are
+  // documentation; hasCalendarWriteIntent (the regex gate in detectIntent) is
+  // the real guard. The demotion below drops the read group on a create.
+  google_calendar_write: {
+    keywords:      ['add an event', 'schedule a meeting', 'book an appointment'],
+    tools:         ['google_calendar'],
+    selectionOnly: true,
+  },
+
+  // -- cron WRITE (create -- selection-only action group) --
+  // Same shape again: the read `cron` group owns list/status/logs prefetch;
+  // the L2 create lives here (pause/resume stay on the ordinary path -- they
+  // are reversible toggles and are not carded). "Create a cron job" matched
+  // the read group via 'cron job', prefetched the job list, and the create
+  // never reached the tool loop -- the same documented trade-off as calendar.
+  // Keywords are documentation; hasCronWriteIntent is the real guard.
+  cron_write: {
+    keywords:      ['create a cron job', 'recurring task', 'set up a job'],
+    tools:         ['cron_manager'],
+    selectionOnly: true,
+  },
+
   // ── Google Calendar (read-only prefetch) ─────────────────
   // Brings calendar reads onto the prefetch path. Without this group a
   // calendar query ("what's on my calendar today") matched NO group, fell
@@ -2185,6 +2215,43 @@ function hasGmailSendIntent(message: string): boolean {
   return false;
 }
 
+// -- calendar WRITE-intent gate --
+// Separates a calendar CREATE command from a calendar read, mirroring
+// hasGmailSendIntent. Two self-contained shapes:
+//   1. "[add|create|schedule|book] a/an <noun-ish> [event|meeting|appointment|
+//      appt|call]" -- imperative verb + article + event-flavored noun. The
+//      article requirement keeps "do I have a meeting scheduled" (past
+//      participle, no verb+article) and "what meetings are on my calendar"
+//      (no verb) as reads.
+//   2. "[put|add|stick] ... on/to/in my calendar" -- the put-on-calendar idiom,
+//      bounded to 60 chars so the verb and the calendar reference belong to
+//      the same clause.
+// Accepted false positive: "create an event handler" fires shape 1 -- it costs
+// a selectionOnly visibility slot only (the read group won't have matched, so
+// no demotion runs and prefetch is unaffected).
+const CALENDAR_WRITE_RE =
+  /\b(add|create|schedule|book)\s+(?:a|an|the|another)\s+(?:\w+\s+){0,2}?(event|meeting|appointment|appt|call)\b/i;
+const CALENDAR_PUT_RE =
+  /\b(put|add|stick)\b[^.?!]{0,60}?\b(?:on|to|in(?:to)?)\s+(?:my|the)\s+calendar\b/i;
+
+function hasCalendarWriteIntent(message: string): boolean {
+  return CALENDAR_WRITE_RE.test(message) || CALENDAR_PUT_RE.test(message);
+}
+
+// -- cron WRITE-intent gate --
+// Separates a job CREATE command from a schedule read. One self-contained
+// shape: "[create|add|set up|make|schedule] a/an <noun-ish> [cron job|cron
+// task|cron|recurring job/task|scheduled job/task|daily/weekly/nightly/hourly
+// job/task]". The verb+article requirement keeps "what scheduled jobs do I
+// have" and "did the scheduled task run" as reads; "schedule a meeting" has no
+// cron-flavored noun and routes to the calendar gate, not here.
+const CRON_WRITE_RE =
+  /\b(create|add|set\s+up|make|schedule)\s+(?:a|an|another)\s+(?:\w+\s+){0,2}?(?:cron(?:\s+job|\s+task)?|recurring\s+(?:job|task)|scheduled\s+(?:job|task)|(?:daily|weekly|nightly|hourly)\s+(?:job|task))\b/i;
+
+function hasCronWriteIntent(message: string): boolean {
+  return CRON_WRITE_RE.test(message);
+}
+
 export function detectIntent(message: string, agentName?: string): string[] {
   const lower = message.toLowerCase();
   // v0.6.3.4 (Q4): per-turn agent name suffix appended to every
@@ -2290,6 +2357,16 @@ export function detectIntent(message: string, agentName?: string): string[] {
         // compose-and-send COMMAND with a recipient, never an inbox read.
         return hasGmailSendIntent(message);
       }
+      if (groupName === 'google_calendar_write') {
+        // Regex gate (keywords are documentation only) -- fires only on a
+        // calendar CREATE command, never a schedule read.
+        return hasCalendarWriteIntent(message);
+      }
+      if (groupName === 'cron_write') {
+        // Regex gate (keywords are documentation only) -- fires only on a
+        // job CREATE command, never a schedule/status read.
+        return hasCronWriteIntent(message);
+      }
       if (groupName === 'browser') {
         // v0.11.x nav-gate: fire on keyword OR a navigation signal (a
         // bare URL, or a browse verb adjacent to a domain). Bare-domain
@@ -2361,6 +2438,28 @@ export function detectIntent(message: string, agentName?: string): string[] {
   if (matched.includes('gmail_send') && matched.includes('gmail')) {
     const kept = matched.filter(g => g !== 'gmail');
     console.log(`[NerdAlert] Intent demoted gmail read (send command -> gmail_send): ${kept.join(', ')}${viaSuffix}`);
+    matched = kept;
+  }
+
+  // -- calendar write beats calendar read on a create command --
+  // "Add an event to my calendar" matches BOTH the read group (via 'calendar')
+  // and google_calendar_write (via the regex gate). Drop the read group so the
+  // event list isn't prefetched and the turn isn't captured into narration /
+  // the empty-state emit -- the command must reach the tool loop where
+  // add_event + its approval card live. Same shape as the gmail demotion.
+  if (matched.includes('google_calendar_write') && matched.includes('google_calendar')) {
+    const kept = matched.filter(g => g !== 'google_calendar');
+    console.log(`[NerdAlert] Intent demoted calendar read (create command -> google_calendar_write): ${kept.join(', ')}${viaSuffix}`);
+    matched = kept;
+  }
+
+  // -- cron write beats cron read on a create command --
+  // Same shape: "create a cron job" matches the read group via 'cron job' and
+  // cron_write via the gate; drop the read so the job list isn't prefetched
+  // and the create reaches the tool loop where its approval card lives.
+  if (matched.includes('cron_write') && matched.includes('cron')) {
+    const kept = matched.filter(g => g !== 'cron');
+    console.log(`[NerdAlert] Intent demoted cron read (create command -> cron_write): ${kept.join(', ')}${viaSuffix}`);
     matched = kept;
   }
 
