@@ -314,6 +314,23 @@ describe('detectIntent -- gmail send/read split', () => {
   it('does not treat "send me the code" as a gmail send (no email recipient)', () => {
     expect(detectIntent('send me the python code')).not.toContain('gmail_send');
   });
+  it('routes an indirect-object send to gmail_send and demotes the read group ("Send Ben an email")', () => {
+    const matched = detectIntent('Send Ben an email about the maintenance window tomorrow.');
+    expect(matched).toContain('gmail_send');
+    expect(matched).not.toContain('gmail');
+  });
+  it('routes "Write Ben an email" to gmail_send (a send verb only in this shape)', () => {
+    expect(detectIntent('Write Ben an email about the deploy')).toContain('gmail_send');
+  });
+  it('routes "shoot Rob a note about X" to gmail_send (formerly the documented accepted miss)', () => {
+    expect(detectIntent('shoot Rob a note about the deploy')).toContain('gmail_send');
+  });
+  it('keeps past-tense "sent Ben an email" a read (report, not a command)', () => {
+    expect(detectIntent('she sent Ben an email yesterday')).not.toContain('gmail_send');
+  });
+  it('does not treat "write down a note" as a gmail send (capture collocation, not a recipient)', () => {
+    expect(detectIntent('write down a note about the meeting')).not.toContain('gmail_send');
+  });
 });
 
 describe('intentToolNames -- gmail_send tool mapping', () => {

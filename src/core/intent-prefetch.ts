@@ -2145,7 +2145,17 @@ function hasFail2banWriteIntent(message: string): boolean {
 // 'compose' are email-specific verbs (imperative use IS a send); 'send'/'message'
 // are generic and require email context. selectionOnly bounds a false match to a
 // visibility slot; the demotion drops the read group only when BOTH groups match.
-// Accepted miss: "shoot Rob a note about X" (no address, no 'to') stays a read.
+// Factor 1b (indirect-object shape): "Send/Write/Shoot <recipient> an email/note"
+// puts the recipient BETWEEN verb and noun, where neither the address test nor
+// the "to <name>" test sees it -- and 'write'/'shoot'/'fire' are send verbs ONLY
+// in this shape. The shape is self-contained (imperative verb + recipient token(s)
+// + email-flavored noun), so a match IS a send; no second factor needed. The
+// (?!down\s) guard keeps the "write down a note" capture collocation a read.
+// Accepted false positive: "did Rob send Ben an email?" fires (same class as the
+// existing "did Rob email Ben" exposure) -- costs the read-prefetch slot via the
+// demotion, never an action; the L3 card is untouched.
+const GMAIL_INDIRECT_SEND_RE =
+  /\b(send|write|shoot|fire)\s+(?!down\s)(?:[A-Za-z][\w.'-]*\s+){1,3}?(?:a|an|another|one)\s+(?:quick\s+|short\s+|brief\s+|follow-?up\s+)?(e-?mail|message|note|mail)\b/i;
 const GMAIL_EMAIL_ADDR_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/;
 const GMAIL_SEND_DETERMINERS = new Set<string>([
   'the', 'a', 'an', 'this', 'that', 'my', 'your', 'his', 'her', 'their',
@@ -2154,6 +2164,8 @@ const GMAIL_SEND_DETERMINERS = new Set<string>([
 ]);
 
 function hasGmailSendIntent(message: string): boolean {
+  // Factor 1b: a self-contained indirect-object send command is a send outright.
+  if (GMAIL_INDIRECT_SEND_RE.test(message)) return true;
   // Factor 1: a recipient. An email address, OR a "to <name>" object.
   const hasAddr   = GMAIL_EMAIL_ADDR_RE.test(message);
   const hasToName = /\bto\s+[A-Za-z@]/i.test(message);
