@@ -82,3 +82,14 @@ scripts/test-results/
 # committed. The tracked script recreates it on demand.
 tool-budget-raw.json
 
+# === OPERATOR CONFIG BACKUPS ===
+# config.yaml itself is tracked but operator-curated: local changes stay
+# permanently unstaged by convention (it now carries network topology --
+# Tailscale IPs, host aliases, usernames -- that should never leave this
+# machine). Its timestamped backups (config.yaml.bak.<epoch>) have no
+# such convention protecting them and would ship that topology on any
+# careless `git add`. Ignore them outright, plus a blanket *.bak safety
+# net in the same spirit as the *.onnx / *.wav entries above.
+config.yaml.bak*
+*.bak
+

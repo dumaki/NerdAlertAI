@@ -184,10 +184,16 @@ and audit.
 It introduces no new credential handling and touches no secret. Honoring the
 existing posture: the validator logs field name + failure reason + tool name
 only --- never raw argument values (consistent with the probe rule of
-name + status, never the secret) --- and it FAILS CLOSED: a malformed schema or
-any internal error rejects the call rather than waving it through. (In practice
-secret injection is step 4, post-validation, so model-emitted args don't carry
-secrets; the no-raw-args rule is explicit so it stays true regardless.)
+name + status, never the secret) --- and it FAILS OPEN by locked design: a
+malformed schema or any internal error returns valid, so a validator bug can
+never block a legitimate call. This is safe because the validator is a
+reliability filter, not a security gate --- trust resolution, card parking,
+execution, and audit (steps 2-5) run unchanged behind it, so the worst case of
+a silent validator failure is exactly v0.11.1 behavior. If a future
+schema-tightening pass ever removes tool-side argument checks in reliance on
+this validator, revisit this failure mode. (In practice secret injection is
+step 4, post-validation, so model-emitted args don't carry secrets; the
+no-raw-args rule is explicit so it stays true regardless.)
 
 `c25917f` and `6f6036d` are description text and test-harness instrumentation ---
 no runtime trust surface. The `applied_alarm = 0` result across every sweep cell
