@@ -30,6 +30,7 @@ import { NerdAlertTool, NerdAlertResponse, ToolExecContext } from '../../types/r
 import { getCalendarContext, createCalendarEvent, CreateEventInput } from '../../gmail/calendar'
 import { CalendarEvent } from '../../types/gmail.types'
 import { config } from '../../config/loader'
+import { resolveEventDate } from './calendar-dates'
 
 // Exact text returned when the calendar has no upcoming events. Exported so
 // the prefetch empty-result detector (core/intent-prefetch) recognises an empty
@@ -67,12 +68,12 @@ const googleCalendarTool: NerdAlertTool = {
       start: {
         type: 'string',
         description:
-          'add_event: start time. ISO datetime (e.g. 2026-06-02T15:00:00) for a timed event, or YYYY-MM-DD for an all-day event.',
+          "add_event: start time. Pass the user's date/time phrase VERBATIM (e.g. 'Friday June 12th at 9am', 'tomorrow at 3pm') -- the server resolves it to a concrete date; do not compute dates or years yourself. ISO datetime (2026-06-12T09:00:00) or YYYY-MM-DD also accepted.",
       },
       end: {
         type: 'string',
         description:
-          'add_event: end time, same format as start. Optional — defaults to one hour after start (timed) or a single day (all-day).',
+          "add_event: end time, same formats as start; a bare time like 'noon' resolves on the start's day. Optional -- defaults to one hour after start (timed) or a single day (all-day).",
       },
       location: {
         type: 'string',
@@ -114,31 +115,60 @@ const googleCalendarTool: NerdAlertTool = {
 
     // Create an event.
     if (action === 'add_event') {
-      const summary = typeof params.summary === 'string' ? params.summary.trim() : ''
-      const start   = typeof params.start   === 'string' ? params.start.trim()   : ''
-      if (!summary || !start) {
+      const summary  = typeof params.summary === 'string' ? params.summary.trim() : ''
+      const rawStart = typeof params.start   === 'string' ? params.start.trim()   : ''
+      if (!summary || !rawStart) {
         return err('add_event requires both a summary (title) and a start time.')
       }
 
-      // Past-date guard. Models sometimes stamp the wrong year on an event (a
-      // strong pull toward a prior year), which silently creates it in the past
-      // where it never surfaces in upcoming views. Reject any start whose date
-      // is before today and hand back today's date so the model can self-
-      // correct. ISO YYYY-MM-DD sorts lexically, so a string compare on the
-      // date prefix works for both the date and dateTime shapes.
-      const datePart = start.slice(0, 10)
+      // -- Server-side date resolution (calendar-dates.ts) --
+      // The model passes the user's phrase verbatim; the server -- whose clock
+      // is never in doubt -- resolves it with chrono (forwardDate, anchored
+      // now). This is the structural fix for the wrong-year class observed
+      // live 2026-06-09: the model resolved "Friday June 12th" in its
+      // training-prior year (emitting 2025-06-13) and could not be corrected
+      // by feedback. An explicit ISO with a past year still resolves to that
+      // past year (chrono respects explicit years) and is bounced by the
+      // guard below, which stays as the backstop. An unresolvable phrase
+      // relays a plain error (no approvalReady, no card).
       const now = new Date()
+      const resolvedStart = resolveEventDate(rawStart, now)
+      if (!resolvedStart) {
+        return err(
+          `I couldn't understand "${rawStart}" as a date/time. Pass the user's phrase ` +
+          `(e.g. "Friday at 9am", "tomorrow at 3pm") or an ISO datetime.`,
+        )
+      }
+      const start = resolvedStart.iso
+
+      // Past-date guard (backstop). The resolver above eliminates the model-
+      // computed wrong-year class; what reaches this guard now is an EXPLICIT
+      // past date (e.g. a literal 2025 ISO the model insists on), which chrono
+      // correctly preserves and this correctly rejects, handing back today so
+      // the model can pass the user's words instead. ISO YYYY-MM-DD sorts
+      // lexically, so a string compare on the date prefix works for both the
+      // date and dateTime shapes.
+      const datePart = start.slice(0, 10)
       const pad = (n: number) => String(n).padStart(2, '0')
       const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
       if (/^\d{4}-\d{2}-\d{2}$/.test(datePart) && datePart < today) {
         return err(
           `That start date (${datePart}) is in the past - today is ${today}. ` +
-          'Double-check the year and try again with a today-or-later date.',
+          `Pass the user's date phrase verbatim (e.g. "Friday at 9am") and the server will resolve it.`,
         )
       }
 
       const input: CreateEventInput = { summary, start }
-      if (typeof params.end         === 'string' && params.end.trim())         input.end         = params.end.trim()
+      const rawEnd = typeof params.end === 'string' ? params.end.trim() : ''
+      if (rawEnd) {
+        // End resolves against the START's day, so "noon" / "10:30" land on
+        // the event's date rather than today. Unresolvable -> relay, no card.
+        const resolvedEnd = resolveEventDate(rawEnd, now, resolvedStart.date)
+        if (!resolvedEnd) {
+          return err(`I couldn't understand "${rawEnd}" as the end time. Use the same formats as start.`)
+        }
+        input.end = resolvedEnd.iso
+      }
       if (typeof params.location    === 'string' && params.location.trim())    input.location    = params.location.trim()
       if (typeof params.description === 'string' && params.description.trim()) input.description = params.description.trim()
       if (typeof params.timeZone    === 'string' && params.timeZone.trim())    input.timeZone    = params.timeZone.trim()
@@ -156,12 +186,17 @@ const googleCalendarTool: NerdAlertTool = {
         const locLine  = input.location    ? `\n  Location: ${input.location}` : ''
         const descLine = input.description ? `\n  Notes: ${input.description}` : ''
         const tzLine   = input.timeZone    ? ` (${input.timeZone})`            : ''
+        // Echo the original phrase whenever resolution changed it, so the
+        // human verifies the SERVER'S interpretation against the USER'S words
+        // -- the checkpoint that makes forward-resolution safe here where
+        // reminders (no card) rightly refuses to shift dates.
+        const fromLine = rawStart !== start ? `\n  Resolved from: "${rawStart}"` : ''
         return {
           type: 'text',
           content:
             `About to create this calendar event:\n` +
             `  Title: ${summary}\n` +
-            `  Start: ${start}${tzLine}${endLine}${locLine}${descLine}\n\n` +
+            `  Start: ${start}${tzLine}${fromLine}${endLine}${locLine}${descLine}\n\n` +
             `Check the date (including the year) before approving. Confirm to create.`,
           metadata: {
             approvalReady: true,
