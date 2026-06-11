@@ -83,6 +83,7 @@ import { getPersonality }                           from '../src/personalities';
 import { config }                                   from '../src/config/loader';
 import { buildActiveProjectContext }                from '../src/projects/active';
 import { detectIntent, intentToolNames }            from '../src/core/intent-prefetch';
+import { deriveArmedGate, type ArmedGate }          from '../src/core/gate-salvage';
 import { selectToolsForTurn }                       from '../src/core/tool-selector';
 import { getEmbeddingCapability }                   from '../src/memory/capability';
 
@@ -234,6 +235,11 @@ interface CellPlan {
   offeredNames:   string[];
   expectedOffered: 'yes' | 'no' | 'partial' | 'n/a';   // n/a for over-call probes
   selectReason:   string;
+  /** Write-intent gate for this prompt (gate-salvage.ts), derived from the
+   *  same detectIntent groups the selector uses — mirrors the production
+   *  routing in ui-routes. Null on non-write cells, where the corrective
+   *  path is unreachable and trials are byte-identical to pre-corrective. */
+  armedGate:      ArmedGate | null;
 }
 
 async function planCell(cell: Cell, candidates: NerdAlertTool[], agentName: string): Promise<CellPlan> {
@@ -250,7 +256,7 @@ async function planCell(cell: Cell, candidates: NerdAlertTool[], agentName: stri
     expectedOffered = present === 0 ? 'no' : present === cell.expected.length ? 'yes' : 'partial';
   }
 
-  return { cell, offered: sel.tools, offeredNames, expectedOffered, selectReason: sel.reason };
+  return { cell, offered: sel.tools, offeredNames, expectedOffered, selectReason: sel.reason, armedGate: deriveArmedGate(groups) };
 }
 
 // ── Per-cell aggregate ───────────────────────────────────────
@@ -271,6 +277,8 @@ interface CellResult {
   blankTrials:     number;
   pseudoCallTrials: number;
   chatDraftTrials: number;
+  salvagedTrials:  number;
+  retriedTrials:   number;
   unexpectedTally: Record<string, number>;
   note:            string;
 }
@@ -322,6 +330,8 @@ async function runCell(
     blankTrials:     0,
     pseudoCallTrials: 0,
     chatDraftTrials: 0,
+    salvagedTrials:  0,
+    retriedTrials:   0,
     unexpectedTally: {},
     note:            '',
   };
@@ -340,7 +350,7 @@ async function runCell(
     let threw = false;
     try {
       await runOpenAIAdapter(
-        { transport, model, systemPrompt, initialMessages, tools: offeredOpenAI, brokerContext, maxIterations },
+        { transport, model, systemPrompt, initialMessages, tools: offeredOpenAI, brokerContext, maxIterations, armedGate: plan.armedGate ?? undefined },
         emit,
       );
     } catch (err) {
@@ -360,6 +370,18 @@ async function runCell(
     // ── Card-gate observability (the L3-card-gate proof) ──────
     // carded: the structural Approve/Deny card was raised this trial.
     if (events.some(e => e.kind === 'approval_request')) res.cardedTrials++;
+
+    // ── Corrective observability (gate-salvage) ─────────────
+    // salvaged: tool-call-shaped JSON in narration was parsed and routed
+    // through the broker. retried: the one corrective re-prompt fired.
+    // Both can be >0 only on gate-armed cells; a salvaged emission also
+    // counts toward desired via its tool_call_announced.
+    if (events.some(e => e.kind === 'meta' && (e as { tag: string }).tag === 'openai:salvaged_call')) {
+      res.salvagedTrials++;
+    }
+    if (events.some(e => e.kind === 'meta' && (e as { tag: string }).tag === 'openai:gate_armed_retry')) {
+      res.retriedTrials++;
+    }
     // self-confirm: the model emitted approved:true in a call's args — the
     // behaviour the card gate neutralises (would have fired pre-fix).
     if (events.some(e => e.kind === 'tool_call_complete'
@@ -422,7 +444,7 @@ function toCSV(rows: CellResult[]): string {
   const header = [
     'bucket', 'prompt', 'expected', 'offered_count', 'expected_offered', 'trials',
     'desired_rate', 'overcall_rate', 'mean_unexpected_per_trial',
-    'error_rate', 'carded_rate', 'self_confirm_rate', 'blank_rate', 'pseudo_call_rate', 'chat_draft_rate', 'applied_alarm', 'top_unexpected_tools', 'note',
+    'error_rate', 'carded_rate', 'self_confirm_rate', 'blank_rate', 'pseudo_call_rate', 'chat_draft_rate', 'salvaged_rate', 'retried_rate', 'applied_alarm', 'top_unexpected_tools', 'note',
   ].join(',');
 
   const escape = (s: string) => `"${String(s).replace(/"/g, '""')}"`;
@@ -449,6 +471,8 @@ function toCSV(rows: CellResult[]): string {
       pct(r.blankTrials, r.trials),
       pct(r.pseudoCallTrials, r.trials),
       pct(r.chatDraftTrials, r.trials),
+      pct(r.salvagedTrials, r.trials),
+      pct(r.retriedTrials, r.trials),
       r.appliedAlarm,
       escape(topUnexpected),
       escape(r.note),
