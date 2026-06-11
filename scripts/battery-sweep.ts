@@ -27,9 +27,13 @@
 //   selectToolsForTurn), which narrows to <=8 semantically-relevant tools.
 //   This harness replicates that EXACT path per prompt, so the numbers are
 //   what Mistral actually sees in the live path. The CANDIDATE pool fed to
-//   the narrower is the UNCAPPED set (getModelVisibleTools(undefined)), which
-//   is the counterfactual "ceiling raised to L5": the selector may now
-//   surface L3/L5 tools it would never see under the live L2 cap.
+//   the narrower is the PRODUCTION elevation-aware surface (F1/F2): the same
+//   getModelVisibleTools(modelCeiling, { includeElevatable }) call the live
+//   Ollama path makes, so sweeps measure production posture. (The previous
+//   "UNCAPPED (getModelVisibleTools(undefined))" label was wrong -- that call
+//   is STANDING-TRUST-coupled via getAvailableTools, the opposite of uncapped;
+//   it silently dropped every above-standing tool from candidates. F1 finding,
+//   2026-06-10.)
 //   Over-call is therefore "over-call within the offered (<=8) set" -- the
 //   real over-call risk, since production never offers all 75 either.
 //
@@ -85,6 +89,7 @@ import { buildActiveProjectContext }                from '../src/projects/active
 import { detectIntent, intentToolNames }            from '../src/core/intent-prefetch';
 import { deriveArmedGate, type ArmedGate }          from '../src/core/gate-salvage';
 import { selectToolsForTurn }                       from '../src/core/tool-selector';
+import { getModelTrustCeiling }                     from '../src/core/model-capabilities';
 import { getEmbeddingCapability }                   from '../src/memory/capability';
 
 // ── A cell of the matrix ─────────────────────────────────────
@@ -524,9 +529,12 @@ async function main() {
   const brokerTrust = args.execute ? 5 : 0;
   const agentName   = config.agent.name;
 
-  // UNCAPPED candidate pool = "ceiling raised to L5". The tool-selector then
-  // narrows per prompt exactly as production does.
-  const candidates  = getModelVisibleTools(undefined);
+  // Production-faithful candidate pool (F1): the SAME elevation-aware surface
+  // the live Ollama path uses post-F2. Coupled to config BY DESIGN -- the
+  // header below prints the coupling so a run can never be silently
+  // config-bound again.
+  const ceiling     = getModelTrustCeiling(`ollama/${model}`);
+  const candidates  = getModelVisibleTools(ceiling, { includeElevatable: config.agent?.allow_elevation === true });
   const allNames    = candidates.map(t => t.name);
   const systemPrompt = buildSweepSystemPrompt(promptTrust, allNames);
 
@@ -567,7 +575,8 @@ async function main() {
   console.log(`model            : ${model}`);
   console.log(`prompt clearance : L${promptTrust}  (model is told it is fully cleared)`);
   console.log(`broker execution : ${args.execute ? 'L5 (LIVE -- reads run, L3 cards created)' : 'L0 DENY (no side effects)'}`);
-  console.log(`tool narrowing   : production tool-selector, candidates UNCAPPED (ceiling counterfactual)`);
+  console.log(`trust surface    : standing L${config.agent.trust_level}  allow_elevation=${config.agent?.allow_elevation === true}  model ceiling ${typeof ceiling === 'number' ? `L${ceiling}` : 'none'}  candidates=${candidates.length}`);
+  console.log(`tool narrowing   : production tool-selector over the production-faithful pool`);
   console.log(`embedder         : ${cap.modelId} (${cap.dimensions}d)`);
   console.log(`cells            : ${cells.length}   trials/cell: ${args.trials}   delay: ${args.delayMs}ms`);
   console.log(`total model calls: ~${cells.length * args.trials} (x up to ${args.maxIterations} iterations each)`);
