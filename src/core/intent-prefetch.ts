@@ -2172,20 +2172,30 @@ function hasFail2banWriteIntent(message: string): boolean {
 // email" / "that message" is the NOUN -- a read). Mirrors hasFail2banWriteIntent.
 // Recipient = an email address (the unambiguous signal, like fail2ban's IPv4) OR
 // a "to <name>" object for the name-only "email Rob about X" case. 'email'/
-// 'compose' are email-specific verbs (imperative use IS a send); 'send'/'message'
-// are generic and require email context. selectionOnly bounds a false match to a
+// 'compose' are email-specific verbs (imperative use IS a send); 'send'/
+// 'message'/'draft' are generic and require email context. 'draft' is
+// deliberately generic, NOT email-specific: "draft a proposal to the board"
+// firing is the same accepted-exposure class 'send' already carries, but an
+// email-specific 'draft' would ARM the corrective gate on non-email drafting
+// turns and the retry nudge would pressure gmail_send (the proven overcall
+// degradation, B5 partial). v0.11.4 sweep finding: both Draft cells armed NO
+// gate (retried 0%) because 'draft' was absent from this gate entirely -- the
+// "ebay-blank anomaly" was a gate-coverage gap, not a detector hole.
+// selectionOnly bounds a false match to a
 // visibility slot; the demotion drops the read group only when BOTH groups match.
 // Factor 1b (indirect-object shape): "Send/Write/Shoot <recipient> an email/note"
 // puts the recipient BETWEEN verb and noun, where neither the address test nor
 // the "to <name>" test sees it -- and 'write'/'shoot'/'fire' are send verbs ONLY
-// in this shape. The shape is self-contained (imperative verb + recipient token(s)
+// in this shape ('draft' joins the alternation for "Draft Ben an email", the
+// indirect twin of the documented word-order gap). The shape is self-contained
+// (imperative verb + recipient token(s)
 // + email-flavored noun), so a match IS a send; no second factor needed. The
 // (?!down\s) guard keeps the "write down a note" capture collocation a read.
 // Accepted false positive: "did Rob send Ben an email?" fires (same class as the
 // existing "did Rob email Ben" exposure) -- costs the read-prefetch slot via the
 // demotion, never an action; the L3 card is untouched.
 const GMAIL_INDIRECT_SEND_RE =
-  /\b(send|write|shoot|fire)\s+(?!down\s)(?:[A-Za-z][\w.'-]*\s+){1,3}?(?:a|an|another|one)\s+(?:quick\s+|short\s+|brief\s+|follow-?up\s+)?(e-?mail|message|note|mail)\b/i;
+  /\b(send|write|shoot|fire|draft)\s+(?!down\s)(?:[A-Za-z][\w.'-]*\s+){1,3}?(?:a|an|another|one)\s+(?:quick\s+|short\s+|brief\s+|follow-?up\s+)?(e-?mail|message|note|mail)\b/i;
 const GMAIL_EMAIL_ADDR_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/;
 const GMAIL_SEND_DETERMINERS = new Set<string>([
   'the', 'a', 'an', 'this', 'that', 'my', 'your', 'his', 'her', 'their',
@@ -2201,7 +2211,7 @@ function hasGmailSendIntent(message: string): boolean {
   const hasToName = /\bto\s+[A-Za-z@]/i.test(message);
   // Factor 2: walk send-flavored verbs; only an IMPERATIVE use (not preceded by
   // a determiner -- i.e. not the noun "the email"/"a message") counts.
-  const re = /\b(send|sending|e-?mail|e-?mailing|message|messaging|compose|composing)\b/gi;
+  const re = /\b(send|sending|draft|drafting|e-?mail|e-?mailing|message|messaging|compose|composing)\b/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(message)) !== null) {
     const verb = m[1].toLowerCase().replace('-', '');
@@ -2209,7 +2219,7 @@ function hasGmailSendIntent(message: string): boolean {
     if (GMAIL_SEND_DETERMINERS.has(prev)) continue;            // noun use -> skip
     // 'email'/'compose' are email-specific: an imperative use IS a send.
     if (verb === 'email' || verb === 'emailing' || verb === 'compose' || verb === 'composing') return true;
-    // 'send'/'message' are generic: require an email recipient context.
+    // 'send'/'message'/'draft' are generic: require an email recipient context.
     if (hasAddr || hasToName) return true;
   }
   return false;

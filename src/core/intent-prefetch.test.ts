@@ -331,6 +331,20 @@ describe('detectIntent -- gmail send/read split', () => {
   it('does not treat "write down a note" as a gmail send (capture collocation, not a recipient)', () => {
     expect(detectIntent('write down a note about the meeting')).not.toContain('gmail_send');
   });
+  it('routes "Draft an email to <name>" to gmail_send and demotes the read group (the v0.11.4 retried-0% cells)', () => {
+    const matched = detectIntent('Draft an email to Ben about the latest ebay sale.');
+    expect(matched).toContain('gmail_send');
+    expect(matched).not.toContain('gmail');
+  });
+  it('routes "Draft Ben an email" to gmail_send (indirect-object shape)', () => {
+    expect(detectIntent('Draft Ben an email about the deploy')).toContain('gmail_send');
+  });
+  it('does not treat "draft a proposal" as a gmail send (generic verb, no email recipient)', () => {
+    expect(detectIntent('draft a proposal for the team offsite')).not.toContain('gmail_send');
+  });
+  it('does not treat noun-use "that draft" as a gmail send', () => {
+    expect(detectIntent('delete that draft')).not.toContain('gmail_send');
+  });
 });
 
 // -- calendar & cron write/read split (mirrors the gmail split above) --
