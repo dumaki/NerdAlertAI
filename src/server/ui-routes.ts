@@ -501,7 +501,12 @@ async function handleOllamaStream(
     },
   });
 
-  const visibleTools = getModelVisibleTools(getModelTrustCeiling(getActiveModel()));
+  // Elevation-surfacing parity (F2): match the Anthropic path. Above-standing
+  // tools surfaced here can only RAISE A CARD — the broker still gates every call.
+  const visibleTools = getModelVisibleTools(
+    getModelTrustCeiling(getActiveModel()),
+    { includeElevatable: config.agent?.allow_elevation === true },
+  );
   const availableTools = await narrowVisibleTools(visibleTools, narrowing, bareModel);
   const openAITools = toOpenAIFormat(availableTools);
 
@@ -599,7 +604,12 @@ async function handlePseudoToolStream(
     },
   });
 
-  const visibleTools = getModelVisibleTools(getModelTrustCeiling(getActiveModel()));
+  // Elevation-surfacing parity (F2): match the Anthropic path. Above-standing
+  // tools surfaced here can only RAISE A CARD — the broker still gates every call.
+  const visibleTools = getModelVisibleTools(
+    getModelTrustCeiling(getActiveModel()),
+    { includeElevatable: config.agent?.allow_elevation === true },
+  );
   const availableTools = await narrowVisibleTools(visibleTools, narrowing, llm.model.replace(/^ollama\//, ''));
 
   const brokerContext: BrokerContext = {
@@ -686,7 +696,12 @@ async function handleHostedToolStream(
     },
   });
 
-  const availableTools = getModelVisibleTools(getModelTrustCeiling(getActiveModel()));
+  // Elevation-surfacing parity (F2): match the Anthropic path. Above-standing
+  // tools surfaced here can only RAISE A CARD — the broker still gates every call.
+  const availableTools = getModelVisibleTools(
+    getModelTrustCeiling(getActiveModel()),
+    { includeElevatable: config.agent?.allow_elevation === true },
+  );
   const openAITools = toOpenAIFormat(availableTools);
 
   const brokerContext: BrokerContext = {
