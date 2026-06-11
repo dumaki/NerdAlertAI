@@ -670,6 +670,7 @@ async function handleHostedToolStream(
   trustLevel:      number,
   agentName:       string,
   telemetry:       ((event: AgentEvent) => void) | undefined,
+  armedGate?:      ArmedGate,
 ): Promise<void> {
 
   const llm = getLLMConfig();
@@ -720,6 +721,7 @@ async function handleHostedToolStream(
         initialMessages: orMessages,
         tools: openAITools,
         brokerContext,
+        armedGate,
       },
       emit,
     );
@@ -740,6 +742,7 @@ async function handleHostedToolStream(
             initialMessages: orMessages,
             availableTools,
             brokerContext,
+            armedGate,
           },
           emit,
         );
@@ -1256,13 +1259,18 @@ export function mountUIRoutes(app: Express): void {
 
       // Gate-armed corrective input (gate-salvage.ts): defined only when
       // a write-intent gate fired this turn. Threaded into the Ollama
-      // native adapter so a zero-call terminal finish can spend one
-      // salvage/retry corrective. Undefined on every other turn — the
-      // adapter's corrective block is unreachable and behavior is
-      // byte-identical. Pseudo + hosted threading: follow-up commits.
+      // native, pseudo, and hosted adapters so a zero-call terminal
+      // finish can spend one salvage/retry corrective. Undefined on every
+      // other turn — the adapter's corrective block is unreachable and
+      // behavior is byte-identical. Hosted derives its gate INLINE below
+      // (detectIntent is a pure regex pass) because needsPrefetch
+      // deliberately excludes hosted — the gate is decoupled from
+      // prefetch, not from the provider.
       const armedGate: ArmedGate | undefined = needsPrefetch
         ? (deriveArmedGate(detectedGroups) ?? undefined)
-        : undefined;
+        : llm.provider === 'hosted'
+          ? (deriveArmedGate(detectIntent(safeMessage, agentName)) ?? undefined)
+          : undefined;
 
       const hasNarratablePrefetch = prefetchResults.some(r => r.available);
 
@@ -1421,7 +1429,7 @@ export function mountUIRoutes(app: Express): void {
         // branch so a hosted provider can never fall into the narration
         // path. The handler is registry-keyed, so every hosted provider
         // (current and future) shares this one branch.
-        await handleHostedToolStream(res, systemPromptWithSkills, messages, trustLevel, agentName, telemetry);
+        await handleHostedToolStream(res, systemPromptWithSkills, messages, trustLevel, agentName, telemetry, armedGate);
       } else if (shouldNarrate) {
         const outcome = await handleNarrationStream(
           res,
