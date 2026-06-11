@@ -256,6 +256,28 @@ export function salvageToolCall(
   return null;
 }
 
+// ── Offered-tools guard ──────────────────────────────
+
+/**
+ * True when at least one of the gate's expected tools was actually
+ * offered this turn. A gate whose targets were ALL absent from the
+ * offered list is UNSATISFIABLE: the model cannot call an absent tool
+ * (it isn't in the API tool list), salvage rejects unoffered names by
+ * construction, and a retry nudge toward an absent tool actively
+ * degrades behavior — the live sweep specimen (2026-06-10, standing
+ * trust 2, gmail_send not in the candidate pool) measured overcall 90%
+ * and self-confirm 20% on a cell whose baseline had both at 0: the
+ * nudge pressured the model into calling the WRONG tools. Adapters
+ * must check this before spending the corrective and fall through to
+ * normal terminal handling when it fails.
+ */
+export function gateTargetsOffered(
+  gate: ArmedGate,
+  offeredToolNames: readonly string[],
+): boolean {
+  return gate.expectedTools.some((t) => offeredToolNames.includes(t));
+}
+
 // ── Retry nudge ──────────────────────────────────────────────
 
 /**

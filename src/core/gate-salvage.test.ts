@@ -17,6 +17,7 @@ import { describe, it, expect } from 'vitest';
 import {
   deriveArmedGate,
   salvageToolCall,
+  gateTargetsOffered,
   buildRetryNudge,
 } from './gate-salvage';
 
@@ -187,6 +188,31 @@ describe('salvageToolCall', () => {
       OFFERED,
     );
     expect(call).toEqual({ name: 'gmail_send', args: { to: 'Jung' } });
+  });
+});
+
+// ── gateTargetsOffered ────────────────────────────
+
+describe('gateTargetsOffered', () => {
+  it('true when the expected tool is offered', () => {
+    const gate = deriveArmedGate(['gmail_send'])!;
+    expect(gateTargetsOffered(gate, ['gmail', 'gmail_send', 'reminders'])).toBe(true);
+  });
+
+  it('false when NO expected tool is offered (the unsatisfiable case)', () => {
+    const gate = deriveArmedGate(['gmail_send'])!;
+    expect(gateTargetsOffered(gate, ['gmail', 'reminders', 'cron_manager'])).toBe(false);
+  });
+
+  it('false on an empty offered list', () => {
+    const gate = deriveArmedGate(['cron_write'])!;
+    expect(gateTargetsOffered(gate, [])).toBe(false);
+  });
+
+  it('multi-gate: any one offered target satisfies', () => {
+    const gate = deriveArmedGate(['gmail_send', 'cron_write'])!;
+    expect(gateTargetsOffered(gate, ['cron_manager'])).toBe(true);
+    expect(gateTargetsOffered(gate, ['google_calendar'])).toBe(false);
   });
 });
 

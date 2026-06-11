@@ -84,6 +84,7 @@ import { randomUUID } from 'crypto';
 import {
   type ArmedGate,
   salvageToolCall,
+  gateTargetsOffered,
   buildRetryNudge,
 } from './gate-salvage';
 import { WebSuppressionTracker } from './web-suppression';
@@ -638,6 +639,32 @@ export async function runOpenAIAdapter(
       // Continue the loop: model gets another shot at responding,
       // now with the tool results visible in its context.
       continue;
+    }
+
+    // ── Unsatisfiable-gate guard ──────────────────────
+    //
+    // A gate whose expected tools were ALL absent from this turn's
+    // offered list is unsatisfiable: the model cannot call an absent
+    // tool, salvage rejects unoffered names, and a retry nudge toward
+    // an absent tool actively degrades behavior (live sweep specimen
+    // 2026-06-10: overcall 90%, self-confirm 20% vs a 0/0 baseline —
+    // the nudge pressured the model into WRONG tools). Spend the
+    // corrective as a no-op and fall through to terminal handling.
+    if (
+      armedGate &&
+      !correctiveSpent &&
+      (finishReason === 'stop' || finishReason === 'length' || finishReason === null) &&
+      !gateTargetsOffered(armedGate, tools.map((t) => t.function.name))
+    ) {
+      correctiveSpent = true;
+      console.log(
+        `[openai-native:gate_unsatisfiable] gate=${armedGate.groups.join(',')} ` +
+        `expected=${armedGate.expectedTools.join(',')} (not offered)`,
+      );
+      emit(meta('openai:gate_unsatisfiable', {
+        gate:     armedGate.groups,
+        expected: armedGate.expectedTools,
+      }));
     }
 
     // ── Gate-armed corrective: salvage, then retry ───────────

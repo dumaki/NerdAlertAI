@@ -52,6 +52,7 @@ import { WebSuppressionTracker } from './web-suppression';
 import {
   type ArmedGate,
   salvageToolCall,
+  gateTargetsOffered,
   buildRetryNudge,
 } from './gate-salvage';
 import type { Source, NerdAlertResponse } from '../types/response.types';
@@ -636,6 +637,31 @@ export async function runPseudoToolAdapter(
           toolName: stored.call.name,
         });
       }
+    }
+
+    // ── Unsatisfiable-gate guard ──────────────────────
+    //
+    // Same guard as the openai-native adapter: a gate whose expected
+    // tools were ALL absent from the offered list is unsatisfiable —
+    // spend the corrective as a no-op (with the meta marker) and fall
+    // through to the normal empty-turn handling below. See the live
+    // sweep specimen (2026-06-10) documented in gate-salvage.ts.
+    if (
+      armedGate &&
+      !correctiveSpent &&
+      !hasToolCalls &&
+      !hasApprovals &&
+      !gateTargetsOffered(armedGate, availableTools.map((t) => t.name))
+    ) {
+      correctiveSpent = true;
+      console.log(
+        `[pseudo:gate_unsatisfiable] gate=${armedGate.groups.join(',')} ` +
+        `expected=${armedGate.expectedTools.join(',')} (not offered)`,
+      );
+      emit(meta('pseudo:gate_unsatisfiable', {
+        gate:     armedGate.groups,
+        expected: armedGate.expectedTools,
+      }));
     }
 
     // ── Gate-armed corrective: salvage, then retry ───────────
