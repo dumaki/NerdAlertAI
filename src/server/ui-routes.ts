@@ -483,7 +483,7 @@ async function handleOllamaStream(
   // skip the probe and route straight to pseudo-tool.
   if (noNativeToolSupport.has(bareModel)) {
     console.log(`[capability-cache] ${bareModel} → pseudo-tool (cached)`);
-    return handlePseudoToolStream(res, systemPrompt, initialMessages, prefetchSources, trustLevel, agentName, telemetry, 'ollama', narrowing);
+    return handlePseudoToolStream(res, systemPrompt, initialMessages, prefetchSources, trustLevel, agentName, telemetry, 'ollama', narrowing, armedGate);
   }
 
   // Convert Anthropic MessageParam history → ORMessage via the
@@ -544,6 +544,7 @@ async function handleOllamaStream(
             initialMessages: orMessages,
             availableTools,
             brokerContext,
+            armedGate,
           },
           emit,
         );
@@ -577,6 +578,7 @@ async function handlePseudoToolStream(
   telemetry:          ((event: AgentEvent) => void) | undefined,
   transportOverride?: 'openrouter' | 'ollama',
   narrowing?:         ToolNarrowing,
+  armedGate?:         ArmedGate,
 ): Promise<void> {
 
   const llm = getLLMConfig();
@@ -616,6 +618,7 @@ async function handlePseudoToolStream(
         initialMessages: orMessages,
         availableTools,
         brokerContext,
+        armedGate,
       },
       emit,
     );
@@ -1431,7 +1434,7 @@ export function mountUIRoutes(app: Express): void {
           if (llm.provider === 'ollama') {
             await handleOllamaStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry, narrowing, armedGate);
           } else {
-            await handlePseudoToolStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry, undefined, narrowing);
+            await handlePseudoToolStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry, undefined, narrowing, armedGate);
           }
         }
       } else if (llm.provider === 'ollama') {
@@ -1445,7 +1448,7 @@ export function mountUIRoutes(app: Express): void {
         await handleOllamaStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry, narrowing, armedGate);
       } else {
         // OpenRouter — same bail behavior as the Ollama branch.
-        await handlePseudoToolStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry, undefined, narrowing);
+        await handlePseudoToolStream(res, systemPromptWithSkills, messages, [], trustLevel, agentName, telemetry, undefined, narrowing, armedGate);
       }
 
       const saveable = [

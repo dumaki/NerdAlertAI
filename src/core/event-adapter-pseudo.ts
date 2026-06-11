@@ -49,6 +49,11 @@ import {
   streamOpenRouter,
 } from './llm-client';
 import { WebSuppressionTracker } from './web-suppression';
+import {
+  type ArmedGate,
+  salvageToolCall,
+  buildRetryNudge,
+} from './gate-salvage';
 import type { Source, NerdAlertResponse } from '../types/response.types';
 import type { NerdAlertTool } from '../types/response.types';
 
@@ -108,6 +113,11 @@ export interface PseudoAdapterParams {
   initialMessages: ORMessage[];
   availableTools: NerdAlertTool[];
   brokerContext: BrokerContext;
+  /** Write-intent gate armed by the routing layer (gate-salvage.ts).
+   *  Undefined when no write gate fired — the corrective path below is
+   *  unreachable and the adapter is byte-identical to its prior
+   *  behavior. */
+  armedGate?: ArmedGate;
   maxIterations?: number;
 }
 
@@ -481,6 +491,7 @@ export async function runPseudoToolAdapter(
     initialMessages,
     availableTools,
     brokerContext,
+    armedGate,
     maxIterations = 6,
   } = params;
 
@@ -497,6 +508,10 @@ export async function runPseudoToolAdapter(
   // use, so this is the third place the v0.5.18.x convergence
   // mattered. See src/core/web-suppression.ts.
   const suppressionTracker = new WebSuppressionTracker();
+
+  // One corrective action (salvage OR retry) per request — see the
+  // gate-armed corrective block in the loop below.
+  let correctiveSpent = false;
 
   const lastUserMessage = [...initialMessages].reverse().find((m) => m.role === 'user');
   const lastUserText = typeof lastUserMessage?.content === 'string'
@@ -623,7 +638,58 @@ export async function runPseudoToolAdapter(
       }
     }
 
-    if (!hasToolCalls) {
+    // ── Gate-armed corrective: salvage, then retry ───────────
+    //
+    // Turn ended with neither tool calls nor a parked approval while
+    // a write-intent gate is armed: spend ONE corrective. Salvage
+    // looks for tool-call-shaped JSON the TagScanner did NOT catch
+    // (bare JSON with no [TOOL_CALLS] / <tool_call> wrapper — the
+    // wrapped forms were already ingested above). A salvaged call is
+    // pushed into pendingToolCalls and flows through the existing
+    // execution loop below — suppression, executeOrPropose, carding —
+    // with zero new execution surface. No salvage → one corrective
+    // re-prompt and `continue` (bounded by maxIterations as usual).
+    // hasApprovals guard: a parked <approval_request> means the turn
+    // SUCCEEDED — never corrective on top of it. armedGate undefined
+    // never reaches this block.
+    if (armedGate && !correctiveSpent && !hasToolCalls && !hasApprovals) {
+      correctiveSpent = true;
+
+      const salvaged = salvageToolCall(
+        assistantText,
+        availableTools.map((t) => t.name),
+      );
+
+      if (salvaged) {
+        const id = `pcall_salv_${randomUUID()}`;
+        console.log(
+          `[pseudo:salvaged_call] name=${salvaged.name} ` +
+          `gate=${armedGate.groups.join(',')}`,
+        );
+        emit(meta('pseudo:salvaged_call', {
+          id,
+          name: salvaged.name,
+          gate: armedGate.groups,
+        }));
+        pendingToolCalls.push({ id, name: salvaged.name, args: salvaged.args });
+        emit(toolCallAnnounced(id, salvaged.name));
+        emit(toolCallComplete(id, salvaged.name, salvaged.args));
+      } else {
+        const nudge = buildRetryNudge(armedGate);
+        console.log(
+          `[pseudo:gate_armed_retry] gate=${armedGate.groups.join(',')} ` +
+          `textLen=${assistantText.length}`,
+        );
+        emit(meta('pseudo:gate_armed_retry', {
+          gate:    armedGate.groups,
+          textLen: assistantText.length,
+        }));
+        messages.push({ role: 'user', content: nudge });
+        continue;
+      }
+    }
+
+    if (pendingToolCalls.length === 0) {
       if (looksLikeRealDataQuery && iteration === 1) {
         console.warn(
           `[pseudo:confabulation_risk] model="${model}" finished turn without ` +
