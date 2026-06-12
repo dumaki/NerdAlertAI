@@ -104,3 +104,31 @@ second pull blanks identically. So the anomaly was two stacked problems:
 - **One anomaly, two defects.** Fixing the gate converted the open anomaly
   into a characterized, reproducible model-side specimen instead of closing
   it outright --- the right outcome; the spec records both halves.
+
+## Addendum 2026-06-12 --- B3 retest evidence (gmail_cleanup closed)
+
+Bucket 3 live K=10 (`battery-sweep-mistral-2026-06-11T23-20-01-530Z.csv`,
+production posture):
+
+- **gmail_cleanup routing is recovered: desired 80%, blank 0, overcall 0,
+  zero applied-marker leaks.** The original false-completion failure survives
+  only as a 20% chat-draft residual, folded into the standing
+  completion-honesty item. No corrective gate exists for cleanup (deliberate
+  WRITE_GATE_TOOLS opt-in), so that residual has no retry lever.
+- **Resolve-first carding class EXTENDED to gmail_cleanup:** the tool has
+  `requiresApproval: true`; its carded-rate is 0 BY CONSTRUCTION on synthetic
+  prompts because the side-effect-free preview resolves no targets and returns
+  before a card is raised --- the same documented behavior as `cron_delete`.
+  Any future card-parity audit must distinguish this class from a genuine
+  missing-requiresApproval gap by checking the tool source, not the sweep
+  carded column.
+- **Blank-class registry gains a second specimen:**
+  `google_calendar_delete` ("Delete the 3pm standup event from my calendar
+  today.") blanks 80% with only the calendar READ group detected and no
+  delete gate. The isolation experiment now has two registered specimens
+  (ebay draft, calendar delete).
+- **Recorded, not acted on:** github_write never surfaces in the narrowed 8
+  for its B3 cell (selector gap, queue); cron_delete chat-drafts 50% (no
+  delete-verb gate --- gate design discussion pending); harness teardown
+  throws an unhandled ETIMEOUT after summary+CSV, making SWEEP_EXIT
+  nonzero on a fully-scored run (small fix queued).
