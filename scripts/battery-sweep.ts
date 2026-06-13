@@ -520,6 +520,26 @@ async function cleanupCronTarget(): Promise<void> {
   console.log(`[seed] cleanup: ${removed ? 'removed' : 'not present'} "${SEED_CRON_ID}"`);
 }
 
+// ── Teardown exit-code guard ─────────────────────────────────
+// A fully-scored sweep can emit a late keep-alive socket ETIMEDOUT/ECONNRESET
+// to Ollama during teardown, AFTER the CSV + summary are written. That late
+// noise must not poison SWEEP_EXIT on an otherwise-clean run. The flag is set
+// only once all model calls are done, so a socket error DURING the run (a
+// genuinely failed call) still exits 1 — only post-scoring teardown noise is
+// swallowed.
+let sweepComplete = false;
+const isTeardownSocketNoise = (e: unknown): boolean =>
+  /ETIMEDOUT|ECONNRESET|EPIPE|socket hang up/i.test(
+    String((e as { code?: string; message?: string } | null)?.code
+      ?? (e as { message?: string } | null)?.message ?? e));
+function handleLateError(label: string, e: unknown): never {
+  if (sweepComplete && isTeardownSocketNoise(e)) process.exit(0);
+  console.error(`[battery] ${label}:`, e);
+  process.exit(1);
+}
+process.on('uncaughtException',  (e) => handleLateError('uncaughtException', e));
+process.on('unhandledRejection', (e) => handleLateError('unhandledRejection', e));
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
@@ -620,6 +640,10 @@ async function main() {
     console.log(`desired ${pct(r.desiredHits, r.trials)}  overcall ${pct(r.overcallTrials, r.trials)}  carded ${pct(r.cardedTrials, r.trials)}  selfconf ${pct(r.selfConfirmTrials, r.trials)}  err ${pct(r.errorTrials, r.trials)}${alarm}${fail}${r.note ? '  [' + r.note + ']' : ''}`);
   }
 
+  // All model calls are done — from here on, any socket error is teardown
+  // noise, not a failed trial. Arm the exit-code guard.
+  sweepComplete = true;
+
   // ── Output ─────────────────────────────────────────────────
   const stamp   = new Date().toISOString().replace(/[:.]/g, '-');
   const outDir  = path.join(__dirname, 'test-results');
@@ -643,6 +667,10 @@ async function main() {
   } finally {
     if (args.seedTargets) await cleanupCronTarget();
   }
+
+  // Run fully scored: force a clean exit before any lingering Ollama keep-alive
+  // socket can fire a late ETIMEDOUT and flip the exit code.
+  process.exit(0);
 }
 
 main().catch(err => {
