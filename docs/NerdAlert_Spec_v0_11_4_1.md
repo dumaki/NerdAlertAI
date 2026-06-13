@@ -132,3 +132,36 @@ production posture):
   delete-verb gate --- gate design discussion pending); harness teardown
   throws an unhandled ETIMEOUT after summary+CSV, making SWEEP_EXIT
   nonzero on a fully-scored run (small fix queued).
+
+## Addendum 2 2026-06-12 (late) --- github_write routing closed; blank class = 3 specimens
+
+**Code commit:** `b4aae5a`. github_write given the standard write-group
+treatment (selectionOnly INTENT_MAP group, `hasGithubWriteIntent` regex gate,
+read demotion, `WRITE_GATE_TOOLS` opt-in). +5 tests (294/294). Dry B3 proved
+the selector now surfaces it first in the offered 8 with zero collateral on
+the other cells.
+
+- **github_write selector gap CLOSED.** The cell was desired-0 BY
+  CONSTRUCTION; it now surfaces correctly. Its live-sweep residual is
+  blank-class, not routing.
+- **Send-gate verb taxonomy extended to github:** `hasGithubWriteIntent` =
+  verb->issue proximity (within 40 chars) ANDed with a github anchor (the
+  word 'github' OR an owner/repo slug, letter required both sides of the
+  slash). `assign` does not match `assigned` --- "what issues are assigned to
+  me" stays a read. Any future write-gate verb keeps the explicit
+  email-specific-vs-generic / anchored-vs-bare classification discipline.
+- **Blank-class registry now has THREE specimens** under identical posture,
+  all with the exact signature `finish=length, textLen=0` on BOTH the natural
+  pull and the corrective retry: the ebay draft (B5), google_calendar_delete
+  (B3), and github_write (B3, new). The corrective contract is amended to
+  state explicitly: **the corrective ARMS and FIRES on blank-class cells but
+  CANNOT rescue them** --- the class is a model/serving-side generation
+  failure, not a routing or corrective-layer defect. The common shape is a
+  structured-call command with thin prose scaffolding (the cron-create
+  composition-wall hypothesis). None carries a literal address, so the class
+  is distinct from the address-trigger quirk. These three are the registered
+  cells for the blank-class isolation experiment and the model bake-off.
+- **Recorded, not acted on (carried):** the harness teardown ETIMEOUT now
+  fires on every run (SWEEP_EXIT=1 on a fully-scored sweep); delete verbs
+  (cron_delete, calendar_delete) still have no write gate, and calendar_delete
+  is itself a blank specimen so a gate alone will not fix its desired rate.
