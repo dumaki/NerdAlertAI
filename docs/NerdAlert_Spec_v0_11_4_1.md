@@ -165,3 +165,90 @@ the other cells.
   fires on every run (SWEEP_EXIT=1 on a fully-scored sweep); delete verbs
   (cron_delete, calendar_delete) still have no write gate, and calendar_delete
   is itself a blank specimen so a gate alone will not fix its desired rate.
+
+## Addendum 3 2026-06-13 --- blank class ISOLATED: context overflow (corrects Addendum 2)
+
+**Doc-only.** No product code change. (The harness teardown ETIMEOUT logged as
+"recorded, not acted on" in Addendum 2 is fixed in a SEPARATE commit -- see
+`scripts/battery-sweep.ts`.) The blank-class isolation experiment (handoff
+2026-06-12 late, queue #1) ran a deterministic probe (`scripts/blank-probe.ts`)
+that reproduces the EXACT production plan per cell (detectIntent ->
+intentToolNames -> selectToolsForTurn over the production-faithful candidate
+pool -> buildSweepSystemPrompt -> toOpenAIFormat), then issues the request OUT
+of the event stream: a non-streaming `/v1` call (reads message.content
+byte-exact + usage) and a native `/api/chat` num_ctx sweep (the `/v1` path the
+adapter uses cannot set num_ctx). Verbose request+responses archived under
+`scripts/test-results/blank-probe-*.json`.
+
+### Finding: the blank class is CONTEXT OVERFLOW, not a generation failure
+
+All three registered specimens share the SAME mechanism, proven by a two-point
+num_ctx comparison. mistral-small3.2 is served at the Ollama DEFAULT
+num_ctx=8192 (not pinned in the Modelfile). The production prompt for these
+cells is the constant ~4.4k-token system prompt (which advertises EVERY enabled
+tool by name) PLUS the 8 narrowed tool schemas (~4-4.5k tokens) = 8.2k-9.0k
+tokens, exceeding 8192. Ollama SILENTLY TRUNCATES the input to 8191 and leaves
+exactly 1 token of generation budget -> the model emits 1 token and stops with
+finish=length / empty content. Raise num_ctx to 16384 and the full prompt fits
+with headroom; the model emits the CORRECT tool call with CORRECT args every
+time. The model was never incapable -- it was suffocated.
+
+| specimen (prompt) | tools ser. | real prompt toks | num_ctx 8192 | num_ctx 16384 |
+|---|---:|---:|---|---|
+| github_write "Open a GitHub issue ..." | 17,295ch | 8,506 | finish=length, eval=1, blank | stop -> github_write{create_issue, dumaki/NerdAlertAI, title} |
+| gmail_send "Draft an email to Ben ... ebay" | 18,748ch | 8,969 | finish=length, eval=1, blank | stop -> gmail_send{to, subject, body} |
+| google_calendar_delete "Delete the 3pm ..." | 16,270ch | 8,211 | finish=length, eval=1, blank | stop -> google_calendar_delete{query, date} |
+
+The `/v1` baseline (github cell, 3x) read prompt=8191 completion=1 total=8192,
+finish=length, content="" -- the truncation fingerprint directly.
+
+### Corrections to Addendum 2
+
+- **RETRACTED:** "the class is a model/serving-side generation failure" and the
+  "structured-call command with thin prose scaffolding (cron-create
+  composition-wall)" shape hypothesis. The prose-shape correlation was
+  coincidental; the actual invariant is prompt tokens ~= num_ctx. There is NO
+  model defect in this class.
+- **The three specimens come OFF the model bake-off cell list.** No model swap
+  addresses input truncation. cron-create (the original bake-off benchmark)
+  should be re-measured for prompt size before being treated as a model
+  problem -- very likely the same overflow.
+- **The corrective-can't-rescue claim STANDS, but the reason is now known:** the
+  retry nudge re-issues into an already-overflowing context, so the second pull
+  has no more room than the first. Arm-and-fire-without-rescue is the EXPECTED
+  behaviour of a corrective layer facing an overflow, not a corrective defect.
+
+### Production severity (NOT a sweep artifact)
+
+Production uses the same `/v1` path at the same served default, so any live
+turn whose system prompt + narrowed tool schemas exceed 8192 is being SILENTLY
+TRUNCATED now (usually losing the head of the system prompt), then blanks or
+acts on a mangled prompt. google_calendar_delete overruns by only ~19 tokens
+(8,211) -- normal tool-heavy turns ride the edge, so the failure is fragile and
+prompt-size-sensitive, not confined to the three known cells.
+
+### Fix menu (recorded; serving fix is operator-owned, untouched by Claude)
+
+1. **Serving (primary, .218, operator):** `OLLAMA_CONTEXT_LENGTH=16384` on the
+   Ollama service (0.30.7 supports it; applies to the `/v1` path prod uses) OR
+   Modelfile `PARAMETER num_ctx 16384`. Tradeoff: KV-cache RAM/VRAM for the 24B
+   at 16k -- operator's headroom call.
+2. **Prompt-shrink (product, defense-in-depth):** the system prompt advertising
+   all ~72 enabled tool names is ~half the budget; trimming it (or verbose tool
+   schema descriptions) buys margin but is brittle as the tool count grows.
+3. **In-product context guard (product, v0.12):** a pre-flight check analogous
+   to token-budget.ts's TPM guard but for the LOCAL Ollama served num_ctx --
+   estimate system+tools+history and refuse/shrink with a VISIBLE error instead
+   of letting Ollama truncate silently. Converts the class from a silent
+   failure into an actionable one.
+
+### Blank-class registry update
+
+The three registered specimens are now CHARACTERIZED (context overflow), not
+open isolation/bake-off cells; the isolation experiment is CLOSED. Retain them
+as a num_ctx-regression tripwire: at the production num_ctx they MUST blank; if
+a num_ctx >= 16k is adopted they MUST emit their expected tool.
+
+**One unrelated artifact (NOT blank class):** google_calendar_delete at 16k
+emitted a stale date arg (model date-grounding); num_ctx neither causes nor
+fixes it. Tracked separately, not folded into this class.
