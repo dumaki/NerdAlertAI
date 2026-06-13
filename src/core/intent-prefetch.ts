@@ -881,6 +881,23 @@ const INTENT_MAP: Record<string, IntentGroup> = {
     selectionOnly: true,
   },
 
+  // -- github WRITE (issue create/close/comment -- selection-only action group) --
+  // Same shape as gmail_send: the `github` read group (below) owns the
+  // status/issues prefetch; the L3 issue writes live here. selectionOnly (an
+  // issue write is an approval-carded action, not a data source) but fed to
+  // the recall net via intentToolNames so a weak model SEES github_write in
+  // the tool loop. Without this, "Open a GitHub issue in owner/repo" matched
+  // only the read group via 'github' and github_write competed on embeddings
+  // alone -- it never surfaced in the narrowed 8 (B3 sweep 2026-06-11:
+  // desired 0 BY CONSTRUCTION, selector-gated). Keywords are documentation;
+  // hasGithubWriteIntent is the real guard. The demotion below drops the
+  // read group on a write command.
+  github_write: {
+    keywords:      ['open an issue', 'create an issue', 'close issue'],
+    tools:         ['github_write'],
+    selectionOnly: true,
+  },
+
   // ── Google Calendar (read-only prefetch) ─────────────────
   // Brings calendar reads onto the prefetch path. Without this group a
   // calendar query ("what's on my calendar today") matched NO group, fell
@@ -2262,6 +2279,26 @@ function hasCronWriteIntent(message: string): boolean {
   return CRON_WRITE_RE.test(message);
 }
 
+// -- github WRITE-intent gate --
+// Separates an issue WRITE command (create/close/reopen/comment/label/assign)
+// from a github read. Two ANDed conditions:
+//   1. Verb -> object proximity: a write verb followed within 40 chars by an
+//      issue-ish noun, so "close the door, there's an issue with github"
+//      does not fire. \bassign\b deliberately does not match "assigned",
+//      keeping "what issues are assigned to me" a read.
+//   2. A github anchor: the word 'github' OR an owner/repo slug. A letter is
+//      required on both sides of the slash so "11/12" dates and fractions
+//      never anchor. "and/or" can anchor, but the message still needs the
+//      verb->issue shape -- accepted exposure, the same bounded class the
+//      other write gates carry.
+const GITHUB_WRITE_VERB_RE =
+  /\b(open|create|file|raise|close|re-?open|comment\s+on|label|assign)\b[\s\S]{0,40}?\b(issues?|bug\s+reports?)\b/i;
+const GITHUB_ANCHOR_RE = /\bgithub\b|\b[A-Za-z][\w.-]*\/[A-Za-z][\w.-]*\b/i;
+
+function hasGithubWriteIntent(message: string): boolean {
+  return GITHUB_WRITE_VERB_RE.test(message) && GITHUB_ANCHOR_RE.test(message);
+}
+
 export function detectIntent(message: string, agentName?: string): string[] {
   const lower = message.toLowerCase();
   // v0.6.3.4 (Q4): per-turn agent name suffix appended to every
@@ -2377,6 +2414,11 @@ export function detectIntent(message: string, agentName?: string): string[] {
         // job CREATE command, never a schedule/status read.
         return hasCronWriteIntent(message);
       }
+      if (groupName === 'github_write') {
+        // Regex gate (keywords are documentation only) -- fires only on an
+        // issue WRITE command with a github anchor, never a repo/issue read.
+        return hasGithubWriteIntent(message);
+      }
       if (groupName === 'browser') {
         // v0.11.x nav-gate: fire on keyword OR a navigation signal (a
         // bare URL, or a browse verb adjacent to a domain). Bare-domain
@@ -2470,6 +2512,18 @@ export function detectIntent(message: string, agentName?: string): string[] {
   if (matched.includes('cron_write') && matched.includes('cron')) {
     const kept = matched.filter(g => g !== 'cron');
     console.log(`[NerdAlert] Intent demoted cron read (create command -> cron_write): ${kept.join(', ')}${viaSuffix}`);
+    matched = kept;
+  }
+
+  // -- github write beats github read on an issue write command --
+  // "Open a GitHub issue in owner/repo" matches BOTH the read `github` group
+  // (via the 'github' keyword) and `github_write` (via the regex gate). Drop
+  // the read group so the repo status isn't prefetched and the turn isn't
+  // captured into narration -- the command must reach the tool loop where
+  // github_write + the L3 card live. Same shape as the gmail demotion.
+  if (matched.includes('github_write') && matched.includes('github')) {
+    const kept = matched.filter(g => g !== 'github');
+    console.log(`[NerdAlert] Intent demoted github read (issue write command -> github_write): ${kept.join(', ')}${viaSuffix}`);
     matched = kept;
   }
 

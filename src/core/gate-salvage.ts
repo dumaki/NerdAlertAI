@@ -75,6 +75,11 @@ const WRITE_GATE_TOOLS: Record<string, string[]> = {
   gmail_send:            ['gmail_send'],
   google_calendar_write: ['google_calendar'],
   cron_write:            ['cron_manager'],
+  // v0.11.4.x: opted in with its B3 sweep cell ("Open a GitHub issue in
+  // dumaki/NerdAlertAI..."). The github_write group only fires via
+  // hasGithubWriteIntent (github/slug-anchored issue-write command), so the
+  // retry-nudge exposure is bounded the same way as the three above.
+  github_write:          ['github_write'],
 };
 
 /**

@@ -2,7 +2,7 @@
 // (gate-salvage.ts). Run with: npm test
 //
 // These pin the detector's contract:
-//   - deriveArmedGate arms ONLY on the three write-intent groups, returns
+//   - deriveArmedGate arms ONLY on the four write-intent groups, returns
 //     null otherwise (the no-op switch for the whole corrective path), and
 //     merges multiple gates with stable order;
 //   - salvageToolCall recovers the documented call shapes (bare object,
@@ -35,6 +35,11 @@ describe('deriveArmedGate', () => {
   it('arms on gmail_send', () => {
     const gate = deriveArmedGate(['gmail_send']);
     expect(gate).toEqual({ groups: ['gmail_send'], expectedTools: ['gmail_send'] });
+  });
+
+  it('arms on github_write', () => {
+    const gate = deriveArmedGate(['github_write']);
+    expect(gate).toEqual({ groups: ['github_write'], expectedTools: ['github_write'] });
   });
 
   it('arms on google_calendar_write → google_calendar tool', () => {

@@ -345,6 +345,22 @@ describe('detectIntent -- gmail send/read split', () => {
   it('does not treat noun-use "that draft" as a gmail send', () => {
     expect(detectIntent('delete that draft')).not.toContain('gmail_send');
   });
+  it('routes "Open a GitHub issue" to github_write and demotes the read group (the B3 selector-gated cell)', () => {
+    const matched = detectIntent("Open a GitHub issue in dumaki/NerdAlertAI titled 'battery sweep harness'.");
+    expect(matched).toContain('github_write');
+    expect(matched).not.toContain('github');
+  });
+  it('routes a slug-anchored issue write without the word github', () => {
+    expect(detectIntent('Close issue #42 in dumaki/NerdAlertAI')).toContain('github_write');
+  });
+  it('keeps "what issues are assigned to me on github" a read (assigned != assign)', () => {
+    const matched = detectIntent('what issues are assigned to me on github');
+    expect(matched).toContain('github');
+    expect(matched).not.toContain('github_write');
+  });
+  it('does not treat an unanchored issue complaint as a github write', () => {
+    expect(detectIntent('I need to open an issue with my printer support')).not.toContain('github_write');
+  });
 });
 
 // -- calendar & cron write/read split (mirrors the gmail split above) --
