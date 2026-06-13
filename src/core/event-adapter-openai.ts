@@ -89,7 +89,7 @@ import {
 } from './gate-salvage';
 import { WebSuppressionTracker } from './web-suppression';
 import type { ORMessage, OpenAIContentPart } from './llm-client';
-import { resolveProviderKey } from './llm-client';
+import { resolveProviderKey, getActiveModel } from './llm-client';
 import { getModel } from '../config/models';
 import type { Source, NerdAlertResponse } from '../types/response.types';
 import {
@@ -101,6 +101,14 @@ import {
   checkBudget,
   formatBudgetMessage,
 } from './token-budget';
+import {
+  checkContextBudget,
+  resolveContextCeiling,
+  recordLearnedContext,
+  isContextOverflow,
+  learnContextFromUsage,
+  formatContextOverflowMessage,
+} from './context-budget';
 
 // ── Typed capability error ───────────────────────────────────
 //
@@ -149,6 +157,11 @@ export interface OpenAITransportConfig {
    *  Used by the pre-flight budget guard in runOpenAIAdapter. A value the
    *  provider reports via x-ratelimit headers supersedes this at request time. */
   tpmCeiling?: number;
+  /** v0.11.x: served context-window hint (from the registry's context_window).
+   *  Used by the pre-flight CONTEXT guard in runOpenAIAdapter. A value learned
+   *  from a real truncation supersedes this. Absent on hosted rows (their bound
+   *  is the TPM ceiling); set on the local Ollama row to its served num_ctx. */
+  contextWindow?: number;
   /** Quirks discovered per provider. */
   quirks?: {
     /** Recover from missing close delta after N ms of silence (Groq). */
@@ -284,6 +297,10 @@ interface ChatCompletionChunk {
     };
     finish_reason?: string | null;
   }>;
+  // Present only on the final chunk when the request sets
+  // stream_options:{include_usage:true}. Carries no choices. Read by the
+  // context-overflow detector to learn the served num_ctx.
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
 }
 
 async function* streamCompletions(
@@ -307,6 +324,10 @@ async function* streamCompletions(
     messages,
     max_tokens: maxTokens,
     stream: true,
+    // Ask for a final usage chunk (token counts). Standard OpenAI field;
+    // Ollama honors it. The context-overflow detector reads usage to learn
+    // the served num_ctx; harmless to providers that ignore it.
+    stream_options: { include_usage: true },
   };
   if (tools.length > 0) {
     body.tools = tools;
@@ -471,6 +492,43 @@ export async function runOpenAIAdapter(
     return;
   }
 
+  // ── Pre-flight CONTEXT-WINDOW guard (v0.11.x) ─────────
+  // The OTHER ceiling. Where the TPM guard above is a near-no-op on local
+  // Ollama (no rate limit), THIS is the one that bites there: an over-
+  // context request is silently truncated by Ollama into the blank class
+  // (v0.11.4.1 Addendum 3), so estimate the input up front and hard-block
+  // with a clear message instead of wasting a blank generation. Fires only
+  // when a context ceiling is known (the model's registry context_window,
+  // or a value learned from an earlier truncation); unknown => fits =>
+  // byte-identical to today. See src/core/context-budget.ts.
+  const ctxVerdict = checkContextBudget({
+    systemPrompt,
+    toolsSerialized:   JSON.stringify(tools),
+    historySerialized: JSON.stringify(initialMessages),
+    toolCount:         tools.length,
+    ceiling:           resolveContextCeiling(
+      budgetKey(transport.baseUrl, model),
+      transport.contextWindow,
+    ),
+  });
+  if (ctxVerdict.overflow) {
+    console.log(
+      `[openai-native:context_block] est=${ctxVerdict.estimate} ` +
+      `ctx=${ctxVerdict.ceiling} tools=${ctxVerdict.toolCount} model=${model}`,
+    );
+    emit(meta('openai:context_exceeded', {
+      estimate:      ctxVerdict.estimate,
+      ceiling:       ctxVerdict.ceiling,
+      systemTokens:  ctxVerdict.systemTokens,
+      toolTokens:    ctxVerdict.toolTokens,
+      historyTokens: ctxVerdict.historyTokens,
+      outputReserve: ctxVerdict.outputReserve,
+      toolCount:     ctxVerdict.toolCount,
+    }));
+    emit(error(formatContextOverflowMessage(ctxVerdict.ceiling, ctxVerdict.estimate)));
+    return;
+  }
+
   for (let iteration = 1; iteration <= maxIterations; iteration++) {
     console.log(
       `[openai-native:iter] ${iteration}/${maxIterations} ` +
@@ -481,9 +539,15 @@ export async function runOpenAIAdapter(
     const accumulator = new ToolCallAccumulator();
     let textThisIter = '';
     let finishReason: string | null = null;
+    // Captured from the final usage chunk (stream_options.include_usage) for
+    // the context-overflow detector's ceiling-learning. undefined if absent.
+    let lastUsage: ChatCompletionChunk['usage'];
 
     try {
       for await (const chunk of streamCompletions(transport, model, messages, tools, maxTokens)) {
+        // The usage chunk arrives with an EMPTY choices array, so capture it
+        // before the choice guard below skips it.
+        if (chunk.usage) lastUsage = chunk.usage;
         const choice = chunk.choices?.[0];
         if (!choice) continue;
 
@@ -801,6 +865,32 @@ export async function runOpenAIAdapter(
     }
 
     if (finishReason === 'length') {
+      // ── Context-overflow detector (v0.11.x) ───────────────
+      // finish=length with NOTHING emitted across the whole request (no
+      // text, no tool call) is the proven silent-truncation fingerprint
+      // (v0.11.4.1 Addendum 3): the input filled num_ctx, leaving ~1 token
+      // to generate. Surface a specific, actionable error instead of an
+      // empty bubble — and learn the box's real served ceiling from usage
+      // so the pre-flight is accurate next time, even if context_window was
+      // never declared. A normal finish=length carries a full reply
+      // (fullText non-empty) and is untouched. With a write gate armed, the
+      // corrective above already spent its retry, so this is the terminal
+      // give-up — the right place to explain the blank. See context-budget.ts.
+      if (isContextOverflow({ finishReason, textLen: fullText.length, toolCallCount: calls.length })) {
+        const learned = learnContextFromUsage(lastUsage);
+        if (learned) recordLearnedContext(budgetKey(transport.baseUrl, model), learned);
+        console.log(
+          `[openai-native:context_overflow] learned=${learned ?? 'n/a'} ` +
+          `prompt_tokens=${lastUsage?.prompt_tokens ?? 'n/a'} model=${model}`,
+        );
+        emit(meta('openai:context_overflow', {
+          learned:      learned ?? null,
+          promptTokens: lastUsage?.prompt_tokens ?? null,
+          totalTokens:  lastUsage?.total_tokens ?? null,
+        }));
+        emit(error(formatContextOverflowMessage(learned)));
+        return;
+      }
       emit(turnComplete('length'));
       emit(done(fullText, sourceSink));
       return;
@@ -830,6 +920,11 @@ export function buildOllamaTransport(): OpenAITransportConfig {
     baseUrl: host.replace(/\/$/, '') + '/v1',
     auth: { type: 'none' },
     systemRole: 'system',
+    // v0.11.x context guard: thread the ACTIVE Ollama model's declared
+    // context_window (its config.yaml models: row) so the pre-flight knows
+    // the served num_ctx. Absent => the pre-flight relies on the learned
+    // ceiling (the overflow detector) only. Synchronous in-memory lookup.
+    contextWindow: getModel(getActiveModel())?.context_window,
   };
 }
 
@@ -923,6 +1018,7 @@ export async function buildTransportFromRegistry(
     extraHeaders: entry.extra_headers,
     systemRole:   entry.system_role ?? 'system',
     tpmCeiling:   entry.tpm_ceiling,
+    contextWindow: entry.context_window,
     quirks,
   };
 }
