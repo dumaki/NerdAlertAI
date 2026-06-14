@@ -5,7 +5,7 @@
 # Run this once on a fresh machine to get NerdAlert running.
 #
 # What this script does:
-#   1. Checks for Homebrew and Node.js 18+
+#   1. Checks for Homebrew and Node.js 22.x (the 'jod' LTS)
 #   2. Installs npm packages
 #   3. Probes the OS keychain so we know which credential backend
 #      will be used
@@ -85,17 +85,42 @@ fi
 # ============================================================
 # STEP 2 — Check Node.js
 # ============================================================
+# NerdAlert pins Node to the 'jod' LTS line (Node 22.x). See .nvmrc and
+# the "engines" field in package.json. This matters: better-sqlite3 ships
+# a native binding compiled against a specific Node ABI, so running on
+# Node 23+ (which a plain `brew install node` installs today) breaks that
+# binding at runtime. We require major version 22 exactly.
+REQUIRED_NODE_MAJOR=22
+
+# If nvm is installed, load it and switch to the version named in .nvmrc
+# so the pin is honored automatically -- a fresh machine "just works"
+# without the user having to know about it. Harmless if nvm is absent.
+if [ -z "${NVM_DIR:-}" ] && [ -d "$HOME/.nvm" ]; then
+  export NVM_DIR="$HOME/.nvm"
+fi
+if [ -n "${NVM_DIR:-}" ] && [ -s "$NVM_DIR/nvm.sh" ]; then
+  # shellcheck disable=SC1091
+  . "$NVM_DIR/nvm.sh" || true
+  if [ -f "$PROJECT_ROOT/.nvmrc" ]; then
+    info "nvm detected -- selecting the Node version pinned in .nvmrc"
+    (cd "$PROJECT_ROOT" && nvm install >/dev/null 2>&1 && nvm use >/dev/null 2>&1) || true
+  fi
+fi
+
 if ! command -v node &>/dev/null; then
   fail "Node.js is not installed."
   echo ""
-  echo "  NerdAlert requires Node.js version 18 or higher."
+  echo "  NerdAlert requires Node.js 22.x (the 'jod' LTS)."
   echo ""
 
   if [[ "$OSTYPE" == "darwin"* ]]; then
-    echo "  Install it with Homebrew:"
-    echo -e "  ${CYAN}brew install node${RESET}"
+    echo "  Easiest (nvm honors .nvmrc automatically):"
+    echo -e "  ${CYAN}nvm install 22 && nvm use 22${RESET}"
+    echo ""
+    echo "  Or with Homebrew -- pin the major version, NOT plain 'node':"
+    echo -e "  ${CYAN}brew install node@22 && brew link --overwrite --force node@22${RESET}"
   else
-    echo "  Install it from: https://nodejs.org"
+    echo "  Install Node 22.x from: https://nodejs.org"
   fi
 
   echo ""
@@ -108,13 +133,24 @@ fi
 NODE_VERSION=$(node --version | sed 's/v//')
 NODE_MAJOR=$(echo "$NODE_VERSION" | cut -d. -f1)
 
-if [ "$NODE_MAJOR" -lt 18 ]; then
-  fail "Node.js version $NODE_VERSION is too old. Version 18+ is required."
+if [ "$NODE_MAJOR" -ne "$REQUIRED_NODE_MAJOR" ]; then
+  fail "Node.js $NODE_VERSION is unsupported. NerdAlert requires Node 22.x (the 'jod' LTS)."
+  echo ""
+  if [ "$NODE_MAJOR" -gt "$REQUIRED_NODE_MAJOR" ]; then
+    echo "  Node $NODE_MAJOR is too NEW: better-sqlite3's native binding is"
+    echo "  built against the Node 22 ABI and will fail to load on 23+."
+  else
+    echo "  Node $NODE_MAJOR is too OLD: NerdAlert needs 22.x."
+  fi
   echo ""
   if [[ "$OSTYPE" == "darwin"* ]]; then
-    echo "  Update with: brew upgrade node"
+    echo "  Switch with nvm:"
+    echo -e "  ${CYAN}nvm install 22 && nvm use 22${RESET}"
+    echo ""
+    echo "  Or with Homebrew:"
+    echo -e "  ${CYAN}brew install node@22 && brew link --overwrite --force node@22${RESET}"
   else
-    echo "  Update at: https://nodejs.org"
+    echo "  Install Node 22.x from: https://nodejs.org"
   fi
   echo ""
   echo "  Then run this setup script again:"

@@ -5,7 +5,7 @@
     "node": ">=22 <23"
   },
   "description": "",
-  "main": "dist/server/index.js",
+  "main": "dist/src/server/index.js",
   "scripts": {
     "start": "node dist/src/server/index.js",
     "dev": "ts-node src/server/index.ts",

@@ -49,16 +49,20 @@ echo ""
 # ── 1. Node version check ─────────────────────────────────────
 echo "→ Checking Node.js..."
 if ! command -v node &>/dev/null; then
-  echo "  ✗ Node.js not found. Install Node 18+ first:"
-  echo "    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -"
+  echo "  ✗ Node.js not found. NerdAlert requires Node 22.x (the 'jod' LTS):"
+  echo "    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -"
   echo "    sudo apt-get install -y nodejs"
   exit 1
 fi
 
 NODE_MAJOR=$(node -e "process.stdout.write(String(process.version.split('.')[0].slice(1)))")
-if [ "$NODE_MAJOR" -lt 18 ]; then
-  echo "  ✗ Node.js 18+ required (found v$(node -v))"
-  echo "    Update with: sudo npm install -g n && sudo n 20"
+if [ "$NODE_MAJOR" -ne 22 ]; then
+  echo "  ✗ Node.js 22.x required (the 'jod' LTS); found v$(node -v)"
+  if [ "$NODE_MAJOR" -gt 22 ]; then
+    echo "    Node $NODE_MAJOR is too new: better-sqlite3's native binding is built"
+    echo "    against the Node 22 ABI and won't load on 23+."
+  fi
+  echo "    Install or switch with: sudo npm install -g n && sudo n 22"
   exit 1
 fi
 echo "  ✓ Node.js $(node -v)"
@@ -366,7 +370,7 @@ if ! grep -q "# NerdAlert aliases" "$BASHRC" 2>/dev/null; then
   cat >> "$BASHRC" << EOF
 
 # NerdAlert aliases
-alias nerd-start="cd ${NERDALERT_DIR} && npm run build && node dist/server/index.js"
+alias nerd-start="cd ${NERDALERT_DIR} && npm run build && node dist/src/server/index.js"
 alias nerd-logs="sudo journalctl -u ${SERVICE_NAME} -f"
 alias nerd-restart="sudo systemctl restart ${SERVICE_NAME}"
 alias nerd-status="sudo systemctl status ${SERVICE_NAME}"
