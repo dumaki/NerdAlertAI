@@ -252,3 +252,13 @@ a num_ctx >= 16k is adopted they MUST emit their expected tool.
 **One unrelated artifact (NOT blank class):** google_calendar_delete at 16k
 emitted a stale date arg (model date-grounding); num_ctx neither causes nor
 fixes it. Tracked separately, not folded into this class.
+
+**Closure 2026-06-14 (operator action + validation).** `num_ctx=16384` pinned on
+`.218` via Modelfile `PARAMETER num_ctx 16384` (the box is a WINDOWS host, not
+systemd: `ollama show mistral-small3.2 --modelfile` -> append the PARAMETER ->
+`ollama create`). All three specimens re-run through the production `/v1` path
+(no override) now emit their correct tool call with total_tokens > 8192 (no
+truncation): github_write t=8540, gmail_send t=9080 (approved:false -> cards),
+google_calendar_delete t=8240. Blank class CLOSED end-to-end. The stale-date
+artifact on calendar_delete persists (separate date-grounding item, not this
+class).
